@@ -803,23 +803,23 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "没有可用的显示器".to_string())?;
     let scale = monitor.scale_factor();
-    let mon_pos = monitor.position();
-    let mon_size = monitor.size();
     let state = read_window_state();
-    let (stage_width, stage_height) = stage_dimensions(state);
-    let width = (stage_width * scale).round() as i32;
-    let height = (stage_height * scale).round() as i32;
+    // custom_position 是“小狗槽”的左上角，不是展开面板窗口的左上角。
+    // 这里必须用收起态槽位尺寸，否则面板展开时会把小狗放到屏幕中间。
+    let slot_width =
+        ((152.0 * state.collapsed_scale + 16.0).max(148.0) * scale).round() as i32;
+    let slot_height =
+        ((128.0 * state.collapsed_scale + 16.0).max(124.0) * scale).round() as i32;
     const MARGIN: i32 = 16;
     let work = monitor.work_area();
     let x = match corner.as_str() {
         "tl" | "bl" => work.position.x + MARGIN,
-        _ => work.position.x + work.size.width as i32 - width - MARGIN,
+        _ => work.position.x + work.size.width as i32 - slot_width - MARGIN,
     };
     let y = match corner.as_str() {
         "tl" | "tr" => work.position.y + MARGIN,
-        _ => work.position.y + work.size.height as i32 - height - MARGIN,
+        _ => work.position.y + work.size.height as i32 - slot_height - MARGIN,
     };
-    let _ = (mon_pos, mon_size);
     let position = IslandPosition { x, y };
     let state = mutate_window_state(|state| {
         state.custom_position = Some(position);
