@@ -1656,51 +1656,53 @@ export function IslandShell({
               </div>
             ) : (
               <div className="pet-cloud pet-bubble-panel">
-                <div className="pet-bubble-panel__actions" aria-label="和小狗互动">
-                  {([
-                    ["pet", "🐾 摸头"],
-                    ["chin", "😌 挠下巴"],
-                    ["pickup", "🤗 抱抱"],
-                    ["spin", "🌀 转圈"],
-                    ["play", "🎾 陪玩"],
-                    ["hide", "🙈 躲猫猫"],
-                    ["chase", "🏃 追球"],
-                    ["eating", "🍖 喂食"],
-                    ["sleeping", "😴 睡觉"],
-                  ] as const).map(([action, label]) => (
-                    <button key={action} type="button" onClick={() => onPetAction(action)}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="pet-bubble-panel__status">
-                  <span className="pet-bubble-panel__active-todo">
-                    📌 正在做：{overlay.todoTitle ?? "还没有开始待办"}
-                  </span>
-                  {collapsedTodoCount !== null && <span>📋 待办还剩 {collapsedTodoCount} 个</span>}
-                  {mediaState.playbackStatus === "playing" && mediaState.title && (
-                    <span>
-                      🎵 {mediaState.title}
-                      {mediaState.artist ? ` · ${mediaState.artist}` : ""}
+                <div className="pet-bubble-panel__scroll">
+                  <div className="pet-bubble-panel__actions" aria-label="和小狗互动">
+                    {([
+                      ["pet", "🐾 摸头"],
+                      ["chin", "😌 挠下巴"],
+                      ["pickup", "🤗 抱抱"],
+                      ["spin", "🌀 转圈"],
+                      ["play", "🎾 陪玩"],
+                      ["hide", "🙈 躲猫猫"],
+                      ["chase", "🏃 追球"],
+                      ["eating", "🍖 喂食"],
+                      ["sleeping", "😴 睡觉"],
+                    ] as const).map(([action, label]) => (
+                      <button key={action} type="button" onClick={() => onPetAction(action)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="pet-bubble-panel__status">
+                    <span className="pet-bubble-panel__active-todo">
+                      📌 正在做：{overlay.todoTitle ?? "还没有开始待办"}
                     </span>
-                  )}
+                    {collapsedTodoCount !== null && <span>📋 待办还剩 {collapsedTodoCount} 个</span>}
+                    {mediaState.playbackStatus === "playing" && mediaState.title && (
+                      <span>
+                        🎵 {mediaState.title}
+                        {mediaState.artist ? ` · ${mediaState.artist}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div className="pet-bubble-panel__links" aria-label="快捷操作">
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("todo"); }}>待办</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("music"); }}>音乐</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("clipboard"); }}>剪贴板</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("chat"); }}>聊天</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("video"); }}>看视频</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("qq"); }}>消息</button>
+                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("assistant"); }}>快捷</button>
+                  </div>
+                  <button
+                    type="button"
+                    className="pet-bubble-panel__sleep"
+                    onClick={() => { onOverlayClose(); onTuck(); }}
+                  >
+                    让小狗睡觉
+                  </button>
                 </div>
-                <div className="pet-bubble-panel__links" aria-label="快捷操作">
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("todo"); }}>待办</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("music"); }}>音乐</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("clipboard"); }}>剪贴板</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("chat"); }}>聊天</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("video"); }}>看视频</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("qq"); }}>消息</button>
-                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("assistant"); }}>快捷</button>
-                </div>
-                <button
-                  type="button"
-                  className="pet-bubble-panel__sleep"
-                  onClick={() => { onOverlayClose(); onTuck(); }}
-                >
-                  让小狗睡觉
-                </button>
                 <span className="pet-cloud__tail pet-cloud__tail--1" aria-hidden="true" />
                 <span className="pet-cloud__tail pet-cloud__tail--2" aria-hidden="true" />
               </div>

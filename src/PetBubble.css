@@ -119,10 +119,31 @@ body,
 .pet-bubble-panel {
   display: flex;
   flex-direction: column;
-  gap: 9px;
   width: 100%;
   max-width: 272px;
   padding: 13px 15px;
+}
+
+/* 内容超出窗口高度时在面板内部滚动；尾巴留在滚动容器外，不会被裁掉。 */
+.pet-bubble-panel__scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(43, 47, 58, 0.22) transparent;
+}
+
+.pet-bubble-panel__scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.pet-bubble-panel__scroll::-webkit-scrollbar-thumb {
+  background: rgba(43, 47, 58, 0.2);
+  border-radius: 999px;
 }
 
 /* 互动按钮从上到下竖排（用户要求，不要横向） */

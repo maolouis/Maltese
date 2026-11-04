@@ -620,9 +620,13 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
                 (snapshot.anchor_x + base_w_phys - mon_left).max(0)
             };
             let desired_h_phys = (panel_h * scale).round() as i32;
-            let panel_vertical = expanded_panel_vertical(
+            // 主窗口里的浮层和独立气泡窗口不同：翻到下方时，小狗槽仍占窗口顶部，
+            // 面板只能从槽位下方开始。因此窗口高度必须把槽高和间隙一起算进去，
+            // 否则面板会被窗口底边裁掉一截（表现为“向下显示不全”）。
+            let panel_vertical = overlay_panel_vertical(
                 snapshot.anchor_y,
                 base_h_phys,
+                (gap * scale).round() as i32,
                 desired_h_phys,
                 mon_pos.y,
                 mon_bottom,
@@ -636,7 +640,13 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
             let width = (snapshot.base_w + gap + panel_w)
                 .min((side_space as f64) / scale)
                 .max(snapshot.base_w + gap + 120.0);
-            let height = panel_h.min(avail_v).max(snapshot.base_h);
+            let height = overlay_window_height(
+                panel_vertical,
+                snapshot.base_h,
+                gap,
+                panel_h,
+                avail_v,
+            );
             let phys_w = (width * scale).round() as i32;
             let phys_h = (height * scale).round() as i32;
             let x = if panel_side == "left" {
@@ -2455,6 +2465,44 @@ fn expanded_panel_vertical(
     }
 }
 
+fn overlay_panel_vertical(
+    dog_y: i32,
+    slot_h_phys: i32,
+    gap_phys: i32,
+    desired_height_phys: i32,
+    work_top: i32,
+    work_bottom: i32,
+) -> &'static str {
+    // 翻到上方时面板可以占满小狗上方的整块窗口；翻到下方时窗口顶部要先留出小狗槽，
+    // 所以下方可用空间要扣掉槽高和间隙，不能像独立气泡窗口那样直接比较。
+    let above = (dog_y + slot_h_phys - work_top).max(0);
+    let below = (work_bottom - dog_y - slot_h_phys - gap_phys).max(0);
+    if above >= desired_height_phys {
+        "above"
+    } else if below >= desired_height_phys {
+        "below"
+    } else if above >= below {
+        "above"
+    } else {
+        "below"
+    }
+}
+
+fn overlay_window_height(
+    vertical: &str,
+    base_h: f64,
+    gap: f64,
+    panel_h: f64,
+    available_h: f64,
+) -> f64 {
+    let desired = if vertical == "below" {
+        base_h + gap + panel_h
+    } else {
+        panel_h
+    };
+    desired.min(available_h).max(base_h)
+}
+
 fn expanded_panel_side(
     dog_x: i32,
     slot_w_phys: i32,
@@ -2717,6 +2765,25 @@ mod tests {
         // 两边都放不下：选空间更大的一侧。
         assert_eq!(expanded_panel_vertical(400, 200, 2000, 0, 1440), "below");
         assert_eq!(expanded_panel_vertical(900, 200, 2000, 0, 1440), "above");
+    }
+
+    #[test]
+    fn overlay_panel_below_reserves_space_for_the_pet_slot() {
+        // 浮层窗口翻到下方时，窗口顶部仍要放得下小狗槽；方向判断和高度分配
+        // 都必须扣掉槽高，否则气泡底部会超出窗口。
+        assert_eq!(overlay_panel_vertical(0, 160, 8, 540, 0, 1440), "below");
+        assert_eq!(overlay_panel_vertical(1240, 160, 8, 540, 0, 1440), "above");
+        assert_eq!(overlay_panel_vertical(300, 160, 8, 540, 0, 1440), "below");
+        assert_eq!(overlay_panel_vertical(700, 160, 8, 540, 0, 1440), "above");
+        // 两侧都不够时选内容空间更大的一侧，而不是把小狗槽算进面板空间。
+        assert_eq!(overlay_panel_vertical(500, 160, 8, 2000, 0, 1440), "below");
+        assert_eq!(overlay_panel_vertical(900, 160, 8, 2000, 0, 1440), "above");
+        // 向下展开时窗口必须包含小狗槽和间隙，否则面板底部会被窗口裁掉。
+        assert_eq!(overlay_window_height("below", 160.0, 8.0, 540.0, 1080.0), 708.0);
+        assert_eq!(overlay_window_height("above", 160.0, 8.0, 540.0, 1080.0), 540.0);
+        // 屏幕空间不足时至少保留小狗槽，面板由前端滚动/裁切兜底。
+        assert_eq!(overlay_window_height("below", 160.0, 8.0, 540.0, 500.0), 500.0);
+        assert_eq!(overlay_window_height("above", 160.0, 8.0, 540.0, 120.0), 160.0);
     }
 
     #[test]
