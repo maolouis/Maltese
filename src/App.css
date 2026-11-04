@@ -2146,10 +2146,10 @@ input,
 .todo-form {
   min-height: 36px;
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0 8px 0 10px;
   color: #c05065;
   background: rgba(255, 255, 255, 0.4);
   border: 1px solid rgba(35, 31, 26, 0.12);
@@ -2182,6 +2182,28 @@ input,
 .todo-form input:disabled {
   cursor: default;
   color: rgba(31, 27, 22, 0.58);
+}
+
+.todo-form__add {
+  border: 0;
+  border-radius: 6px;
+  background: #c05065;
+  color: #ffffff;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.todo-form__add:hover:not(:disabled) {
+  background: #a94256;
+}
+
+.todo-form__add:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .todo-form:focus-within {
@@ -4149,6 +4171,23 @@ input,
   font-size: 10px;
 }
 
+.video-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.video-page__notice {
+  margin: 0;
+  border-radius: 9px;
+  background: rgba(247, 188, 125, 0.16);
+  color: #7a5222;
+  padding: 7px 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .video-automation {
   display: flex;
   flex-direction: column;
@@ -5338,6 +5377,10 @@ input,
 .island__expanded .video-automation {
   background: #f7f8fb;
   border-color: rgba(20, 24, 35, 0.08);
+}
+
+.island__expanded .video-page .assistant-panel__label {
+  color: #5a5f6b;
 }
 
 .island__expanded .video-automation__head strong {

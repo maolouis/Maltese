@@ -86,7 +86,7 @@ export type IslandMode = "collapsed" | "expanded";
 
 type PetOverlay = { mode: "hover" | "cloud"; title?: string; body?: string; image?: string };
 
-type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq" | "assistant" | "chat" | "onboarding";
+type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq" | "assistant" | "chat" | "video" | "onboarding";
 type PetState =
   | "idle"
   | "listening"
@@ -1569,6 +1569,7 @@ export function IslandShell({
                   <button type="button" onClick={() => { onOverlayClose(); onOpenPage("music"); }}>音乐</button>
                   <button type="button" onClick={() => { onOverlayClose(); onOpenPage("clipboard"); }}>剪贴板</button>
                   <button type="button" onClick={() => { onOverlayClose(); onOpenPage("chat"); }}>聊天</button>
+                  <button type="button" onClick={() => { onOverlayClose(); onOpenPage("video"); }}>看视频</button>
                   <button type="button" onClick={() => { onOverlayClose(); onOpenPage("qq"); }}>消息</button>
                   <button type="button" onClick={() => { onOverlayClose(); onOpenPage("assistant"); }}>快捷</button>
                 </div>
@@ -1660,6 +1661,16 @@ export function IslandShell({
                   onPageChange("chat");
                 }}
               >{t.island.chat}</button>
+              <button
+                className={`island-tab ${page === "video" ? "dot-button--active" : ""}`}
+                type="button"
+                title={t.island.video}
+                aria-label={t.island.video}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPageChange("video");
+                }}
+              >{t.island.video}</button>
               <button
                 className="island-tab"
                 type="button"
@@ -2305,10 +2316,10 @@ function LayoutEditor({
           onChange={(petFlipY) => onSettingsChange({ ...settings, petFlipY })}
         />
         <div className="appearance-mode-control">
-          <span>固定到屏幕角落</span>
-          <div className="appearance-mode-control__segments" role="group" aria-label="固定到屏幕角落">
+          <span>复位位置</span>
+          <div className="appearance-mode-control__segments" role="group" aria-label="复位位置">
             {([
-              ["", "不固定"],
+              ["", "底部居中"],
               ["tl", "左上"],
               ["tr", "右上"],
               ["bl", "左下"],
@@ -2325,6 +2336,9 @@ function LayoutEditor({
               </button>
             ))}
           </div>
+          <small className="settings-section__hint">
+            选四角会立即把桌宠放到对应角落；点「复位」也会回到这里。
+          </small>
         </div>
       </section>
 
@@ -3034,24 +3048,29 @@ function TodoNotebook({
         )}
       </div>
 
-      {!isDailyMode && !isArchiveMode && (
+      {isTodayMode && (
         <form
           className="todo-form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (isTodayMode) {
-              onAddTodo();
-            }
+            onAddTodo();
           }}
         >
           <Plus size={16} strokeWidth={2.2} aria-hidden="true" />
           <input
             value={draft}
-            disabled={!isTodayMode}
             placeholder={inputPlaceholder}
             aria-label={t.notebook.addTaskHint}
             onChange={(event) => onDraftChange(event.currentTarget.value)}
           />
+          <button
+            className="todo-form__add"
+            type="submit"
+            disabled={!draft.trim()}
+            title={t.notebook.addTaskHint}
+          >
+            {t.notebook.add}
+          </button>
         </form>
       )}
 
@@ -4470,6 +4489,21 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
   );
 }
 
+function VideoPage() {
+  const [notice, setNotice] = useState("");
+
+  return (
+    <section className="video-page" aria-label="看视频">
+      <div className="assistant-panel__section-head">
+        <span>看视频</span>
+        <small>内置自动翻页，不占用快捷方式</small>
+      </div>
+      <VideoAutomationPanel onNotice={setNotice} />
+      {notice && <p className="video-page__notice" role="status">{notice}</p>}
+    </section>
+  );
+}
+
 type CustomShortcut = { label: string; path: string };
 
 const CUSTOM_SHORTCUTS_KEY = "maltese-custom-shortcuts";
@@ -4781,11 +4815,6 @@ function AssistantPanel() {
         </div>
       )}
       <div className="assistant-panel__section-head">
-        <span>看视频</span>
-        <small>内置功能，不占用你的快捷方式</small>
-      </div>
-      <VideoAutomationPanel onNotice={setNotice} />
-      <div className="assistant-panel__section-head">
         <span>快捷方式</span>
         <small>只读取这台电脑上发现和自定义的入口</small>
       </div>
@@ -5074,6 +5103,8 @@ function IslandApp({
             ? 520
           : page === "chat"
             ? 520
+          : page === "video"
+            ? 430
           : page === "qq"
             ? messagePanelHeight(messageSource, Boolean(qqMail.selectedMail))
             : EDITOR_EXPANDED_ISLAND_HEIGHT;
@@ -5417,15 +5448,34 @@ function IslandApp({
     try {
       const nextSettings = { ...settings, marginY: DEFAULT_SETTINGS.marginY };
       await syncNativeLayout(nextSettings);
-      await invoke("reset_island_position");
       islandPositionRef.current = null;
-      setIsPositionDetached(false);
       window.localStorage.removeItem(ISLAND_POSITION_STORAGE_KEY);
+      if (settings.lockCorner) {
+        await invoke("lock_island_corner", { corner: settings.lockCorner });
+        setIsPositionDetached(true);
+      } else {
+        await invoke("reset_island_position");
+        setIsPositionDetached(false);
+      }
       setSettings(nextSettings);
     } catch (error) {
       console.error("Failed to reset island position", error);
     }
   }, [settings, syncNativeLayout]);
+
+  const previousLockCorner = useRef<PetLockCorner | null>(null);
+  useEffect(() => {
+    const previous = previousLockCorner.current;
+    previousLockCorner.current = settings.lockCorner;
+    if (previous === settings.lockCorner) {
+      return;
+    }
+    // 首次加载时只有选了四角才需要重新落位；默认底部居中要保留用户拖过的位置。
+    if (previous === null && !settings.lockCorner) {
+      return;
+    }
+    void resetIslandPosition();
+  }, [resetIslandPosition, settings.lockCorner]);
 
   type TuckReason = "sleep" | "fullscreen" | "manual";
   const tuckReasonsRef = useRef<Record<TuckReason, boolean>>({
@@ -7180,6 +7230,7 @@ function IslandApp({
           />
         )}
         {page === "assistant" && <AssistantPanel />}
+        {page === "video" && <VideoPage />}
         {page === "chat" && <PetChat />}
         {page === "onboarding" && <OnboardingPanel onFinish={finishOnboarding} />}
         {page === "todo" && (

@@ -204,6 +204,7 @@ export type Translations = {
     clipboardHistory: string;
     layoutEditor: string;
     chat: string;
+    video: string;
   };
 
   agent: {
@@ -237,6 +238,7 @@ export type Translations = {
     addTaskFor: (date: string) => string;
     reviewTodos: string;
     addTaskHint: string;
+    add: string;
     dailyPlaceholder: string;
     dailyNoteLabel: string;
   };

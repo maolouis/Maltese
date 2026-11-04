@@ -820,12 +820,18 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
         _ => work.position.y + work.size.height as i32 - height - MARGIN,
     };
     let _ = (mon_pos, mon_size);
+    let position = IslandPosition { x, y };
     let state = mutate_window_state(|state| {
-        state.custom_position = Some(IslandPosition { x, y });
+        state.custom_position = Some(position);
         state.is_dragging = false;
         *state
     });
-    apply_stage_geometry(&window, state, false)
+    let result = apply_stage_geometry(&window, state, false);
+    if result.is_ok() {
+        // 让前端把新位置写进 localStorage，避免下次启动被旧拖拽位置覆盖。
+        let _ = window.emit("island-position-changed", position);
+    }
+    result
 }
 
 #[tauri::command]

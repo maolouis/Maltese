@@ -195,13 +195,14 @@ const en: Translations = {
     collapseIsland: "Collapse island",
     minimizeToTray: "Minimize to tray",
     resetPosition: "Reset",
-    resetPositionLabel: "Reset island to the top center of the primary screen",
+    resetPositionLabel: "Reset island to your configured position (bottom center by default)",
     editor: "Island editor",
     todoList: "Tasks",
     music: "Music",
     clipboardHistory: "Clipboard history",
     layoutEditor: "Layout editor",
     chat: "Chat",
+    video: "Watch video",
   },
 
   agent: {
@@ -235,6 +236,7 @@ const en: Translations = {
     addTaskFor: (date) => `Add a task for ${date}`,
     reviewTodos: "Review your todos",
     addTaskHint: "Add a task, press Enter to save",
+    add: "Add",
     dailyPlaceholder: "Write today's notes...",
     dailyNoteLabel: "Daily note",
   },

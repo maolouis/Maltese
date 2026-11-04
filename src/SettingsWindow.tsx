@@ -305,6 +305,12 @@ export default function SettingsWindow() {
         {shortcutError && <p className="sw-error">{shortcutError}</p>}
         <Switch label="开机自启动" checked={launchAtStartup} onChange={(value) => void toggleStartup(value)} />
         <Segments
+          label="复位位置"
+          value={settings.lockCorner}
+          items={[["", "底部居中"], ["tl", "左上"], ["tr", "右上"], ["bl", "左下"], ["br", "右下"]]}
+          onChange={(value) => update("lockCorner", value)}
+        />
+        <Segments
           label="全屏时"
           value={settings.fullscreenAvoid}
           items={[["tuck", "缩边"], ["hide", "隐藏"], ["off", "不处理"]]}

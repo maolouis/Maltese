@@ -177,12 +177,14 @@ body,
 
 .pet-bubble-panel__links {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
 }
 
 .pet-bubble-panel__links button {
   width: 100%;
+  padding-inline: 6px;
+  font-size: 11.5px;
 }
 
 .pet-bubble-panel__sleep {

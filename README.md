@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.2-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.1.3-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -35,9 +35,10 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 ### 快捷面板
 
-- **看视频独立分区**：B 站 / 抖音自动翻页是内置功能，单独放在快捷面板顶部，不占用、也不依赖你的快捷方式。
+- **看视频独立页面**：B 站 / 抖音自动翻页是内置功能，入口在悬停气泡和顶部导航的「聊天」旁边，不占用、也不依赖你的快捷方式。
 - **快捷方式按用户生成**：只读取当前电脑桌面、开始菜单自动发现的入口，以及本机 `localStorage` 里你自己添加的快捷方式；不会把你的列表写进代码或分发给其他用户。
 - **快捷方式卡片**：只有拿到真实程序图标时才显示图标，不再用“哔 / 抖 / 链”这类单字大图标占位置。
+- **可调复位位置**：设置里可选底部居中 / 左上 / 右上 / 左下 / 右下，点「复位」回到设定位置。
 - **豆包 / 网易云音乐 / 有道词典**：一键启动本机已安装的客户端。
 - **计算器 / PowerToys / Geek Uninstaller / Clash / Watt**：常用系统与网络工具入口。
 - **常用脚本**：扫描 `桌面\常用脚本` 下的 `.bat` / `.cmd` / `.ps1` / `.py` / `.lnk` 并一键运行。
@@ -131,7 +132,7 @@ $env:MALTESE_DSH_CLI = "D:\path\to\dsh.cmd"
 
 ### 使用刷视频
 
-1. 打开 **快捷入口 → 看视频**（独立分区）。
+1. 打开 **聊天旁边的「看视频」**（悬停气泡或顶部导航均可）。
 2. 选择 B 站或抖音，设置翻页间隔（15–600 秒）和观看上限（1–240 分钟）。
 3. 点击开始，浏览器会自动打开目标站点。
 4. 在浏览器里登录并点一下视频页，让浏览器成为前台窗口。
