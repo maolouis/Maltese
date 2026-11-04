@@ -147,6 +147,10 @@ $env:MALTESE_DSH_CLI = "D:\path\to\dsh.cmd"
 - 包管理：pnpm
 - 字体：Fusion Pixel Font（SIL Open Font License 1.1）
 
+## DSH 插件（dsh 分支）
+
+`dsh` 分支额外包含 [`dsh-plugin/`](dsh-plugin/README.md)：这是一个 DSH Host bundle，随 DSH 启动原生桌宠，并提供 `maltese_pet` 工具。插件不内嵌 exe，安装方式与路径查找顺序见插件 README。
+
 ## 项目结构
 
 ```text
@@ -155,6 +159,7 @@ src-tauri/src/           Rust 后端（窗口、通知、OCR、DSH、视频自�
 public/assets/pets/      线条小狗 GIF 素材
 docs/                    功能说明、兼容性与发布文档
 scripts/                 构建、发布与 Agent 钩子脚本
+dsh-plugin/              DSH 插件（仅 dsh 分支）
 ```
 
 ## 参考与致谢

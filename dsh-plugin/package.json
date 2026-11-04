@@ -1,0 +1,32 @@
+{
+  "name": "maltese-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Launch the Maltese desktop pet from DeepSeek Harness and expose a maltese_pet tool to the agent.",
+  "icon": "icon.png",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "desktop-pet",
+    "maltese"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
