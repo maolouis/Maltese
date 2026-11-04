@@ -1,63 +1,45 @@
 # Handoff
 
-更新时间：2026-11-04 17:32（Asia/Shanghai）
+更新时间：2026-11-04 18:55（Asia/Shanghai）
 
 ## 当前分支与提交
 
-- `main`：`de3edad fix: 四角复位按小狗槽位定位`（其前为 `44c7446 feat: 看视频独立页、可调复位位置与待办添加按钮`）
-- `dsh`：`87fd0bd fix: 四角复位按小狗槽位定位`（从 main 拉出，额外提交 `dsh-plugin/` 与 handoff）
+- `main`：`b75417b fix: 右下/右上复位回到屏幕中央，显示器归属按小狗槽判定`
+- `dsh`：`262f687`（同一修复，另含 `dsh-plugin/` 与 handoff 文档）
 - 两个分支均已推送到 `origin`。
-- 本轮没有打 tag；上一版 tag 仍是 `v1.1.2`。
+- 本轮打了 tag：`v1.1.4`（annotated，已推送 origin）。
 
-## 本轮完成
+## 本轮完成（v1.1.4）
 
-### 1. 「看视频」从快捷面板移到聊天旁边
+### 1. 修复「复位到右下/右上却回到屏幕中央」
 
-- `src/App.tsx` 新增 `"video"` 页面和 `VideoPage`，复用 `VideoAutomationPanel`。
-- 悬停气泡快捷链接：待办 / 音乐 / 剪贴板 / 聊天 / **看视频** / 消息 / 快捷。
-- 顶部导航「聊天」右侧新增「看视频」。
-- 「快捷入口」页里的看视频分区已删除，只保留快捷方式、常用脚本和显示/隐藏快捷键。
-- 悬停链接改为 4 列，7 个入口排成 4+3。
+- 现象：设置里选「右下/右上」后，小狗没有落在角落，而是回到屏幕水平居中。
+- 根因：`monitor_for_island_position` 用旧整窗宽度常量（`STAGE_WINDOW_WIDTH=640`）
+  计算小狗中心点，而 `custom_position` 记录的是收起态小狗槽的左上角（约 151–168px）。
+  右下/右上角的槽位中心被算到显示器右缘之外，归属判定失败 → `custom_position` 被丢弃
+  → 回退到默认居中位置。此前 de3edad 只修了 `lock_island_corner` 的落位计算，漏了归属判定。
+- 修复：`monitor_for_island_position` 增加 `collapsed_scale` 参数，按槽位实际尺寸算中心点；
+  槽位尺寸统一收敛到 `slot_width_css` / `slot_height_css`，删除旧常量。
+- 回归测试：`corner_slot_centers_stay_inside_their_monitor`（1x / 2x 缩放、四角 + 屏外拒绝）。
+- 验证：`cargo test --target x86_64-pc-windows-msvc --lib` 65 passed / 0 failed / 9 ignored。
 
-### 2. 复位位置可调
+### 2. 版本与发布产物
 
-- 设置里的「固定到屏幕角落」改为「复位位置」：底部居中 / 左上 / 右上 / 左下 / 右下。
-- 选择四角后立即调用 Rust `lock_island_corner`；「复位」按钮也会回到该位置；选底部居中则调用 `reset_island_position`。
-- `src-tauri/src/lib.rs` 的 `lock_island_corner` 在落位后发出 `island-position-changed`，前端写入 localStorage，避免下次启动被旧拖拽位置覆盖。
-- 四角落位改为按「收起态小狗槽位」尺寸计算，不再用展开面板的整窗尺寸；因此面板展开时点复位，小狗也会落在正确的角落。
-- `src/SettingsWindow.tsx` 也补了同一组复位位置选项。
-- 首次加载时若设置为默认「底部居中」，不会清除用户之前拖拽的位置；选中四角时会在启动后重新落位。
-
-### 3. 待办手动添加修复
-
-- `TodoNotebook` 的添加表单现在只在「今天」页显示，避免 review/archive 页出现禁用输入框。
-- 表单新增明确的「添加」按钮（`todo-form__add`），不再只依赖 Enter 或不可点击的 Plus 图标。
-- 已用浏览器 mock 实测：输入「测试添加待办」后点击添加，列表出现新任务，输入框清空，localStorage 同步更新。
-
-### 4. DSH 插件
-
-- `dsh` 分支新增 `dsh-plugin/`：
-  - `package.json`（`dsh.bundle.patch`）
-  - `cordis.patch.yml`（`id: maltese-dsh`，默认 `autoLaunch: true`）
-  - `index.js`（Host 半侧，注册 `maltese_pet` 工具，自动/手动启动原生 exe）
-  - `locale/zh.json`、`locale/en.json`、`icon.png`、`README.md`
-- 插件已通过 `plugin_manager install_bundle` 安装到当前桌面 profile，`application: applied`，`include:maltese-dsh` 为 active。
-- 实测 `maltese_pet` 已出现在 Agent 工具列表。
-- 插件不内嵌 exe；会按 `executablePath` → `MALTESE_EXE` → `release/<version>/maltese-assistant.exe` → 常见安装目录查找。
-
-## 验证结果
-
-- `pnpm build`：tsc + vite 构建成功。pnpm 包装器仍因 `ERR_PNPM_IGNORED_BUILDS`（esbuild）返回非 0，但 `✓ built` 正常。
-- `cargo test --target x86_64-pc-windows-msvc --lib`：64 passed，0 failed，9 ignored。
-- 已生成并启动 `release/v1.1.3/maltese-assistant.exe`（24,262,656 bytes，17:31 重新编译，含四角修复），配套 `WebView2Loader.dll`。
-- 当前桌面进程运行的是 v1.1.3。
-- `dsh-plugin/index.js` 通过 `node --check` 和动态 import 检查。
-- DSH 插件安装后桌宠仍只有一个进程（单实例生效）。
+- 版本升至 `1.1.4`（package.json / tauri.conf.json / Cargo.toml 三处同步）。
+- 已构建 `release/v1.1.4/maltese-assistant.exe`（24,300,544 bytes，18:46 编译，含本次修复）
+  与 `WebView2Loader.dll`（160,320）。
+- 已打包 `release/maltese-assistant-v1.1.4-win64.zip`（12,190,808，含 exe + dll）。
+- 发布说明 `docs/releases/v1.1.4.md`。
+- `v1.1.4` tag 与 main/dsh 均已推送 origin。
 
 ## 已知问题 / 下一步
 
-- `tests/i18n.tsx` 与当前 UI 有历史偏差（媒体状态需要 `sessions`、布局入口已不是 `.dot-button--layout`、启动不再有 `.island__open-button`），本轮没有把它纳入提交；需要单独更新测试夹具。
-- v1.1.3 只有本地 exe，没有打 tag、没有 GitHub Release、没有上传安装包。
-- 四角位置已按小狗槽位落位；但展开面板仍只向右生长，右下/右上角展开时面板可能贴近或超出屏幕边缘，后续可考虑右侧角自动改为向左展开。
-- DSH 插件目前是 Host-only companion：负责拉起原生桌宠和提供工具，不在 DSH 网页里渲染宠物。若要做网页内宠物，需要再加 Client 半侧（`shell.overlay` + 资源内联）。
-- 插件安装目前是本地目录链接；如果切回 `main` 分支，`dsh-plugin/` 会从工作区消失，已安装插件会失效。保持在 `dsh` 分支或重新安装。
+- **GitHub Release 未创建**：本机无 gh CLI、无 GitHub PAT，无法调用 Releases API。
+  需要用户提供 PAT（`repo` 权限）后，创建 v1.1.4 Release 并上传
+  `maltese-assistant-v1.1.4-win64.zip` 与 README。
+- `tests/i18n.tsx` 与当前 UI 仍有历史偏差（媒体状态需要 `sessions`、布局入口已不是
+  `.dot-button--layout`、启动不再有 `.island__open-button`），本轮没有把它纳入提交。
+- 展开面板仍只向右生长，右下/右上角展开时面板可能贴近或超出屏幕边缘，后续可考虑
+  右侧角自动改为向左展开。
+- DSH 插件是 Host-only companion，仅在 `dsh` 分支；切回 `main` 后 `dsh-plugin/` 会从
+  工作区消失，已安装插件会失效。保持在 `dsh` 分支或重新安装。
