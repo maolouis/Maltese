@@ -34,9 +34,10 @@
 
 ## 已知问题 / 下一步
 
-- **GitHub Release 未创建**：本机无 gh CLI、无 GitHub PAT，无法调用 Releases API。
-  需要用户提供 PAT（`repo` 权限）后，创建 v1.1.4 Release 并上传
-  `maltese-assistant-v1.1.4-win64.zip` 与 README。
+- **GitHub Release 已创建**（2026-11-04）：v1.1.4 Release 已发布，
+  https://github.com/maolouis/Maltese/releases/tag/v1.1.4
+  资产 `maltese-assistant-v1.1.4-win64.zip`（12,190,808 B，含 exe + WebView2Loader.dll）已上传。
+  使用方式见仓库 README 与 Release 正文。
 - `tests/i18n.tsx` 与当前 UI 仍有历史偏差（媒体状态需要 `sessions`、布局入口已不是
   `.dot-button--layout`、启动不再有 `.island__open-button`），本轮没有把它纳入提交。
 - 展开面板仍只向右生长，右下/右上角展开时面板可能贴近或超出屏幕边缘，后续可考虑
