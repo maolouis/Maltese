@@ -84,7 +84,7 @@ import "./App.css";
 
 export type IslandMode = "collapsed" | "expanded";
 
-type PetOverlay = { mode: "hover" | "cloud"; title?: string; body?: string; image?: string };
+type PetOverlay = { mode: "hover" | "cloud"; title?: string; body?: string; image?: string; todoTitle?: string };
 
 type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq" | "assistant" | "chat" | "video" | "onboarding";
 type PetState =
@@ -250,6 +250,14 @@ type IslandSettings = {
   glassIntensity: number;
   opacity: number;
   petOpacity: number;
+  petCount: number;
+  bongoEnabled: boolean;
+  bongoSize: number;
+  bongoOpacity: number;
+  bongoMirror: boolean;
+  bongoClickThrough: boolean;
+  followMouse: boolean;
+  cursorPetSize: number;
   collapsedScale: number;
   expandedScale: number;
   marginY: number;
@@ -469,6 +477,14 @@ const DEFAULT_SETTINGS: IslandSettings = {
   glassIntensity: 72,
   opacity: 95,
   petOpacity: 100,
+  petCount: 1,
+  bongoEnabled: false,
+  bongoSize: 440,
+  bongoOpacity: 100,
+  bongoMirror: true,
+  bongoClickThrough: false,
+  followMouse: false,
+  cursorPetSize: 75,
   collapsedScale: 0.89,
   expandedScale: 0.91,
   marginY: 0,
@@ -664,6 +680,30 @@ function normalizeSettings(
       Number(settings?.petOpacity ?? DEFAULT_SETTINGS.petOpacity),
       30,
       100,
+    ),
+    petCount: clamp(
+      Math.round(Number(settings?.petCount ?? DEFAULT_SETTINGS.petCount)),
+      1,
+      5,
+    ),
+    bongoEnabled: settings?.bongoEnabled === true,
+    bongoSize: clamp(
+      Math.round(Number(settings?.bongoSize ?? DEFAULT_SETTINGS.bongoSize)),
+      220,
+      700,
+    ),
+    bongoOpacity: clamp(
+      Math.round(Number(settings?.bongoOpacity ?? DEFAULT_SETTINGS.bongoOpacity)),
+      30,
+      100,
+    ),
+    bongoMirror: settings?.bongoMirror !== false,
+    bongoClickThrough: settings?.bongoClickThrough === true,
+    followMouse: settings?.followMouse === true,
+    cursorPetSize: clamp(
+      Math.round(Number(settings?.cursorPetSize ?? DEFAULT_SETTINGS.cursorPetSize)),
+      30,
+      180,
     ),
     collapsedScale: clamp(
       Number(collapsedScale),
@@ -1220,6 +1260,7 @@ export function IslandShell({
     }
   }, [isTucked, onSleepReveal, onSleepTuck, restingAsleep]);
   const [panelSide, setPanelSide] = useState<"right" | "left">("right");
+  const [panelVertical, setPanelVertical] = useState<"above" | "below">("above");
   const [tuckEdge, setTuckEdge] = useState<"top" | "bottom">("bottom");
   useEffect(() => {
     if (!isTauri()) {
@@ -1240,8 +1281,12 @@ export function IslandShell({
     const unlisten = listen<string>("maltese-panel-side", (event) => {
       setPanelSide(event.payload === "left" ? "left" : "right");
     });
+    const unlistenVertical = listen<string>("maltese-panel-vertical", (event) => {
+      setPanelVertical(event.payload === "below" ? "below" : "above");
+    });
     return () => {
       void unlisten.then((dispose) => dispose());
+      void unlistenVertical.then((dispose) => dispose());
     };
   }, []);
   // 收起大小变化时先关掉浮层，避免放大中的窗口和新的槽位尺寸打架。
@@ -1285,7 +1330,9 @@ export function IslandShell({
     showTitle ? "" : "island--title-hidden",
     overlayOpen ? "island--overlay-open" : "",
     overlayOpen ? `island--overlay-${panelSide}` : "",
+    overlayOpen && panelVertical === "below" ? "island--overlay-below" : "",
     mode === "expanded" ? `island--panel-${panelSide}` : "",
+    mode === "expanded" && panelVertical === "below" ? "island--panel-below" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -1387,7 +1434,13 @@ export function IslandShell({
     (event: ReactPointerEvent<HTMLElement>) => {
       didDragRef.current = false;
       // 展开（云朵面板）时拖拽会把面板偏移记成小狗位置，只允许收起态拖动。
-      if (event.button !== 0 || isTucked || mode !== "collapsed" || overlayOpen) {
+      if (
+        event.button !== 0
+        || !event.ctrlKey
+        || isTucked
+        || mode !== "collapsed"
+        || overlayOpen
+      ) {
         return;
       }
 
@@ -1474,7 +1527,7 @@ export function IslandShell({
             role="button"
             tabIndex={0}
             aria-label={collapsedLabel}
-            title="单击摸摸头，双击庆祝，右键抱起来"
+            title="单击摸摸头，双击庆祝，右键抱起来；按住 Ctrl 拖动可换位置"
             onPointerDown={(event) => {
               wakePet();
               prepareWindowDrag(event);
@@ -1564,6 +1617,9 @@ export function IslandShell({
                   ))}
                 </div>
                 <div className="pet-bubble-panel__status">
+                  <span className="pet-bubble-panel__active-todo">
+                    📌 正在做：{overlay.todoTitle ?? "还没有开始待办"}
+                  </span>
                   {collapsedTodoCount !== null && <span>📋 待办还剩 {collapsedTodoCount} 个</span>}
                   {mediaState.playbackStatus === "playing" && mediaState.title && (
                     <span>
@@ -2357,6 +2413,77 @@ function LayoutEditor({
             选四角会立即把桌宠放到对应角落；点「复位」也会回到这里。
           </small>
         </div>
+      </section>
+
+      <section className="settings-section settings-section--desktop-pets">
+        <div className="settings-section__header">
+          <span>桌宠形态</span>
+        </div>
+        <p className="settings-section__hint">
+          陪玩狗、Bongo 模式和鼠标跟随宠会使用独立的透明小窗口，不会挡住桌面点击。
+        </p>
+        <SliderControl
+          label="小狗数量（含主狗）"
+          value={settings.petCount}
+          min={1}
+          max={5}
+          step={1}
+          suffix="只"
+          onChange={(petCount) => onSettingsChange({ ...settings, petCount })}
+        />
+        <ToggleControl
+          label="Bongo 模式（小狗趴在键盘上，跟着按键动）"
+          checked={settings.bongoEnabled}
+          onChange={(bongoEnabled) => onSettingsChange({ ...settings, bongoEnabled })}
+        />
+        {settings.bongoEnabled && (
+          <>
+            <SliderControl
+              label="Bongo 大小"
+              value={settings.bongoSize}
+              min={220}
+              max={700}
+              step={10}
+              suffix="px"
+              onChange={(bongoSize) => onSettingsChange({ ...settings, bongoSize })}
+            />
+            <SliderControl
+              label="Bongo 不透明度"
+              value={settings.bongoOpacity}
+              min={30}
+              max={100}
+              step={1}
+              suffix="%"
+              onChange={(bongoOpacity) => onSettingsChange({ ...settings, bongoOpacity })}
+            />
+            <ToggleControl
+              label="水平镜像（让素材朝向和真实键盘一致）"
+              checked={settings.bongoMirror}
+              onChange={(bongoMirror) => onSettingsChange({ ...settings, bongoMirror })}
+            />
+            <ToggleControl
+              label="鼠标穿透 Bongo（只能看，不能拖动）"
+              checked={settings.bongoClickThrough}
+              onChange={(bongoClickThrough) => onSettingsChange({ ...settings, bongoClickThrough })}
+            />
+          </>
+        )}
+        <ToggleControl
+          label="跟随鼠标（在光标旁显示一只小尺寸小狗）"
+          checked={settings.followMouse}
+          onChange={(followMouse) => onSettingsChange({ ...settings, followMouse })}
+        />
+        {settings.followMouse && (
+          <SliderControl
+            label="跟随宠大小"
+            value={settings.cursorPetSize}
+            min={30}
+            max={180}
+            step={1}
+            suffix="px"
+            onChange={(cursorPetSize) => onSettingsChange({ ...settings, cursorPetSize })}
+          />
+        )}
       </section>
 
       <section className="settings-section settings-section--messages">
@@ -4524,6 +4651,21 @@ function VideoPage() {
 type CustomShortcut = { label: string; path: string };
 
 const CUSTOM_SHORTCUTS_KEY = "maltese-custom-shortcuts";
+const HIDDEN_SHORTCUTS_KEY = "maltese-hidden-shortcuts";
+
+function loadHiddenShortcuts(): string[] {
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_SHORTCUTS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string" && item.length > 0)
+      .slice(0, 200);
+  } catch {
+    return [];
+  }
+}
 
 function loadCustomShortcuts(): CustomShortcut[] {
   try {
@@ -4649,6 +4791,7 @@ function AssistantPanel() {
   const [commonScripts, setCommonScripts] = useState<Array<{ name: string; path: string; kind: string }>>([]);
   const [discoveredShortcuts, setDiscoveredShortcuts] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [customShortcuts, setCustomShortcuts] = useState<CustomShortcut[]>(loadCustomShortcuts);
+  const [hiddenShortcuts, setHiddenShortcuts] = useState<string[]>(loadHiddenShortcuts);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const [draftLabel, setDraftLabel] = useState("");
@@ -4718,6 +4861,26 @@ function AssistantPanel() {
     }
   };
 
+  const persistHiddenShortcuts = (next: string[]) => {
+    const unique = [...new Set(next)].slice(0, 200);
+    setHiddenShortcuts(unique);
+    try {
+      window.localStorage.setItem(HIDDEN_SHORTCUTS_KEY, JSON.stringify(unique));
+    } catch {
+      // 忽略写入失败
+    }
+  };
+
+  const hideShortcut = (label: string, path: string) => {
+    persistHiddenShortcuts([...hiddenShortcuts, path]);
+    setNotice(`${label} 已从列表移除（不会删除桌面文件）`);
+  };
+
+  const restoreHiddenShortcuts = () => {
+    persistHiddenShortcuts([]);
+    setNotice("已恢复被隐藏的快捷方式");
+  };
+
   const addCustomShortcut = () => {
     const path = draftPath.trim();
     if (!path) {
@@ -4780,7 +4943,10 @@ function AssistantPanel() {
     { id: "calculator", label: "计算器", detail: "快速算一笔", tool: "calculator" },
     { id: "scripts", label: "常用脚本", detail: "打开脚本目录", tool: "scripts" },
   ];
-  const discoveredActions = discoveredShortcuts.slice(0, 24);
+  const hiddenShortcutSet = new Set(hiddenShortcuts);
+  const discoveredActions = discoveredShortcuts
+    .filter((shortcut) => !hiddenShortcutSet.has(shortcut.path))
+    .slice(0, 24);
 
   const handleAction = async (tool: string) => {
     await launch(tool);
@@ -4833,7 +4999,18 @@ function AssistantPanel() {
       )}
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
-        <small>只读取这台电脑上发现和自定义的入口</small>
+        <div className="assistant-panel__section-meta">
+          <small>只读取这台电脑上发现和自定义的入口</small>
+          {hiddenShortcuts.length > 0 && (
+            <button
+              type="button"
+              className="assistant-panel__restore"
+              onClick={restoreHiddenShortcuts}
+            >
+              恢复隐藏（{hiddenShortcuts.length}）
+            </button>
+          )}
+        </div>
       </div>
       <div className="assistant-panel__grid">
         {actions.map((action) => (
@@ -4852,22 +5029,32 @@ function AssistantPanel() {
           </button>
         ))}
         {discoveredActions.map((shortcut) => (
-          <button
-            key={shortcut.path}
-            type="button"
-            className="assistant-card"
-            data-window-drag="false"
-            onClick={() => launchPath(shortcut.label, shortcut.path)}
-          >
-            {renderIcon(shortcut.path)}
-            <span className="assistant-card__copy">
-              <strong title={shortcut.label}>{shortcut.label}</strong>
-              <small title={shortcut.path}>
-                {shortcut.kind === "lnk" ? "桌面快捷方式" : `自动发现 · .${shortcut.kind}`}
-              </small>
-            </span>
-            <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+          <div key={shortcut.path} className="assistant-card assistant-card--custom">
+            <button
+              type="button"
+              className="assistant-card__launch"
+              data-window-drag="false"
+              onClick={() => launchPath(shortcut.label, shortcut.path)}
+            >
+              {renderIcon(shortcut.path)}
+              <span className="assistant-card__copy">
+                <strong title={shortcut.label}>{shortcut.label}</strong>
+                <small title={shortcut.path}>
+                  {shortcut.kind === "lnk" ? "桌面快捷方式" : `自动发现 · .${shortcut.kind}`}
+                </small>
+              </span>
+              <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="assistant-card__remove"
+              title="从列表移除（不删除桌面文件）"
+              aria-label={`从列表移除 ${shortcut.label}`}
+              onClick={() => hideShortcut(shortcut.label, shortcut.path)}
+            >
+              ×
+            </button>
+          </div>
         ))}
         {customShortcuts.map((shortcut) => (
           <div key={`custom-${shortcut.path}`} className="assistant-card assistant-card--custom">
@@ -5079,6 +5266,13 @@ function IslandApp({
     );
     return activeTodo?.title ?? null;
   }, [displayedTodoId, todos]);
+  // 悬停气泡只展示“已经点过开始”的那一条，而不是轮播中的任意待办。
+  const activeTodoTitle = useMemo(() => {
+    const activeTodo = todos.find(
+      (todo) => todo.id === activeTodoId && !todo.completed,
+    );
+    return activeTodo?.title ?? null;
+  }, [activeTodoId, todos]);
   const collapsedTodoCount = settings.showIdleTodoCount && !collapsedTaskTitle
     ? todos.filter((todo) => !todo.completed).length
     : null;
@@ -5611,8 +5805,21 @@ function IslandApp({
       window.clearTimeout(overlayHideTimerRef.current);
       overlayHideTimerRef.current = null;
     }
-    applyPetOverlay({ mode: "hover" });
-  }, [applyPetOverlay, isTucked, mode, revealIsland]);
+    applyPetOverlay({ mode: "hover", todoTitle: activeTodoTitle ?? undefined });
+  }, [activeTodoTitle, applyPetOverlay, isTucked, mode, revealIsland]);
+
+  // 气泡已经打开时切换“开始”的待办，文字同步更新，不重新放大窗口。
+  useEffect(() => {
+    if (petOverlayRef.current?.mode !== "hover") {
+      return;
+    }
+    const next = {
+      ...petOverlayRef.current,
+      todoTitle: activeTodoTitle ?? undefined,
+    };
+    petOverlayRef.current = next;
+    setPetOverlay(next);
+  }, [activeTodoTitle]);
 
   const scheduleBubbleHide = useCallback(() => {
     if (overlayHideTimerRef.current !== null) {
@@ -5858,6 +6065,34 @@ function IslandApp({
       // 忽略写入失败
     }
   }, [settings.bubbleTextColor]);
+
+  // 多宠物、Bongo 模式、鼠标跟随宠都由 Rust 维护独立透明窗口。
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    void invoke("sync_desktop_extras", {
+      config: {
+        petCount: settings.petCount,
+        bongoEnabled: settings.bongoEnabled,
+        bongoSize: settings.bongoSize,
+        bongoOpacity: settings.bongoOpacity,
+        bongoMirror: settings.bongoMirror,
+        bongoClickThrough: settings.bongoClickThrough,
+        followMouse: settings.followMouse,
+        cursorPetSize: settings.cursorPetSize,
+      },
+    }).catch(() => undefined);
+  }, [
+    settings.bongoClickThrough,
+    settings.bongoEnabled,
+    settings.bongoMirror,
+    settings.bongoOpacity,
+    settings.bongoSize,
+    settings.cursorPetSize,
+    settings.followMouse,
+    settings.petCount,
+  ]);
 
   // 独立设置窗口保存后，主窗口立即重新加载设置。
   useEffect(() => {

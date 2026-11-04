@@ -1,6 +1,7 @@
 mod activity;
 mod clipboard_history;
 mod netease;
+mod desktop_extras;
 mod dsh_api;
 mod dsh_chat;
 mod icons;
@@ -524,8 +525,9 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
     let scale = monitor.scale_factor();
-    let mon_pos = monitor.position();
-    let mon_size = monitor.size();
+    let work_area = monitor.work_area();
+    let mon_pos = work_area.position;
+    let mon_size = work_area.size;
     let mon_left = mon_pos.x;
     let mon_right = mon_pos.x + mon_size.width as i32;
     let mon_bottom = mon_pos.y + mon_size.height as i32;
@@ -542,9 +544,12 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
                     snapshot.base_w.max(1.0),
                     snapshot.base_h.max(1.0),
                 )));
-                let x = snapshot.anchor_x.clamp(mon_pos.x, (mon_right - (snapshot.base_w * scale).round() as i32).max(mon_pos.x));
-                let y = snapshot.anchor_y.clamp(mon_pos.y, (mon_bottom - (snapshot.base_h * scale).round() as i32).max(mon_pos.y));
-                let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+                // 原样恢复小狗槽锚点。这里不要按“展开后的窗口尺寸”再 clamp 一次，
+                // 否则靠屏幕边缘的小狗每开合一次气泡都会被往内挤一点，越飘越远。
+                let _ = window.set_position(Position::Physical(PhysicalPosition::new(
+                    snapshot.anchor_x,
+                    snapshot.anchor_y,
+                )));
             }
             // 缩回后再按最新状态套一次几何（浮层期间可能改过大小/位置）。
             let state = read_window_state();
@@ -575,11 +580,18 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
                     // 先把窗口“落定”到目标位置（取消可能还在跑的位移动画），
                     // 否则会把动画中间位置当成锚点，关浮层后小狗就瞬移。
                     POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
-                    let _ = apply_stage_geometry(&window, read_window_state(), false);
+                    let settled_state = read_window_state();
+                    let _ = apply_stage_geometry(&window, settled_state, false);
+                    // 位移动画可能还没把原生窗口挪到位；custom_position 记录的是
+                    // 小狗槽的最终左上角，用它当锚点才能避免“浮层按旧位置选上下”。
                     let position = window.outer_position().map_err(|error| error.to_string())?;
+                    let anchor = settled_state.custom_position.unwrap_or(IslandPosition {
+                        x: position.x,
+                        y: position.y,
+                    });
                     let snapshot = OverlaySnapshot {
-                        anchor_x: position.x,
-                        anchor_y: position.y,
+                        anchor_x: anchor.x,
+                        anchor_y: anchor.y,
                         base_w,
                         base_h,
                     };
@@ -607,12 +619,24 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
             } else {
                 (snapshot.anchor_x + base_w_phys - mon_left).max(0)
             };
-            let avail_h = ((snapshot.anchor_y - mon_pos.y) as f64 / scale + snapshot.base_h)
-                .max(snapshot.base_h);
+            let desired_h_phys = (panel_h * scale).round() as i32;
+            let panel_vertical = expanded_panel_vertical(
+                snapshot.anchor_y,
+                base_h_phys,
+                desired_h_phys,
+                mon_pos.y,
+                mon_bottom,
+            );
+            let avail_v = if panel_vertical == "above" {
+                ((snapshot.anchor_y + base_h_phys - mon_pos.y) as f64 / scale)
+                    .max(snapshot.base_h)
+            } else {
+                ((mon_bottom - snapshot.anchor_y) as f64 / scale).max(snapshot.base_h)
+            };
             let width = (snapshot.base_w + gap + panel_w)
                 .min((side_space as f64) / scale)
                 .max(snapshot.base_w + gap + 120.0);
-            let height = panel_h.min(avail_h).max(snapshot.base_h);
+            let height = panel_h.min(avail_v).max(snapshot.base_h);
             let phys_w = (width * scale).round() as i32;
             let phys_h = (height * scale).round() as i32;
             let x = if panel_side == "left" {
@@ -620,9 +644,13 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
             } else {
                 snapshot.anchor_x
             };
-            let y = snapshot.anchor_y + base_h_phys - phys_h;
-            let _ = (phys_w, mon_bottom);
+            let y = if panel_vertical == "above" {
+                snapshot.anchor_y + base_h_phys - phys_h
+            } else {
+                snapshot.anchor_y
+            };
             let _ = window.emit("maltese-panel-side", panel_side);
+            let _ = window.emit("maltese-panel-vertical", panel_vertical);
             window
                 .set_size(Size::Logical(LogicalSize::new(width, height)))
                 .map_err(|error| error.to_string())?;
@@ -732,21 +760,37 @@ fn show_pet_bubble(
         .current_monitor()
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "没有可用的显示器".to_string())?;
-    let mon_pos = monitor.position();
-    let mon_size = monitor.size();
+    let work_area = monitor.work_area();
+    let mon_pos = work_area.position;
+    let mon_size = work_area.size;
     let scale = monitor.scale_factor();
     let bubble_width = (desired.width * scale).round() as i32;
     let bubble_height = (desired.height * scale).round() as i32;
 
-    // 优先放在小狗右侧，放不下则翻到左侧；垂直方向与小狗窗口居中对齐。
+    // 优先放在小狗右侧，放不下则翻到左侧；上下也自动翻：
+    // 上方不够就贴到小狗下方，下方不够就贴到小狗上方。
     let gap = 8i32;
     let mut x = main_pos.x + main_size.width as i32 + gap;
     if x + bubble_width > mon_pos.x + mon_size.width as i32 {
         x = main_pos.x - bubble_width - gap;
     }
     x = x.clamp(mon_pos.x, mon_pos.x + mon_size.width as i32 - bubble_width);
-    let y = (main_pos.y + (main_size.height as i32 - bubble_height) / 2)
-        .clamp(mon_pos.y, mon_pos.y + mon_size.height as i32 - bubble_height);
+    let vertical = expanded_panel_vertical(
+        main_pos.y,
+        main_size.height as i32,
+        bubble_height,
+        mon_pos.y,
+        mon_pos.y + mon_size.height as i32,
+    );
+    let desired_y = if vertical == "above" {
+        main_pos.y + main_size.height as i32 - bubble_height
+    } else {
+        main_pos.y
+    };
+    let y = desired_y.clamp(
+        mon_pos.y,
+        mon_pos.y + mon_size.height as i32 - bubble_height,
+    );
 
     bubble
         .set_position(Position::Physical(PhysicalPosition::new(x, y)))
@@ -2312,8 +2356,22 @@ fn apply_stage_geometry(
             let width_css = stage_width.min(
                 ((side_space as f64) / scale).max(min_width_css),
             );
-            let avail_h_css = ((dog_y - work_top) as f64 / scale).max(0.0) + slot_h_css;
-            let height_css = stage_height.min(avail_h_css).max(slot_h_css);
+            let desired_height_phys = (stage_height * scale).round() as i32;
+            let panel_vertical = expanded_panel_vertical(
+                dog_y,
+                slot_h_phys,
+                desired_height_phys,
+                work_top,
+                work_bottom,
+            );
+            let vertical_space = if panel_vertical == "above" {
+                (dog_y + slot_h_phys - work_top).max(0)
+            } else {
+                (work_bottom - dog_y).max(0)
+            };
+            let height_css = stage_height
+                .min((vertical_space as f64) / scale)
+                .max(slot_h_css);
             let phys_w = (width_css * scale).round() as i32;
             let phys_h = (height_css * scale).round() as i32;
             if window.inner_size().map_err(|error| error.to_string())?
@@ -2324,12 +2382,18 @@ fn apply_stage_geometry(
                     .map_err(|error| error.to_string())?;
             }
             let _ = window.emit("maltese-panel-side", panel_side);
+            let _ = window.emit("maltese-panel-vertical", panel_vertical);
             let x = if panel_side == "left" {
                 dog_x + slot_w_phys - phys_w
             } else {
                 dog_x
             };
-            (x, dog_y + slot_h_phys - phys_h)
+            let y = if panel_vertical == "above" {
+                dog_y + slot_h_phys - phys_h
+            } else {
+                dog_y
+            };
+            (x, y)
         }
         _ => (dog_x, dog_y),
     };
@@ -2371,6 +2435,26 @@ fn apply_stage_geometry(
 }
 
 // 展开面板朝哪一侧生长：优先右侧，右侧贴边则翻到左侧；两侧都放不下时选空间大的一侧。
+fn expanded_panel_vertical(
+    dog_y: i32,
+    slot_h_phys: i32,
+    desired_height_phys: i32,
+    work_top: i32,
+    work_bottom: i32,
+) -> &'static str {
+    let above = (dog_y + slot_h_phys - work_top).max(0);
+    let below = (work_bottom - dog_y).max(0);
+    if above >= desired_height_phys {
+        "above"
+    } else if below >= desired_height_phys {
+        "below"
+    } else if above >= below {
+        "above"
+    } else {
+        "below"
+    }
+}
+
 fn expanded_panel_side(
     dog_x: i32,
     slot_w_phys: i32,
@@ -2619,6 +2703,20 @@ mod tests {
         assert_eq!(expanded_panel_side(650, 198, 800, 0, 1000), "left");
         // 负坐标副屏同样按边界判断。
         assert_eq!(expanded_panel_side(-214, 198, 800, -2048, 0), "left");
+    }
+
+    #[test]
+    fn panel_flips_vertically_when_top_space_is_tight() {
+        // 小狗贴顶部：上方放不下，面板必须翻到下方。
+        assert_eq!(expanded_panel_vertical(0, 200, 650, 0, 1440), "below");
+        // 小狗贴底部：下方放不下，面板回到上方。
+        assert_eq!(expanded_panel_vertical(1240, 200, 650, 0, 1440), "above");
+        // 中间优先上方，空间不足时才看下方。
+        assert_eq!(expanded_panel_vertical(700, 200, 650, 0, 1440), "above");
+        assert_eq!(expanded_panel_vertical(300, 200, 900, 0, 1440), "below");
+        // 两边都放不下：选空间更大的一侧。
+        assert_eq!(expanded_panel_vertical(400, 200, 2000, 0, 1440), "below");
+        assert_eq!(expanded_panel_vertical(900, 200, 2000, 0, 1440), "above");
     }
 
     #[test]
@@ -3021,6 +3119,8 @@ pub fn run() {
             minimize_island,
             lyrics::fetch_lyrics,
             icons::get_shortcut_icon,
+            desktop_extras::sync_desktop_extras,
+            desktop_extras::get_pressed_keys,
             show_pet_bubble,
             get_pet_bubble_payload,
             hide_pet_bubble,

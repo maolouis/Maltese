@@ -12,6 +12,14 @@ type FullscreenAvoid = "tuck" | "hide" | "off";
 
 type PetSettings = {
   petOpacity: number;
+  petCount: number;
+  bongoEnabled: boolean;
+  bongoSize: number;
+  bongoOpacity: number;
+  bongoMirror: boolean;
+  bongoClickThrough: boolean;
+  followMouse: boolean;
+  cursorPetSize: number;
   collapsedScale: number;
   expandedScale: number;
   fpsMode: FpsMode;
@@ -40,6 +48,14 @@ type PetSettings = {
 
 const DEFAULTS: PetSettings = {
   petOpacity: 100,
+  petCount: 1,
+  bongoEnabled: false,
+  bongoSize: 440,
+  bongoOpacity: 100,
+  bongoMirror: true,
+  bongoClickThrough: false,
+  followMouse: false,
+  cursorPetSize: 75,
   collapsedScale: 0.89,
   expandedScale: 0.91,
   fpsMode: "balanced",
@@ -271,6 +287,24 @@ export default function SettingsWindow() {
           onChange={(value) => update("fpsMode", value)}
         />
         <Switch label="点击时 Q 弹" checked={settings.clickSquash} onChange={(value) => update("clickSquash", value)} />
+      </section>
+
+      <section className="sw-card">
+        <h2>桌宠形态</h2>
+        <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
+        <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
+        {settings.bongoEnabled && (
+          <>
+            <Slider label="Bongo 大小" value={settings.bongoSize} min={220} max={700} step={10} suffix="px" onChange={(value) => update("bongoSize", value)} />
+            <Slider label="Bongo 不透明度" value={settings.bongoOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("bongoOpacity", value)} />
+            <Switch label="水平镜像" checked={settings.bongoMirror} onChange={(value) => update("bongoMirror", value)} />
+            <Switch label="鼠标穿透 Bongo" checked={settings.bongoClickThrough} onChange={(value) => update("bongoClickThrough", value)} />
+          </>
+        )}
+        <Switch label="跟随鼠标" hint="在光标旁显示一只小尺寸小狗" checked={settings.followMouse} onChange={(value) => update("followMouse", value)} />
+        {settings.followMouse && (
+          <Slider label="跟随宠大小" value={settings.cursorPetSize} min={30} max={180} step={1} suffix="px" onChange={(value) => update("cursorPetSize", value)} />
+        )}
       </section>
 
       <section className="sw-card">

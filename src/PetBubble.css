@@ -175,6 +175,12 @@ body,
   white-space: nowrap;
 }
 
+.pet-bubble-panel__active-todo {
+  color: var(--pet-bubble-text, #2b2f3a);
+  font-weight: 600;
+  opacity: 1;
+}
+
 .pet-bubble-panel__links {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

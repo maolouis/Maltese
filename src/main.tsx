@@ -4,6 +4,9 @@ import App from "./App";
 import TranslationWindow from "./TranslationWindow";
 import PetBubble from "./PetBubble";
 import SettingsWindow from "./SettingsWindow";
+import CompanionPet from "./CompanionPet";
+import CursorPet from "./CursorPet";
+import BongoPet from "./BongoPet";
 import { I18nProvider } from "./i18n";
 
 const windowKind = new URLSearchParams(window.location.search).get("window");
@@ -14,7 +17,13 @@ const RootComponent =
       ? PetBubble
       : windowKind === "settings"
         ? SettingsWindow
-        : App;
+        : windowKind === "companion"
+          ? CompanionPet
+          : windowKind === "cursor"
+            ? CursorPet
+            : windowKind === "bongo"
+              ? BongoPet
+              : App;
 
 window.addEventListener(
   "pointerdown",

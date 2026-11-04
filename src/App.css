@@ -4842,6 +4842,30 @@ input,
   display: block;
 }
 
+.assistant-panel__section-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.assistant-panel__restore {
+  border: 0;
+  border-radius: 7px;
+  background: #eef0f5;
+  color: #5f6672;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 5px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.assistant-panel__restore:hover {
+  background: #e2e6ee;
+  color: #333a45;
+}
+
 .assistant-card--custom {
   position: relative;
   display: flex;
@@ -5082,6 +5106,30 @@ input,
   right: -24px;
 }
 
+/* 上方空间不足时气泡翻到小狗下方：小狗钉在窗口顶部，气泡向下长。 */
+.island--overlay-below .island__collapsed.island__collapsed--pet-only {
+  top: 0;
+  bottom: auto;
+}
+
+.island--overlay-below .island-overlay {
+  top: calc(var(--pet-slot-h, 128px) + 8px);
+  bottom: 0;
+  align-items: flex-start;
+  padding-top: 10px;
+  padding-bottom: 0;
+}
+
+.island--overlay-below .island-overlay .pet-cloud__tail--1 {
+  top: -12px;
+  bottom: auto;
+}
+
+.island--overlay-below .island-overlay .pet-cloud__tail--2 {
+  top: -24px;
+  bottom: auto;
+}
+
 .island-overlay .pet-cloud {
   max-width: 100%;
 }
@@ -5143,6 +5191,28 @@ input,
 .island--expanded.island--panel-left .island__collapsed.island__collapsed--pet-only {
   left: auto;
   right: 0;
+}
+
+/* 面板翻到下方时，小狗改钉在窗口顶部，面板从槽位下方开始。 */
+.island--expanded.island--panel-below .island__collapsed.island__collapsed--pet-only {
+  top: 0;
+  bottom: auto;
+}
+
+.island--panel-below .island__expanded {
+  top: calc(var(--pet-slot-h, 128px) + 8px);
+  bottom: 0;
+}
+
+.island--panel-below .island__expanded::before {
+  top: -9px;
+  bottom: auto;
+  left: 34px;
+}
+
+.island--panel-below.island--panel-left .island__expanded::before {
+  left: auto;
+  right: 34px;
 }
 
 .island__expanded {
@@ -5486,7 +5556,8 @@ input,
   color: #7c828f !important;
 }
 
-.island__expanded .assistant-card > svg {
+.island__expanded .assistant-card > svg,
+.island__expanded .assistant-card__launch > svg {
   display: none;
 }
 

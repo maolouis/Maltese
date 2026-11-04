@@ -6,7 +6,13 @@
     "main",
     "translation",
     "bubble",
-    "settings"
+    "settings",
+    "companion-1",
+    "companion-2",
+    "companion-3",
+    "companion-4",
+    "bongo-pet",
+    "cursor-pet"
   ],
   "permissions": [
     "core:default",
