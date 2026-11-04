@@ -79,6 +79,8 @@ import {
   type Translations,
 } from "./i18n";
 import { getCollapsedTextUnits, getTodoTitleLineCount } from "./utils/text";
+import { formatTodoElapsed, getTodoElapsedMs } from "./todoTimer";
+import { DiaryTimeline, type DiaryEvent } from "./DiaryTimeline";
 import "./PetBubble.css";
 import "./App.css";
 
@@ -119,6 +121,13 @@ type TodoItem = {
   title: string;
   completed: boolean;
   createdAt: number;
+  completedAt?: number | null;
+  /** 第一次开始做的时间；仅用于展示，计时以 activeSince/elapsedMs 为准。 */
+  startedAt?: number | null;
+  /** 当前这段计时的起点；暂停时为 null。 */
+  activeSince?: number | null;
+  /** 已经累计的计时毫秒数（暂停/完成时结算）。 */
+  elapsedMs?: number;
 };
 
 type TodoArchive = {
@@ -270,9 +279,9 @@ type IslandSettings = {
   showCollapsedText: boolean;
   showIdleTodoCount: boolean;
   carryOverIncompleteTodos: boolean;
-  enableTodoReorder: boolean;
   rotateTodos: boolean;
   todoRotationSeconds: number;
+  todoReminderMinutes: number;
   autoTuck: boolean;
   autoTuckSeconds: number;
   fullscreenAvoid: FullscreenAvoidMode;
@@ -292,7 +301,6 @@ type IslandSettings = {
   musicChat: boolean;
   petFlipY: boolean;
   roam: boolean;
-  lyricsBubble: boolean;
   sleepAfterSeconds: number;
   /** 缩边睡觉时露在屏幕边缘的小狗高度（逻辑像素）。 */
   tuckedVisibleHeight: number;
@@ -364,6 +372,7 @@ const ACTIVE_TODO_STORAGE_KEY = "focusd-island-active-todo";
 const TODO_DATE_STORAGE_KEY = "focusd-island-current-date";
 const TODO_ARCHIVE_STORAGE_KEY = "focusd-island-archives";
 const DAILY_NOTE_STORAGE_KEY = "focusd-island-daily-note";
+const DIARY_EVENTS_STORAGE_KEY = "focusd-island-diary-events";
 const TODO_SAVE_DIRECTORY_STORAGE_KEY = "focusd-island-save-directory";
 const TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY =
   "focusd-island-last-saved-signature";
@@ -497,9 +506,9 @@ const DEFAULT_SETTINGS: IslandSettings = {
   showCollapsedText: true,
   showIdleTodoCount: true,
   carryOverIncompleteTodos: false,
-  enableTodoReorder: false,
   rotateTodos: false,
   todoRotationSeconds: 5,
+  todoReminderMinutes: 30,
   autoTuck: false,
   autoTuckSeconds: 30,
   fullscreenAvoid: "tuck",
@@ -519,7 +528,6 @@ const DEFAULT_SETTINGS: IslandSettings = {
   musicChat: true,
   petFlipY: false,
   roam: false,
-  lyricsBubble: true,
   sleepAfterSeconds: 150,
   tuckedVisibleHeight: 80,
 };
@@ -754,14 +762,15 @@ function normalizeSettings(
       typeof settings?.carryOverIncompleteTodos === "boolean"
         ? settings.carryOverIncompleteTodos
         : DEFAULT_SETTINGS.carryOverIncompleteTodos,
-    enableTodoReorder:
-      typeof settings?.enableTodoReorder === "boolean"
-        ? settings.enableTodoReorder
-        : DEFAULT_SETTINGS.enableTodoReorder,
     rotateTodos: settings?.rotateTodos === true,
     todoRotationSeconds: typeof settings?.todoRotationSeconds === "number" && Number.isFinite(settings.todoRotationSeconds)
       ? clamp(Math.round(settings.todoRotationSeconds), 1, 3_600)
       : DEFAULT_SETTINGS.todoRotationSeconds,
+    todoReminderMinutes:
+      typeof settings?.todoReminderMinutes === "number" &&
+      Number.isFinite(settings.todoReminderMinutes)
+        ? clamp(Math.round(settings.todoReminderMinutes), 1, 180)
+        : DEFAULT_SETTINGS.todoReminderMinutes,
     autoTuck: settings?.autoTuck === true,
     autoTuckSeconds: typeof settings?.autoTuckSeconds === "number" && Number.isFinite(settings.autoTuckSeconds)
       ? clamp(Math.round(settings.autoTuckSeconds), 1, 3_600)
@@ -799,7 +808,6 @@ function normalizeSettings(
     musicChat: settings?.musicChat !== false,
     petFlipY: settings?.petFlipY === true,
     roam: settings?.roam === true,
-    lyricsBubble: settings?.lyricsBubble !== false,
     clickSquash: settings?.clickSquash !== false,
     lockCorner: settings?.lockCorner === "tl" || settings?.lockCorner === "tr" || settings?.lockCorner === "bl" || settings?.lockCorner === "br"
       ? settings.lockCorner
@@ -946,11 +954,23 @@ function loadSettingPresets(t: Translations): IslandPreset[] {
 }
 
 function normalizeTodo(todo: Partial<TodoItem>): TodoItem {
+  const completed = Boolean(todo.completed);
   return {
     id: typeof todo.id === "string" && todo.id ? todo.id : createTodoId(),
     title: todo.title?.trim() ?? "",
-    completed: Boolean(todo.completed),
+    completed,
     createdAt: typeof todo.createdAt === "number" ? todo.createdAt : Date.now(),
+    completedAt:
+      completed && typeof todo.completedAt === "number" ? todo.completedAt : null,
+    startedAt: typeof todo.startedAt === "number" ? todo.startedAt : null,
+    activeSince:
+      !completed && typeof todo.activeSince === "number"
+        ? todo.activeSince
+        : null,
+    elapsedMs:
+      typeof todo.elapsedMs === "number" && Number.isFinite(todo.elapsedMs)
+        ? Math.max(0, todo.elapsedMs)
+        : 0,
   };
 }
 
@@ -1094,6 +1114,43 @@ function loadSaveDirectory() {
 
 function loadDailyNote() {
   return window.localStorage.getItem(DAILY_NOTE_STORAGE_KEY) ?? "";
+}
+
+function loadDiaryEvents(): DiaryEvent[] {
+  const stored = window.localStorage.getItem(DIARY_EVENTS_STORAGE_KEY);
+
+  if (!stored) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<DiaryEvent>[];
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter(
+        (event) =>
+          typeof event.id === "string" &&
+          typeof event.date === "string" &&
+          typeof event.at === "number" &&
+          (event.kind === "pet" || event.kind === "todo") &&
+          typeof event.text === "string" &&
+          event.text.trim(),
+      )
+      .map((event) => ({
+        id: event.id!,
+        date: event.date!,
+        at: event.at!,
+        kind: event.kind as DiaryEvent["kind"],
+        text: event.text!.trim(),
+      }))
+      .slice(-500);
+  } catch {
+    return [];
+  }
 }
 
 function getTodoSignature(date: string, todos: TodoItem[], dailyNote: string) {
@@ -2533,13 +2590,6 @@ function LayoutEditor({
           }
         />
         <ToggleControl
-          label={t.settings.todo.enableReorder}
-          checked={settings.enableTodoReorder}
-          onChange={(enableTodoReorder) =>
-            onSettingsChange({ ...settings, enableTodoReorder })
-          }
-        />
-        <ToggleControl
           label={t.settings.todo.rotateTodos}
           checked={settings.rotateTodos}
           onChange={(rotateTodos) => onSettingsChange({ ...settings, rotateTodos })}
@@ -2553,6 +2603,13 @@ function LayoutEditor({
             onChange={(todoRotationSeconds) => onSettingsChange({ ...settings, todoRotationSeconds })}
           />
         )}
+        <NumberControl
+          label={t.settings.todo.reminderMinutes}
+          value={settings.todoReminderMinutes}
+          min={1}
+          max={180}
+          onChange={(todoReminderMinutes) => onSettingsChange({ ...settings, todoReminderMinutes })}
+        />
       </section>
 
       <section className="settings-section settings-section--agent-hooks">
@@ -2895,6 +2952,7 @@ function LayoutEditor({
 function TodoNotebook({
   todos,
   dailyNote,
+  diaryEvents,
   draft,
   activeTodoId,
   currentDate,
@@ -2903,7 +2961,6 @@ function TodoNotebook({
   archiveLayout,
   selectedArchive,
   saveState,
-  enableTodoReorder,
   onDraftChange,
   onAddTodo,
   onToggleTodo,
@@ -2921,6 +2978,7 @@ function TodoNotebook({
 }: {
   todos: TodoItem[];
   dailyNote: string;
+  diaryEvents: DiaryEvent[];
   draft: string;
   activeTodoId: string | null;
   currentDate: string;
@@ -2929,7 +2987,6 @@ function TodoNotebook({
   archiveLayout: ArchiveLayout;
   selectedArchive: TodoArchive | null;
   saveState: SaveState;
-  enableTodoReorder: boolean;
   onDraftChange: (value: string) => void;
   onAddTodo: () => void;
   onToggleTodo: (id: string) => void;
@@ -2980,7 +3037,15 @@ function TodoNotebook({
   const [todoTitleDraft, setTodoTitleDraft] = useState("");
   const [draggedTodoId, setDraggedTodoId] = useState<string | null>(null);
   const [dragOverTodoId, setDragOverTodoId] = useState<string | null>(null);
-  const canReorderTodos = isTodayMode && enableTodoReorder;
+  const [clockNow, setClockNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 拖动排序是待办的基础交互，不再藏在设置项后面。
+  const canReorderTodos = isTodayMode;
 
   const startTodoTitleEdit = useCallback((todo: TodoItem) => {
     if (!isTodayMode) {
@@ -3225,14 +3290,22 @@ function TodoNotebook({
           onSelectArchive={onSelectArchive}
         />
       ) : isDailyMode ? (
-        <textarea
-          className="daily-note"
-          value={dailyNote}
-          placeholder={t.notebook.dailyPlaceholder}
-          aria-label={t.notebook.dailyNoteLabel}
-          spellCheck={false}
-          onChange={(event) => onDailyNoteChange(event.currentTarget.value)}
-        />
+        <div className="daily-note-panel">
+          <DiaryTimeline
+            events={diaryEvents}
+            title={t.diary.title}
+            empty={t.diary.empty}
+            localeTag={t.localeTag}
+          />
+          <textarea
+            className="daily-note"
+            value={dailyNote}
+            placeholder={t.notebook.dailyPlaceholder}
+            aria-label={t.notebook.dailyNoteLabel}
+            spellCheck={false}
+            onChange={(event) => onDailyNoteChange(event.currentTarget.value)}
+          />
+        </div>
       ) : (
         <div className={listClassName} role="list">
           {displayedTodos.length === 0 ? (
@@ -3244,6 +3317,8 @@ function TodoNotebook({
               const isActive =
                 isTodayMode && todo.id === activeTodoId && !todo.completed;
               const titleLineCount = getTodoTitleLineCount(todo.title);
+              const elapsed = getTodoElapsedMs(todo, clockNow);
+              const elapsedLabel = formatTodoElapsed(elapsed, t.localeTag);
 
               return (
                 <div
@@ -3309,7 +3384,15 @@ function TodoNotebook({
                       title={t.todo.editTitle}
                       onClick={() => startTodoTitleEdit(todo)}
                     >
-                      {todo.title}
+                      <span className="todo-title__text">{todo.title}</span>
+                      {(elapsed > 0 || todo.activeSince) && (
+                        <span
+                          className={`todo-elapsed${isActive ? " todo-elapsed--active" : ""}`}
+                          title={t.todo.elapsed(elapsedLabel)}
+                        >
+                          {elapsedLabel}
+                        </span>
+                      )}
                     </button>
                   ) : (
                     <span className="todo-title">{todo.title}</span>
@@ -5209,6 +5292,7 @@ function IslandApp({
   );
   const [todos, setTodos] = useState<TodoItem[]>(loadTodos);
   const [dailyNote, setDailyNote] = useState(loadDailyNote);
+  const [diaryEvents, setDiaryEvents] = useState<DiaryEvent[]>(loadDiaryEvents);
   const [draftTodo, setDraftTodo] = useState("");
   const [activeTodoId, setActiveTodoId] = useState<string | null>(
     loadActiveTodoId,
@@ -5267,12 +5351,12 @@ function IslandApp({
     return activeTodo?.title ?? null;
   }, [displayedTodoId, todos]);
   // 悬停气泡只展示“已经点过开始”的那一条，而不是轮播中的任意待办。
-  const activeTodoTitle = useMemo(() => {
-    const activeTodo = todos.find(
-      (todo) => todo.id === activeTodoId && !todo.completed,
-    );
-    return activeTodo?.title ?? null;
-  }, [activeTodoId, todos]);
+  const activeTodo = useMemo(
+    () =>
+      todos.find((todo) => todo.id === activeTodoId && !todo.completed) ?? null,
+    [activeTodoId, todos],
+  );
+  const activeTodoTitle = activeTodo?.title ?? null;
   const collapsedTodoCount = settings.showIdleTodoCount && !collapsedTaskTitle
     ? todos.filter((todo) => !todo.completed).length
     : null;
@@ -5383,6 +5467,8 @@ function IslandApp({
       settings.glassIntensity,
       settings.islandBackgroundColor,
       settings.opacity,
+      settings.petOpacity,
+      settings.bubbleTextColor,
       settings.pulseBrightness,
       settings.pulseColor,
       settings.collapsedScale,
@@ -5876,6 +5962,52 @@ function IslandApp({
     }, settings.bubbleDurationMs);
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
 
+  // 进行中待办：开始后先确认一次，之后按设置的间隔提醒当前待办和已计时。
+  useEffect(() => {
+    if (!activeTodo || mode !== "collapsed" || !settings.bubbleOn) {
+      return;
+    }
+
+    const reminderInterval = Math.max(1, settings.todoReminderMinutes) * 60_000;
+    const startedKey = `todo-reminder-${activeTodo.id}`;
+    const lastReminder = window.localStorage.getItem("focusd-todo-reminder-key");
+    if (lastReminder !== startedKey) {
+      window.localStorage.setItem("focusd-todo-reminder-key", startedKey);
+      showCloudBubble(
+        t.todo.reminderStartedTitle,
+        t.todo.reminderStartedBody(
+          activeTodo.title,
+          settings.todoReminderMinutes,
+        ),
+      );
+    }
+
+    const timer = window.setInterval(() => {
+      const elapsed = getTodoElapsedMs(activeTodo, Date.now());
+      showCloudBubble(
+        t.todo.reminderTitle,
+        t.todo.reminderBody(
+          activeTodo.title,
+          formatTodoElapsed(elapsed, t.localeTag),
+        ),
+      );
+    }, reminderInterval);
+
+    return () => {
+      window.clearInterval(timer);
+      if (window.localStorage.getItem("focusd-todo-reminder-key") === startedKey) {
+        window.localStorage.removeItem("focusd-todo-reminder-key");
+      }
+    };
+  }, [
+    activeTodo,
+    mode,
+    settings.bubbleOn,
+    settings.todoReminderMinutes,
+    showCloudBubble,
+    t,
+  ]);
+
   // 消息通知 → 云朵气泡
   const lastCloudAtRef = useRef(0);
   useEffect(() => {
@@ -6112,23 +6244,6 @@ function IslandApp({
       unlisten?.();
     };
   }, []);
-
-  // 歌词实时显示在气泡上（只在能拿到播放进度时有内容）
-  const lastLyricRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isTauri() || !settings.bubbleOn || !settings.lyricsBubble) {
-      return;
-    }
-    if (mode !== "collapsed" || mediaState.playbackStatus !== "playing") {
-      return;
-    }
-    const text = lyrics.activeText?.trim();
-    if (!text || text === lastLyricRef.current) {
-      return;
-    }
-    lastLyricRef.current = text;
-    showCloudBubble("🎵 歌词", text);
-  }, [lyrics.activeText, mediaState.playbackStatus, mode, settings.bubbleOn, settings.lyricsBubble, showCloudBubble]);
 
   // 随机闲逛：收起状态下每隔一会儿挪一小步
   useEffect(() => {
@@ -6505,6 +6620,22 @@ function IslandApp({
     };
   }, []);
 
+  const recordDiaryEvent = useCallback((kind: DiaryEvent["kind"], text: string) => {
+    const at = Date.now();
+    setDiaryEvents((current) =>
+      [
+        ...current,
+        {
+          id: createTodoId(),
+          date: getLocalDateString(new Date(at)),
+          at,
+          kind,
+          text,
+        },
+      ].slice(-500),
+    );
+  }, []);
+
   const addTodo = useCallback(() => {
     const title = draftTodo.trim();
 
@@ -6525,13 +6656,49 @@ function IslandApp({
   }, [draftTodo]);
 
   const toggleTodo = useCallback((id: string) => {
+    const todo = todos.find((item) => item.id === id);
+
+    if (!todo) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextCompleted = !todo.completed;
+
+    if (nextCompleted) {
+      const elapsed = getTodoElapsedMs(todo, now);
+      setTodos((currentTodos) =>
+        currentTodos.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                completed: true,
+                completedAt: now,
+                activeSince: null,
+                elapsedMs: elapsed,
+              }
+            : item,
+        ),
+      );
+      if (activeTodoId === id) {
+        setActiveTodoId(null);
+      }
+      recordDiaryEvent(
+        "todo",
+        t.diary.completed(todo.title, formatTodoElapsed(elapsed, t.localeTag)),
+      );
+      return;
+    }
+
     setTodos((currentTodos) =>
-      currentTodos.map((todo) =>
-        todo.id === id ? { ...todo, completed: !todo.completed } : todo,
+      currentTodos.map((item) =>
+        item.id === id
+          ? { ...item, completed: false, completedAt: null }
+          : item,
       ),
     );
-    setActiveTodoId((currentId) => (currentId === id ? null : currentId));
-  }, []);
+    recordDiaryEvent("todo", t.diary.reopened(todo.title));
+  }, [activeTodoId, recordDiaryEvent, t, todos]);
 
   const updateTodoTitle = useCallback((id: string, title: string) => {
     const nextTitle = title.trim();
@@ -6555,15 +6722,41 @@ function IslandApp({
         return;
       }
 
+      const now = Date.now();
+
       if (activeTodoId === id) {
+        const elapsed = getTodoElapsedMs(todo, now);
+        setTodos((currentTodos) =>
+          currentTodos.map((item) =>
+            item.id === id
+              ? { ...item, activeSince: null, elapsedMs: elapsed }
+              : item,
+          ),
+        );
         setActiveTodoId(null);
+        recordDiaryEvent(
+          "todo",
+          t.diary.paused(todo.title, formatTodoElapsed(elapsed, t.localeTag)),
+        );
         return;
       }
 
+      setTodos((currentTodos) =>
+        currentTodos.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                startedAt: item.startedAt ?? now,
+                activeSince: now,
+              }
+            : item,
+        ),
+      );
       setActiveTodoId(id);
       setIslandMode("collapsed");
+      recordDiaryEvent("todo", t.diary.started(todo.title));
     },
-    [activeTodoId, setIslandMode, todos],
+    [activeTodoId, recordDiaryEvent, setIslandMode, t, todos],
   );
 
   const deleteTodo = useCallback((id: string) => {
@@ -7067,6 +7260,17 @@ function IslandApp({
   }, [dailyNote]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DIARY_EVENTS_STORAGE_KEY,
+        JSON.stringify(diaryEvents),
+      );
+    } catch {
+      // localStorage quota is not worth blocking diary interactions.
+    }
+  }, [diaryEvents]);
+
+  useEffect(() => {
     window.localStorage.setItem(TODO_DATE_STORAGE_KEY, currentTodoDate);
   }, [currentTodoDate]);
 
@@ -7160,6 +7364,30 @@ function IslandApp({
     }
 
     window.localStorage.removeItem(ACTIVE_TODO_STORAGE_KEY);
+  }, [activeTodoId]);
+
+  // 重启/切换进行中待办时，从当前这一刻继续计时；关闭应用的时间不计入。
+  useEffect(() => {
+    if (!activeTodoId) {
+      return;
+    }
+
+    const now = Date.now();
+    setTodos((currentTodos) => {
+      let changed = false;
+      const nextTodos = currentTodos.map((todo) => {
+        if (todo.id !== activeTodoId || todo.completed) {
+          return todo;
+        }
+        changed = true;
+        return {
+          ...todo,
+          startedAt: todo.startedAt ?? now,
+          activeSince: now,
+        };
+      });
+      return changed ? nextTodos : currentTodos;
+    });
   }, [activeTodoId]);
 
   useEffect(() => {
@@ -7320,6 +7548,7 @@ function IslandApp({
     if (soundOnRef.current) {
       playPetChirp(action === "celebrate" || action === "spin" || action === "play" ? "happy" : "soft");
     }
+    recordDiaryEvent("pet", t.diary.pet(t.diary.petActions[action]));
     setPetAction(action);
     if (petActionTimer.current !== null) {
       window.clearTimeout(petActionTimer.current);
@@ -7328,7 +7557,7 @@ function IslandApp({
       petActionTimer.current = null;
       setPetAction(null);
     }, action === "sleeping" ? 5000 : 2600);
-  }, []);
+  }, [recordDiaryEvent, t]);
   useEffect(() => {
     if (!isTauri()) {
       return;
@@ -7491,6 +7720,7 @@ function IslandApp({
           <TodoNotebook
             todos={todos}
             dailyNote={dailyNote}
+            diaryEvents={diaryEvents}
             draft={draftTodo}
             activeTodoId={activeTodoId}
             currentDate={currentTodoDate}
@@ -7499,7 +7729,6 @@ function IslandApp({
             archiveLayout={archiveLayout}
             selectedArchive={selectedArchive}
             saveState={saveState}
-            enableTodoReorder={settings.enableTodoReorder}
             onDraftChange={setDraftTodo}
             onAddTodo={addTodo}
             onToggleTodo={toggleTodo}

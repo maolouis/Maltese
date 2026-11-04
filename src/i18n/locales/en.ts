@@ -285,6 +285,38 @@ const en: Translations = {
     deleteTask: (taskTitle) => `Delete: ${taskTitle}`,
     reorder: "Drag to reorder",
     reorderTask: (taskTitle) => `Reorder: ${taskTitle}`,
+    elapsed: (elapsed) => `Elapsed ${elapsed}`,
+    reminderStartedTitle: "🐶 Timer started",
+    reminderStartedBody: (taskTitle, minutes) =>
+      `Doing "${taskTitle}". I'll check in every ${minutes} min.`,
+    reminderTitle: "⏰ Still on it",
+    reminderBody: (taskTitle, elapsed) => `"${taskTitle}" — ${elapsed} elapsed.`,
+  },
+
+  diary: {
+    title: "Puppy diary",
+    empty: "Nothing here yet. Pet the puppy or finish a task to start the diary.",
+    started: (taskTitle) => `Started "${taskTitle}"`,
+    paused: (taskTitle, elapsed) => `Paused "${taskTitle}" after ${elapsed}`,
+    completed: (taskTitle, elapsed) => `Finished "${taskTitle}" in ${elapsed}`,
+    reopened: (taskTitle) => `Reopened "${taskTitle}"`,
+    pet: (actionLabel) => `Puppy time: ${actionLabel}`,
+    petActions: {
+      pet: "head pat",
+      eating: "a little snack",
+      pickup: "a quick lift",
+      scared: "a little startle",
+      sleeping: "a tiny nap",
+      celebrate: "a tiny celebration",
+      chin: "a chin scratch",
+      spin: "a spin",
+      play: "playtime",
+      hide: "hide and seek",
+      chase: "a chase",
+      peek: "peekaboo",
+      happy: "a happy tail wag",
+      relax: "quiet company",
+    },
   },
 
   clipboard: {
@@ -393,9 +425,9 @@ const en: Translations = {
     todo: {
       title: "Tasks",
       carryOverIncomplete: "Carry unfinished tasks to next day",
-      enableReorder: "Drag to reorder tasks",
       rotateTodos: "Rotate through pending tasks",
       rotationSeconds: "Time per task (seconds)",
+      reminderMinutes: "Active task reminder interval (minutes)",
     },
 
     agent: {

@@ -1,0 +1,88 @@
+.daily-note-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+}
+
+.daily-note-panel .daily-note {
+  flex: 1 1 auto;
+  min-height: 80px;
+}
+
+.diary-timeline {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  color: #1f1b16;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(35, 31, 26, 0.1);
+  border-radius: 8px;
+}
+
+.diary-timeline__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.diary-timeline__count {
+  min-width: 20px;
+  padding: 0 5px;
+  color: rgba(31, 27, 22, 0.62);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  background: rgba(31, 27, 22, 0.07);
+  border-radius: 999px;
+}
+
+.diary-timeline__empty {
+  margin: 0;
+  color: rgba(31, 27, 22, 0.46);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diary-timeline__list {
+  min-height: 0;
+  margin: 0;
+  padding: 0 2px 0 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: rgba(31, 27, 22, 0.18) transparent;
+}
+
+.diary-timeline__item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diary-timeline__item time {
+  color: rgba(31, 27, 22, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+.diary-timeline__item--pet span {
+  color: rgba(137, 92, 44, 0.92);
+}
+
+.diary-timeline__item--todo span {
+  color: rgba(65, 91, 62, 0.96);
+  font-weight: 600;
+}

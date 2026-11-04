@@ -288,6 +288,38 @@ const zhCN: Translations = {
     deleteTask: (taskTitle) => `删除：${taskTitle}`,
     reorder: "拖动排序",
     reorderTask: (taskTitle) => `拖动排序：${taskTitle}`,
+    elapsed: (elapsed) => `已计时 ${elapsed}`,
+    reminderStartedTitle: "🐶 开始计时",
+    reminderStartedBody: (taskTitle, minutes) =>
+      `现在做「${taskTitle}」，我会每 ${minutes} 分钟提醒你一次`,
+    reminderTitle: "⏰ 现在在做",
+    reminderBody: (taskTitle, elapsed) => `「${taskTitle}」已经过了 ${elapsed}`,
+  },
+
+  diary: {
+    title: "小狗日记",
+    empty: "今天还没有记录，摸摸小狗或完成一个待办试试。",
+    started: (taskTitle) => `开始做「${taskTitle}」`,
+    paused: (taskTitle, elapsed) => `暂停「${taskTitle}」，已计时 ${elapsed}`,
+    completed: (taskTitle, elapsed) => `完成「${taskTitle}」，累计计时 ${elapsed}`,
+    reopened: (taskTitle) => `把「${taskTitle}」重新标记为未完成`,
+    pet: (actionLabel) => `和小狗互动：${actionLabel}`,
+    petActions: {
+      pet: "摸摸头",
+      eating: "喂小零食",
+      pickup: "抱起来",
+      scared: "被吓了一跳",
+      sleeping: "一起打盹",
+      celebrate: "一起庆祝",
+      chin: "挠下巴",
+      spin: "转圈圈",
+      play: "一起玩",
+      hide: "躲猫猫",
+      chase: "追来追去",
+      peek: "探头探脑",
+      happy: "开心摇尾巴",
+      relax: "安静陪着",
+    },
   },
 
   clipboard: {
@@ -396,9 +428,9 @@ const zhCN: Translations = {
     todo: {
       title: "待办设置",
       carryOverIncomplete: "自动将未完成任务写入下一天",
-      enableReorder: "允许拖动调整任务顺序",
       rotateTodos: "多任务流动",
       rotationSeconds: "每个任务停留时间（秒）",
+      reminderMinutes: "进行中待办提醒间隔（分钟）",
     },
 
     agent: {

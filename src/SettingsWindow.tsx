@@ -41,7 +41,6 @@ type PetSettings = {
   musicChat: boolean;
   clipboardBubble: boolean;
   roam: boolean;
-  lyricsBubble: boolean;
   sleepAfterSeconds: number;
   tuckedVisibleHeight: number;
 };
@@ -77,7 +76,6 @@ const DEFAULTS: PetSettings = {
   musicChat: true,
   clipboardBubble: true,
   roam: false,
-  lyricsBubble: true,
   sleepAfterSeconds: 150,
   tuckedVisibleHeight: 80,
 };
@@ -320,7 +318,7 @@ export default function SettingsWindow() {
             onChange={(event) => update("bubbleTextColor", event.currentTarget.value)}
           />
         </div>
-        <Switch label="歌词实时显示在气泡上" hint="需要播放器向系统提供播放进度" checked={settings.lyricsBubble} onChange={(value) => update("lyricsBubble", value)} />
+        
         <Switch label="开启音效" checked={settings.soundOn} onChange={(value) => update("soundOn", value)} />
         <Switch label="整点轻轻叫一声" checked={settings.hourlyChime} onChange={(value) => update("hourlyChime", value)} />
       </section>

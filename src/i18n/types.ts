@@ -288,6 +288,37 @@ export type Translations = {
     deleteTask: (taskTitle: string) => string;
     reorder: string;
     reorderTask: (taskTitle: string) => string;
+    elapsed: (elapsed: string) => string;
+    reminderStartedTitle: string;
+    reminderStartedBody: (taskTitle: string, minutes: number) => string;
+    reminderTitle: string;
+    reminderBody: (taskTitle: string, elapsed: string) => string;
+  };
+
+  diary: {
+    title: string;
+    empty: string;
+    started: (taskTitle: string) => string;
+    paused: (taskTitle: string, elapsed: string) => string;
+    completed: (taskTitle: string, elapsed: string) => string;
+    reopened: (taskTitle: string) => string;
+    pet: (actionLabel: string) => string;
+    petActions: {
+      pet: string;
+      eating: string;
+      pickup: string;
+      scared: string;
+      sleeping: string;
+      celebrate: string;
+      chin: string;
+      spin: string;
+      play: string;
+      hide: string;
+      chase: string;
+      peek: string;
+      happy: string;
+      relax: string;
+    };
   };
 
   clipboard: {
@@ -396,9 +427,9 @@ export type Translations = {
     todo: {
       title: string;
       carryOverIncomplete: string;
-      enableReorder: string;
       rotateTodos: string;
       rotationSeconds: string;
+      reminderMinutes: string;
     };
 
     agent: {
