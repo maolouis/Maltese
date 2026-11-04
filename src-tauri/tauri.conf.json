@@ -1,0 +1,112 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Maltese 线条小狗桌面助手",
+  "version": "1.1.0",
+  "identifier": "com.maltese.desktop-assistant",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Maltese 线条小狗桌面助手",
+        "width": 640,
+        "height": 540,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": false
+      },
+      {
+        "label": "translation",
+        "title": "Maltese 有道翻译",
+        "url": "index.html?window=translation",
+        "width": 480,
+        "height": 640,
+        "minWidth": 480,
+        "minHeight": 380,
+        "decorations": false,
+        "transparent": false,
+        "resizable": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": false
+      },
+      {
+        "label": "bubble",
+        "title": "",
+        "url": "index.html?window=bubble",
+        "width": 340,
+        "height": 520,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": false,
+        "focusable": false
+      },
+      {
+        "label": "settings",
+        "title": "Maltese · 桌宠设置",
+        "width": 560,
+        "height": 780,
+        "minWidth": 460,
+        "minHeight": 560,
+        "resizable": true,
+        "visible": false,
+        "center": true,
+        "url": "index.html?window=settings"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/flyl1u/fly-island/releases/latest/download/latest.json",
+        "https://ghfast.top/https://github.com/flyl1u/fly-island/releases/latest/download/latest.json",
+        "https://gh-proxy.com/https://github.com/flyl1u/fly-island/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "compression": "lzma"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

@@ -1,0 +1,241 @@
+/* 桌宠气泡窗口：整窗透明。三种形态统一为云朵形白色气泡。 */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.pet-bubble-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+/* ---------- 云朵基形 ---------- */
+.pet-cloud {
+  position: relative;
+  background: #ffffff;
+  color: var(--pet-bubble-text, #2b2f3a);
+  border-radius: 26px;
+  box-shadow: 0 8px 22px rgba(11, 13, 20, 0.24);
+  animation: pet-bubble-pop 220ms cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+/* 上方两团聚拢的“棉花” */
+.pet-cloud::before,
+.pet-cloud::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: #ffffff;
+  z-index: -1;
+}
+
+.pet-cloud::before {
+  top: -13px;
+  left: 26px;
+  width: 40px;
+  height: 40px;
+}
+
+.pet-cloud::after {
+  top: -8px;
+  right: 30px;
+  width: 28px;
+  height: 28px;
+}
+
+/* 指向小狗的小尾巴 */
+.pet-cloud__tail {
+  position: absolute;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.pet-cloud__tail--1 {
+  left: -12px;
+  bottom: 16px;
+  width: 18px;
+  height: 18px;
+}
+
+.pet-cloud__tail--2 {
+  left: -24px;
+  bottom: 6px;
+  width: 11px;
+  height: 11px;
+}
+
+@keyframes pet-bubble-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 云朵消息框 ---------- */
+
+.pet-bubble-cloud {
+  max-width: 240px;
+  padding: 12px 18px 14px;
+}
+
+.pet-bubble-cloud__title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.pet-bubble-cloud__body {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--pet-bubble-text, #525866);
+  opacity: 0.82;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* ---------- hover 互动面板（云朵形） ---------- */
+
+.pet-bubble-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 100%;
+  max-width: 272px;
+  padding: 13px 15px;
+}
+
+/* 互动按钮从上到下竖排（用户要求，不要横向） */
+.pet-bubble-panel__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 352px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pet-bubble-panel__actions button,
+.pet-bubble-panel__links button {
+  border: 0;
+  border-radius: 9px;
+  background: rgba(43, 47, 58, 0.07);
+  color: var(--pet-bubble-text, #3a3f4b);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pet-bubble-panel__actions button {
+  text-align: left;
+  flex: 0 0 auto;
+}
+
+.pet-bubble-panel__actions button:hover,
+.pet-bubble-panel__links button:hover {
+  background: #f7bc7d;
+  color: #4a3418;
+}
+
+.pet-bubble-panel__status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--pet-bubble-text, #5a5f6b);
+  opacity: 0.86;
+  line-height: 1.5;
+}
+
+.pet-bubble-panel__status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-bubble-panel__links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.pet-bubble-panel__links button {
+  width: 100%;
+}
+
+.pet-bubble-panel__sleep {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  background: #f7bc7d;
+  color: #4a3418;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pet-bubble-panel__sleep:hover {
+  background: #f3ae67;
+}
+
+/* ---------- 右键菜单（云朵形，显示在小狗侧边） ---------- */
+
+.pet-bubble-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  max-width: 186px;
+  padding: 9px;
+}
+
+.pet-bubble-menu button {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pet-bubble-text, #3a3f4b);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pet-bubble-menu button:hover {
+  background: #f7bc7d;
+  color: #4a3418;
+}
+/* 剪贴板图片预览 */
+.pet-bubble-cloud__image {
+  display: block;
+  max-width: 210px;
+  max-height: 130px;
+  margin: 6px 0 2px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: rgba(43, 47, 58, 0.06);
+}
