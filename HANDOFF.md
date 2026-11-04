@@ -1,11 +1,11 @@
 # Handoff
 
-更新时间：2026-11-04 17:27（Asia/Shanghai）
+更新时间：2026-11-04 17:32（Asia/Shanghai）
 
 ## 当前分支与提交
 
-- `main`：`44c7446 feat: 看视频独立页、可调复位位置与待办添加按钮`
-- `dsh`：`3d04f7c feat: 打包 Maltese 为 DSH 插件`（从 main 拉出，额外提交 `dsh-plugin/`）
+- `main`：`de3edad fix: 四角复位按小狗槽位定位`（其前为 `44c7446 feat: 看视频独立页、可调复位位置与待办添加按钮`）
+- `dsh`：`87fd0bd fix: 四角复位按小狗槽位定位`（从 main 拉出，额外提交 `dsh-plugin/` 与 handoff）
 - 两个分支均已推送到 `origin`。
 - 本轮没有打 tag；上一版 tag 仍是 `v1.1.2`。
 
@@ -24,6 +24,7 @@
 - 设置里的「固定到屏幕角落」改为「复位位置」：底部居中 / 左上 / 右上 / 左下 / 右下。
 - 选择四角后立即调用 Rust `lock_island_corner`；「复位」按钮也会回到该位置；选底部居中则调用 `reset_island_position`。
 - `src-tauri/src/lib.rs` 的 `lock_island_corner` 在落位后发出 `island-position-changed`，前端写入 localStorage，避免下次启动被旧拖拽位置覆盖。
+- 四角落位改为按「收起态小狗槽位」尺寸计算，不再用展开面板的整窗尺寸；因此面板展开时点复位，小狗也会落在正确的角落。
 - `src/SettingsWindow.tsx` 也补了同一组复位位置选项。
 - 首次加载时若设置为默认「底部居中」，不会清除用户之前拖拽的位置；选中四角时会在启动后重新落位。
 
@@ -48,7 +49,7 @@
 
 - `pnpm build`：tsc + vite 构建成功。pnpm 包装器仍因 `ERR_PNPM_IGNORED_BUILDS`（esbuild）返回非 0，但 `✓ built` 正常。
 - `cargo test --target x86_64-pc-windows-msvc --lib`：64 passed，0 failed，9 ignored。
-- 已生成并启动 `release/v1.1.3/maltese-assistant.exe`（24,262,656 bytes），配套 `WebView2Loader.dll`。
+- 已生成并启动 `release/v1.1.3/maltese-assistant.exe`（24,262,656 bytes，17:31 重新编译，含四角修复），配套 `WebView2Loader.dll`。
 - 当前桌面进程运行的是 v1.1.3。
 - `dsh-plugin/index.js` 通过 `node --check` 和动态 import 检查。
 - DSH 插件安装后桌宠仍只有一个进程（单实例生效）。
@@ -57,6 +58,6 @@
 
 - `tests/i18n.tsx` 与当前 UI 有历史偏差（媒体状态需要 `sessions`、布局入口已不是 `.dot-button--layout`、启动不再有 `.island__open-button`），本轮没有把它纳入提交；需要单独更新测试夹具。
 - v1.1.3 只有本地 exe，没有打 tag、没有 GitHub Release、没有上传安装包。
-- 四角复位以窗口左上角为基准；展开态面板比收起态宽时，右/下角的视觉锚点可能和期望有偏差，建议实机拖拽 + 展开验收后再微调 Rust 几何。
+- 四角位置已按小狗槽位落位；但展开面板仍只向右生长，右下/右上角展开时面板可能贴近或超出屏幕边缘，后续可考虑右侧角自动改为向左展开。
 - DSH 插件目前是 Host-only companion：负责拉起原生桌宠和提供工具，不在 DSH 网页里渲染宠物。若要做网页内宠物，需要再加 Client 半侧（`shell.overlay` + 资源内联）。
 - 插件安装目前是本地目录链接；如果切回 `main` 分支，`dsh-plugin/` 会从工作区消失，已安装插件会失效。保持在 `dsh` 分支或重新安装。
