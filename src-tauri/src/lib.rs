@@ -35,8 +35,8 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, Position, Size,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    App, AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
+    Position, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use windows::Win32::{
     Foundation::{POINT, RECT},
@@ -46,8 +46,6 @@ use windows::Win32::{
 };
 
 const WINDOW_LABEL: &str = "main";
-const STAGE_WINDOW_WIDTH: f64 = 640.0;
-const STAGE_WINDOW_HEIGHT: f64 = 540.0;
 const DEFAULT_MARGIN_Y: f64 = 0.0;
 const DEFAULT_COLLAPSED_SCALE: f64 = 0.89;
 const DEFAULT_EXPANDED_SCALE: f64 = 0.91;
@@ -317,7 +315,7 @@ fn set_island_interaction(
     let previous_state = read_window_state();
     let restored_custom_position = previous_state.custom_position.or_else(|| {
         custom_position.filter(|position| {
-            monitor_for_island_position(&window, *position)
+            monitor_for_island_position(&window, *position, previous_state.collapsed_scale)
                 .ok()
                 .flatten()
                 .is_some()
@@ -517,7 +515,11 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
     // 误用会导致浮层锚点算错、关掉后小狗瞬移。
     let monitor = state
         .custom_position
-        .and_then(|position| monitor_for_island_position(&window, position).ok().flatten())
+        .and_then(|position| {
+            monitor_for_island_position(&window, position, state.collapsed_scale)
+                .ok()
+                .flatten()
+        })
         .or_else(|| window.current_monitor().ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
@@ -806,10 +808,8 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
     let state = read_window_state();
     // custom_position 是“小狗槽”的左上角，不是展开面板窗口的左上角。
     // 这里必须用收起态槽位尺寸，否则面板展开时会把小狗放到屏幕中间。
-    let slot_width =
-        ((152.0 * state.collapsed_scale + 16.0).max(148.0) * scale).round() as i32;
-    let slot_height =
-        ((128.0 * state.collapsed_scale + 16.0).max(124.0) * scale).round() as i32;
+    let slot_width = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_height = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
     const MARGIN: i32 = 16;
     let work = monitor.work_area();
     let x = match corner.as_str() {
@@ -2190,7 +2190,11 @@ fn apply_stage_geometry(
         .map_err(|error| error.to_string())?;
     let custom_monitor = state
         .custom_position
-        .and_then(|position| monitor_for_island_position(window, position).ok().flatten());
+        .and_then(|position| {
+            monitor_for_island_position(window, position, state.collapsed_scale)
+                .ok()
+                .flatten()
+        });
     let has_custom_monitor = custom_monitor.is_some();
     let monitor = custom_monitor
         .or_else(|| primary_monitor.or(current_monitor))
@@ -2239,8 +2243,8 @@ fn apply_stage_geometry(
         positioned_state.custom_position = None;
     }
     // 小狗在收起态几何下的锚点（展开窗口时小狗保持不动，面板朝空闲的一侧长）。
-    let slot_w_phys = ((152.0 * state.collapsed_scale + 16.0).max(148.0) * scale).round() as i32;
-    let slot_h_phys = ((128.0 * state.collapsed_scale + 16.0).max(124.0) * scale).round() as i32;
+    let slot_w_phys = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_h_phys = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
     let work_area = monitor.work_area();
     let work_left = work_area.position.x;
     let work_top = work_area.position.y;
@@ -2267,8 +2271,8 @@ fn apply_stage_geometry(
     let (x, y) = match state.mode {
         IslandMode::Expanded => {
             let gap_css = EXPANDED_PANEL_GAP;
-            let slot_w_css = (152.0 * state.collapsed_scale + 16.0).max(148.0);
-            let slot_h_css = (128.0 * state.collapsed_scale + 16.0).max(124.0);
+            let slot_w_css = slot_width_css(state.collapsed_scale);
+            let slot_h_css = slot_height_css(state.collapsed_scale);
             // 面板只长在小狗右侧、窗口底边与小狗底部对齐；空间不够就压缩面板，
             // 不移动窗口（否则小狗会跳），内容在面板内滚动。
             let avail_w_css = ((work_right - dog_x) as f64 / scale).max(slot_w_css);
@@ -2330,16 +2334,26 @@ fn apply_stage_geometry(
     Ok(())
 }
 
+// 收起态“小狗槽”尺寸（逻辑像素）。custom_position 记录的是槽的左上角，
+// 所有涉及槽位尺寸的计算必须走这里，避免各调用点公式漂移导致定位偏差。
+fn slot_width_css(collapsed_scale: f64) -> f64 {
+    (152.0 * collapsed_scale + 16.0).max(148.0)
+}
+
+fn slot_height_css(collapsed_scale: f64) -> f64 {
+    (128.0 * collapsed_scale + 16.0).max(124.0)
+}
+
 fn stage_dimensions(state: IslandWindowState) -> (f64, f64) {
     match state.mode {
         IslandMode::Collapsed => (
-            (152.0 * state.collapsed_scale + 16.0).max(148.0),
-            (128.0 * state.collapsed_scale + 16.0).max(124.0),
+            slot_width_css(state.collapsed_scale),
+            slot_height_css(state.collapsed_scale),
         ),
         IslandMode::Expanded => {
             // 云朵面板窗口：宽度 = 小狗槽 + 间隙 + 面板；高度取面板与小狗槽的较大值。
-            let slot_w = (152.0 * state.collapsed_scale + 16.0).max(148.0);
-            let slot_h = (128.0 * state.collapsed_scale + 16.0).max(124.0);
+            let slot_w = slot_width_css(state.collapsed_scale);
+            let slot_h = slot_height_css(state.collapsed_scale);
             (
                 slot_w + EXPANDED_PANEL_GAP + EXPANDED_PANEL_WIDTH,
                 slot_h.max(EXPANDED_PANEL_HEIGHT),
@@ -2363,6 +2377,7 @@ fn interpolate_stage_position(
 fn monitor_for_island_position(
     window: &WebviewWindow,
     position: IslandPosition,
+    collapsed_scale: f64,
 ) -> Result<Option<Monitor>, String> {
     let monitors = window
         .available_monitors()
@@ -2370,16 +2385,38 @@ fn monitor_for_island_position(
 
     Ok(monitors.into_iter().find(|monitor| {
         let scale = monitor.scale_factor();
-        let island_center_x = position.x as f64 + STAGE_WINDOW_WIDTH * scale / 2.0;
-        let island_center_y = position.y as f64 + COLLAPSED_ISLAND_HEIGHT * scale / 2.0;
-        let monitor_position = monitor.position();
-        let monitor_size = monitor.size();
-
-        island_center_x >= monitor_position.x as f64
-            && island_center_x < (monitor_position.x + monitor_size.width as i32) as f64
-            && island_center_y >= monitor_position.y as f64
-            && island_center_y < (monitor_position.y + monitor_size.height as i32) as f64
+        island_slot_center_within_monitor(
+            position,
+            collapsed_scale,
+            scale,
+            *monitor.position(),
+            *monitor.size(),
+        )
     }))
+}
+
+// custom_position 是收起态小狗槽的左上角，中心点必须按槽位实际尺寸计算。
+// 不能用旧整窗宽度常量（STAGE_WINDOW_WIDTH=640）：右下/右上角的槽位中心
+// 会被算到显示器右缘之外，导致归属判定失败、custom_position 被丢弃，
+// 小狗随即回到屏幕水平居中（“选右下角却回到屏幕中央”）。
+fn island_slot_center_within_monitor(
+    position: IslandPosition,
+    collapsed_scale: f64,
+    scale: f64,
+    monitor_position: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+) -> bool {
+    let island_center_x = position.x as f64 + slot_width_css(collapsed_scale) * scale / 2.0;
+    let island_center_y = position.y as f64 + slot_height_css(collapsed_scale) * scale / 2.0;
+    let monitor_left = monitor_position.x as f64;
+    let monitor_top = monitor_position.y as f64;
+    let monitor_right = (monitor_position.x + monitor_size.width as i32) as f64;
+    let monitor_bottom = (monitor_position.y + monitor_size.height as i32) as f64;
+
+    island_center_x >= monitor_left
+        && island_center_x < monitor_right
+        && island_center_y >= monitor_top
+        && island_center_y < monitor_bottom
 }
 
 // A top-docked taskbar shrinks the monitor work area instead of the monitor itself,
@@ -2511,6 +2548,90 @@ mod tests {
         assert_eq!(work_area_top_inset(0, 0), 0);
         assert_eq!(work_area_top_inset(-1080, -1080), 0);
         assert_eq!(work_area_top_inset(0, -10), 0);
+    }
+
+    #[test]
+    fn corner_slot_centers_stay_inside_their_monitor() {
+        // 回归：四角复位后槽位中心必须落在显示器内。此前 monitor 归属判定用旧整窗
+        // 宽度（640）算中心，右下/右上角的槽位中心被算到屏幕右缘之外，custom_position
+        // 被丢弃，小狗回到屏幕水平居中。
+        let scale = 1.0;
+        let collapsed_scale = DEFAULT_COLLAPSED_SCALE;
+        let monitor_position = PhysicalPosition::new(0, 0);
+        let monitor_size = PhysicalSize::new(1920u32, 1080u32);
+        let work_size = PhysicalSize::new(1920u32, 1040u32);
+        let margin = 16i32;
+        let slot_w = (slot_width_css(collapsed_scale) * scale).round() as i32;
+        let slot_h = (slot_height_css(collapsed_scale) * scale).round() as i32;
+
+        let br = IslandPosition {
+            x: work_size.width as i32 - slot_w - margin,
+            y: work_size.height as i32 - slot_h - margin,
+        };
+        assert!(island_slot_center_within_monitor(
+            br,
+            collapsed_scale,
+            scale,
+            monitor_position,
+            monitor_size,
+        ));
+
+        let tr = IslandPosition { x: br.x, y: margin };
+        assert!(island_slot_center_within_monitor(
+            tr,
+            collapsed_scale,
+            scale,
+            monitor_position,
+            monitor_size,
+        ));
+
+        let tl = IslandPosition { x: margin, y: margin };
+        assert!(island_slot_center_within_monitor(
+            tl,
+            collapsed_scale,
+            scale,
+            monitor_position,
+            monitor_size,
+        ));
+
+        let bl = IslandPosition {
+            x: margin,
+            y: work_size.height as i32 - slot_h - margin,
+        };
+        assert!(island_slot_center_within_monitor(
+            bl,
+            collapsed_scale,
+            scale,
+            monitor_position,
+            monitor_size,
+        ));
+
+        // 真正在屏幕外的位置仍然会被拒绝。
+        assert!(!island_slot_center_within_monitor(
+            IslandPosition { x: 2000, y: 900 },
+            collapsed_scale,
+            scale,
+            monitor_position,
+            monitor_size,
+        ));
+
+        // 高 DPI（200%）下四角同样成立。
+        let hidpi_monitor = PhysicalPosition::new(0, 0);
+        let hidpi_size = PhysicalSize::new(3840u32, 2160u32);
+        let hidpi_work = PhysicalSize::new(3840u32, 2080u32);
+        let slot_w2 = (slot_width_css(collapsed_scale) * 2.0).round() as i32;
+        let slot_h2 = (slot_height_css(collapsed_scale) * 2.0).round() as i32;
+        let br2 = IslandPosition {
+            x: hidpi_work.width as i32 - slot_w2 - margin,
+            y: hidpi_work.height as i32 - slot_h2 - margin,
+        };
+        assert!(island_slot_center_within_monitor(
+            br2,
+            collapsed_scale,
+            2.0,
+            hidpi_monitor,
+            hidpi_size,
+        ));
     }
 
     #[test]
