@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifySingleExe } from "./verify-single-exe.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dryRun = process.argv.includes("--dry-run");
@@ -98,7 +99,25 @@ if (!dryRun && !existsSync(EXE_SOURCE)) fail(`Expected exe not found at ${EXE_SO
 if (!dryRun || existsSync(EXE_SOURCE)) {
   mkdirSync(RELEASE_DIR, { recursive: true });
   copyFileSync(EXE_SOURCE, EXE_TARGET);
-  console.log("exe ready: release/Maltese-assistant.exe");
+
+  // 旧构建会在 exe 旁边留下 WebView2Loader.dll。当前 MSVC 构建已经把
+  // loader 静态链接进 exe，这个 DLL 只会让用户误以为发布包还需要它。
+  for (const staleLoader of [
+    join(RELEASE_DIR, "WebView2Loader.dll"),
+    join(dirname(EXE_SOURCE), "WebView2Loader.dll"),
+  ]) {
+    if (existsSync(staleLoader)) {
+      rmSync(staleLoader, { force: true });
+      console.log(`removed stale ${staleLoader}`);
+    }
+  }
+
+  try {
+    verifySingleExe(EXE_TARGET);
+  } catch (error) {
+    fail(error.message);
+  }
+  console.log("exe ready: release/Maltese-assistant.exe (single file)");
 }
 
 console.log("\n[3/3] Building NSIS installer...");

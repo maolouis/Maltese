@@ -86,7 +86,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 ### 运行发布版
 
-1. 解压发布目录，确保 `maltese-assistant.exe` 和 `WebView2Loader.dll` 在同一目录。
+1. 发布包只有一个 `maltese-assistant.exe`：WebView2Loader 已静态链接，不需要额外 DLL。
 2. 双击 `maltese-assistant.exe`。
 3. 小狗出现在桌面后：
    - 鼠标悬停：打开互动与快捷入口；
