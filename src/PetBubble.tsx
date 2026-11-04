@@ -74,6 +74,27 @@ export default function PetBubble() {
   }, []);
 
   useEffect(() => {
+    const applyColor = () => {
+      try {
+        const color = window.localStorage.getItem("maltese-bubble-color");
+        if (color) {
+          document.documentElement.style.setProperty("--pet-bubble-text", color);
+        }
+      } catch {
+        // 忽略读取失败
+      }
+    };
+    applyColor();
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === "maltese-bubble-color") {
+        applyColor();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     // 先补取一次缓存内容，避免气泡窗口冷启动时丢掉早到的事件。

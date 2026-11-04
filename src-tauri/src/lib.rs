@@ -526,6 +526,7 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
     let scale = monitor.scale_factor();
     let mon_pos = monitor.position();
     let mon_size = monitor.size();
+    let mon_left = mon_pos.x;
     let mon_right = mon_pos.x + mon_size.width as i32;
     let mon_bottom = mon_pos.y + mon_size.height as i32;
     // 与 apply_stage_geometry 保持一致：尺寸走 Logical，避免高 DPI 下窗口比 CSS 预期小。
@@ -589,21 +590,39 @@ fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), Str
                 }
             };
 
-            // 只朝“右 / 上”两个方向长，空间不够就压缩面板尺寸，绝不夹紧（clamp）窗口位置——
-            // 一旦夹紧，底边锚定的小狗就会跟着窗口移动，看起来就是上下跳。
-            let avail_w = ((mon_right - snapshot.anchor_x) as f64 / scale).max(snapshot.base_w);
+            // 优先朝右/上长；右侧放不下就翻到左侧。小狗的屏幕位置不变，
+            // 所以这里不能 clamp 窗口位置，否则小狗会跟着窗口跳。
+            let base_w_phys = (snapshot.base_w * scale).round() as i32;
+            let base_h_phys = (snapshot.base_h * scale).round() as i32;
+            let desired_w_phys = ((snapshot.base_w + gap + panel_w) * scale).round() as i32;
+            let panel_side = expanded_panel_side(
+                snapshot.anchor_x,
+                base_w_phys,
+                desired_w_phys,
+                mon_left,
+                mon_right,
+            );
+            let side_space = if panel_side == "right" {
+                (mon_right - snapshot.anchor_x).max(0)
+            } else {
+                (snapshot.anchor_x + base_w_phys - mon_left).max(0)
+            };
             let avail_h = ((snapshot.anchor_y - mon_pos.y) as f64 / scale + snapshot.base_h)
                 .max(snapshot.base_h);
             let width = (snapshot.base_w + gap + panel_w)
-                .min(avail_w)
+                .min((side_space as f64) / scale)
                 .max(snapshot.base_w + gap + 120.0);
             let height = panel_h.min(avail_h).max(snapshot.base_h);
             let phys_w = (width * scale).round() as i32;
             let phys_h = (height * scale).round() as i32;
-            let base_h_phys = (snapshot.base_h * scale).round() as i32;
-            let x = snapshot.anchor_x;
+            let x = if panel_side == "left" {
+                snapshot.anchor_x + base_w_phys - phys_w
+            } else {
+                snapshot.anchor_x
+            };
             let y = snapshot.anchor_y + base_h_phys - phys_h;
             let _ = (phys_w, mon_bottom);
+            let _ = window.emit("maltese-panel-side", panel_side);
             window
                 .set_size(Size::Logical(LogicalSize::new(width, height)))
                 .map_err(|error| error.to_string())?;
@@ -2273,14 +2292,27 @@ fn apply_stage_geometry(
             let gap_css = EXPANDED_PANEL_GAP;
             let slot_w_css = slot_width_css(state.collapsed_scale);
             let slot_h_css = slot_height_css(state.collapsed_scale);
-            // 面板只长在小狗右侧、窗口底边与小狗底部对齐；空间不够就压缩面板，
-            // 不移动窗口（否则小狗会跳），内容在面板内滚动。
-            let avail_w_css = ((work_right - dog_x) as f64 / scale).max(slot_w_css);
-            let width_css = stage_width
-                .min(avail_w_css)
-                .max(slot_w_css + gap_css + 200.0);
-            let avail_h_css =
-                ((dog_y - work_top) as f64 / scale).max(0.0) + slot_h_css;
+            // 面板优先长在小狗右侧；右侧贴边时翻到左侧，避免整个弹窗落在屏幕外。
+            // 小狗的屏幕坐标在翻边前后保持不变（窗口只向另一侧变宽）。
+            let desired_width_phys = (stage_width * scale).round() as i32;
+            let panel_side = expanded_panel_side(
+                dog_x,
+                slot_w_phys,
+                desired_width_phys,
+                work_left,
+                work_right,
+            );
+
+            let side_space = if panel_side == "right" {
+                (work_right - dog_x).max(0)
+            } else {
+                (dog_x + slot_w_phys - work_left).max(0)
+            };
+            let min_width_css = (slot_w_css + gap_css + 200.0).min(stage_width);
+            let width_css = stage_width.min(
+                ((side_space as f64) / scale).max(min_width_css),
+            );
+            let avail_h_css = ((dog_y - work_top) as f64 / scale).max(0.0) + slot_h_css;
             let height_css = stage_height.min(avail_h_css).max(slot_h_css);
             let phys_w = (width_css * scale).round() as i32;
             let phys_h = (height_css * scale).round() as i32;
@@ -2291,9 +2323,13 @@ fn apply_stage_geometry(
                     .set_size(Size::Logical(LogicalSize::new(width_css, height_css)))
                     .map_err(|error| error.to_string())?;
             }
-            let _ = window.emit("maltese-panel-side", "right");
-            let _ = (phys_w, work_left);
-            (dog_x, dog_y + slot_h_phys - phys_h)
+            let _ = window.emit("maltese-panel-side", panel_side);
+            let x = if panel_side == "left" {
+                dog_x + slot_w_phys - phys_w
+            } else {
+                dog_x
+            };
+            (x, dog_y + slot_h_phys - phys_h)
         }
         _ => (dog_x, dog_y),
     };
@@ -2332,6 +2368,27 @@ fn apply_stage_geometry(
         }
     });
     Ok(())
+}
+
+// 展开面板朝哪一侧生长：优先右侧，右侧贴边则翻到左侧；两侧都放不下时选空间大的一侧。
+fn expanded_panel_side(
+    dog_x: i32,
+    slot_w_phys: i32,
+    desired_width_phys: i32,
+    work_left: i32,
+    work_right: i32,
+) -> &'static str {
+    let right_space = (work_right - dog_x).max(0);
+    let left_space = (dog_x + slot_w_phys - work_left).max(0);
+    if right_space >= desired_width_phys {
+        "right"
+    } else if left_space >= desired_width_phys {
+        "left"
+    } else if right_space >= left_space {
+        "right"
+    } else {
+        "left"
+    }
 }
 
 // 收起态“小狗槽”尺寸（逻辑像素）。custom_position 记录的是槽的左上角，
@@ -2548,6 +2605,20 @@ mod tests {
         assert_eq!(work_area_top_inset(0, 0), 0);
         assert_eq!(work_area_top_inset(-1080, -1080), 0);
         assert_eq!(work_area_top_inset(0, -10), 0);
+    }
+
+    #[test]
+    fn expanded_panel_flips_away_from_screen_edges() {
+        // 回归：小狗在右缘时，弹窗必须向左展开，不能整块长到屏幕外。
+        assert_eq!(expanded_panel_side(1850, 198, 800, 0, 2048), "left");
+        // 左缘向右展开，中间优先向右。
+        assert_eq!(expanded_panel_side(16, 198, 800, 0, 2048), "right");
+        assert_eq!(expanded_panel_side(925, 198, 800, 0, 2048), "right");
+        // 两侧都放不下时，选剩余空间更大的一侧。
+        assert_eq!(expanded_panel_side(400, 198, 800, 0, 1000), "right");
+        assert_eq!(expanded_panel_side(650, 198, 800, 0, 1000), "left");
+        // 负坐标副屏同样按边界判断。
+        assert_eq!(expanded_panel_side(-214, 198, 800, -2048, 0), "left");
     }
 
     #[test]

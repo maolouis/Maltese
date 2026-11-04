@@ -11,6 +11,7 @@ type Corner = "" | "tl" | "tr" | "bl" | "br";
 type FullscreenAvoid = "tuck" | "hide" | "off";
 
 type PetSettings = {
+  petOpacity: number;
   collapsedScale: number;
   expandedScale: number;
   fpsMode: FpsMode;
@@ -38,6 +39,7 @@ type PetSettings = {
 };
 
 const DEFAULTS: PetSettings = {
+  petOpacity: 100,
   collapsedScale: 0.89,
   expandedScale: 0.91,
   fpsMode: "balanced",
@@ -260,6 +262,7 @@ export default function SettingsWindow() {
 
       <section className="sw-card">
         <h2>显示</h2>
+        <Slider label="小狗不透明度" value={settings.petOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("petOpacity", value)} />
         <Slider label="收起大小" value={settings.collapsedScale} min={0.75} max={1.4} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
         <Segments
           label="动画流畅度"
