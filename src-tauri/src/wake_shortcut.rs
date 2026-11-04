@@ -16,7 +16,7 @@ use windows::Win32::{
     },
 };
 
-const DEFAULT_SHORTCUT: &str = "Ctrl+Alt+M";
+const DEFAULT_SHORTCUT: &str = "Ctrl+Alt+Shift+M";
 const HOTKEY_ID: i32 = 0x4D41;
 const CHANGE_HOTKEY_MESSAGE: u32 = WM_APP + 0x64;
 
@@ -132,15 +132,16 @@ unsafe extern "system" fn hotkey_window_proc(
     if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
         if let Some(app) = APP.get() {
             if let Some(window) = app.get_webview_window("main") {
-                let was_visible = window.is_visible().unwrap_or(false);
-                let _ = window.show();
-                let _ = window.set_focus();
-                // 前端据此在「展开 / 收起」之间切换；从隐藏状态叫出来时直接展开。
-                let _ = app.emit_to(
-                    "main",
-                    "maltese-hotkey-toggle",
-                    serde_json::json!({ "wasVisible": was_visible }),
-                );
+                if window.is_visible().unwrap_or(false) {
+                    crate::hide_island(app);
+                } else if crate::show_island(app).is_ok() {
+                    // 从缩边或隐藏状态回来时，让前端退出缩边，真正露出桌宠。
+                    let _ = app.emit_to(
+                        "main",
+                        "maltese-hotkey-toggle",
+                        serde_json::json!({ "visible": true }),
+                    );
+                }
             }
         }
         return LRESULT(0);

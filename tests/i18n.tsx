@@ -39,7 +39,7 @@ mockIPC((command, payload) => {
   switch (command) {
     case "get_launch_at_startup": return false;
     case "get_default_todo_save_directory": return "";
-    case "get_clipboard_history": return { settings: { enabled: true, captureImages: true, maxItems: 100, shortcut: "Ctrl+X" }, items: [] };
+    case "get_clipboard_history": return { settings: { enabled: true, captureImages: true, maxItems: 100 }, items: [] };
     case "get_agent_status": return { codex: { phase: "idle", updatedAt: 0 }, claudeCode: { phase: "idle", updatedAt: 0 }, updatedAt: 0, statusPath: "" };
     case "get_media_state": return { available: false, audioActive: false, audioPeak: 0, playbackStatus: "unavailable", updatedAt: 0 };
     case "get_audio_level": return { active: false, peak: 0, updatedAt: 0 };

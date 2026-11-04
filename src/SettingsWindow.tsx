@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import "./SettingsWindow.css";
 
 const STORAGE_KEY = "focusd-island-settings";
@@ -177,9 +178,7 @@ function Segments<T extends string>({
 export default function SettingsWindow() {
   const [settings, setSettings] = useState<PetSettings>(load);
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
-  const [shortcut, setShortcut] = useState(
-    () => window.localStorage.getItem("maltese-wake-shortcut") ?? "Ctrl+Alt+M",
-  );
+  const [shortcut, setShortcut] = useState(loadWakeShortcut);
   const [shortcutError, setShortcutError] = useState("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const saveTimer = useRef<number | null>(null);
@@ -233,7 +232,7 @@ export default function SettingsWindow() {
         shortcut: [...modifiers, key].join("+"),
       });
       setShortcut(registered);
-      window.localStorage.setItem("maltese-wake-shortcut", registered);
+      saveWakeShortcut(registered);
       setShortcutError("");
     } catch (error) {
       setShortcutError(String(error));
@@ -291,10 +290,10 @@ export default function SettingsWindow() {
 
       <section className="sw-card">
         <h2>互动</h2>
-        <Switch label="鼠标交互" hint="点击摸头、双击庆祝、右键菜单" checked={settings.mouseInteractions} onChange={(value) => update("mouseInteractions", value)} />
+        <Switch label="鼠标交互" hint="点击摸头、双击庆祝、右键打开聊天" checked={settings.mouseInteractions} onChange={(value) => update("mouseInteractions", value)} />
         <Switch label="剪贴板气泡" hint="复制内容时用云朵气泡显示" checked={settings.clipboardBubble} onChange={(value) => update("clipboardBubble", value)} />
         <div className="sw-row">
-          <span className="sw-label">全局快捷键</span>
+          <span className="sw-label">显示 / 隐藏桌宠</span>
           <input
             className="sw-input"
             readOnly

@@ -25,14 +25,11 @@ use windows::{
             LibraryLoader::GetModuleHandleW,
         },
         UI::{
-            Input::KeyboardAndMouse::{
-                RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL,
-                MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
-            },
+            Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN},
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostMessageW,
-                RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_APP, WM_CLIPBOARDUPDATE, WM_HOTKEY, WNDCLASSW,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
+                TranslateMessage, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CLIPBOARDUPDATE, WNDCLASSW,
             },
         },
     },
@@ -41,10 +38,7 @@ use windows::{
 const HISTORY_FILE_NAME: &str = "clipboard-history.json";
 const IMAGE_DIRECTORY_NAME: &str = "clipboard-images";
 const HISTORY_CHANGED_EVENT: &str = "clipboard-history-changed";
-const HOTKEY_EVENT: &str = "clipboard-history-shortcut";
-const MAIN_WINDOW_LABEL: &str = "main";
 const DEFAULT_MAX_ITEMS: usize = 30;
-const DEFAULT_SHORTCUT: &str = "Ctrl+X";
 const MIN_MAX_ITEMS: usize = 5;
 const MAX_MAX_ITEMS: usize = 200;
 const SHORT_DUPLICATE_WINDOW_MS: i64 = 2_000;
@@ -54,13 +48,9 @@ const MAX_NOTE_CHARACTERS: usize = 80;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLIPBOARD_WRITE_RETRY_ATTEMPTS: usize = 8;
 const CLIPBOARD_WRITE_RETRY_DELAY: Duration = Duration::from_millis(35);
-const HOTKEY_ID: i32 = 0x4643;
-const HOTKEY_REFRESH_MESSAGE: u32 = WM_APP + 0x51;
 
 static CLIPBOARD_HISTORY: OnceLock<ClipboardHistoryService> = OnceLock::new();
 static CLIPBOARD_NOTIFY_TX: OnceLock<Mutex<Option<SyncSender<()>>>> = OnceLock::new();
-static CLIPBOARD_HOTKEY_WINDOW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
-static CLIPBOARD_HOTKEY_REGISTERED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,10 +65,6 @@ pub struct ClipboardHistorySettings {
     enabled: bool,
     capture_images: bool,
     max_items: usize,
-    #[serde(default = "default_clipboard_shortcut")]
-    shortcut: String,
-    #[serde(default = "default_true")]
-    shortcut_enabled: bool,
 }
 
 impl Default for ClipboardHistorySettings {
@@ -87,8 +73,6 @@ impl Default for ClipboardHistorySettings {
             enabled: true,
             capture_images: true,
             max_items: DEFAULT_MAX_ITEMS,
-            shortcut: default_clipboard_shortcut(),
-            shortcut_enabled: true,
         }
     }
 }
@@ -96,9 +80,6 @@ impl Default for ClipboardHistorySettings {
 impl ClipboardHistorySettings {
     fn normalized(mut self) -> Self {
         self.max_items = self.max_items.clamp(MIN_MAX_ITEMS, MAX_MAX_ITEMS);
-        self.shortcut = parse_shortcut_binding(&self.shortcut)
-            .unwrap_or_else(default_shortcut_binding)
-            .label;
         self
     }
 }
@@ -110,17 +91,7 @@ pub(crate) struct ShortcutBinding {
     pub(crate) key_code: u32,
 }
 
-fn default_true() -> bool {
-    true
-}
 
-fn default_clipboard_shortcut() -> String {
-    DEFAULT_SHORTCUT.to_string()
-}
-
-fn default_shortcut_binding() -> ShortcutBinding {
-    parse_shortcut_binding(DEFAULT_SHORTCUT).expect("default clipboard shortcut should be valid")
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -314,7 +285,6 @@ impl ClipboardHistoryService {
         drop(state);
 
         self.emit_changed();
-        request_hotkey_refresh();
         Ok(snapshot)
     }
 
@@ -615,15 +585,7 @@ impl ClipboardHistoryService {
         let _ = self.app.emit(HISTORY_CHANGED_EVENT, ());
     }
 
-    fn emit_shortcut(&self) {
-        if let Some(window) = self.app.get_webview_window(MAIN_WINDOW_LABEL) {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-
-        let _ = self.app.emit(HOTKEY_EVENT, ());
     }
-}
 
 impl ClipboardCapture {
     fn hash(&self) -> &str {
@@ -786,20 +748,6 @@ fn start_workers() {
     });
 }
 
-fn request_hotkey_refresh() {
-    let hwnd = CLIPBOARD_HOTKEY_WINDOW
-        .get()
-        .and_then(|window| window.lock().ok())
-        .and_then(|window| *window)
-        .map(|window| HWND(window as *mut core::ffi::c_void));
-
-    if let Some(hwnd) = hwnd {
-        unsafe {
-            let _ = PostMessageW(Some(hwnd), HOTKEY_REFRESH_MESSAGE, WPARAM(0), LPARAM(0));
-        }
-    }
-}
-
 fn notify_clipboard_changed() {
     if let Some(sender) = CLIPBOARD_NOTIFY_TX
         .get()
@@ -843,14 +791,6 @@ fn run_windows_clipboard_listener() -> Result<(), String> {
         .map_err(|error| error.to_string())?;
 
         AddClipboardFormatListener(hwnd).map_err(|error| error.to_string())?;
-        if let Some(window) = CLIPBOARD_HOTKEY_WINDOW.get() {
-            if let Ok(mut stored_window) = window.lock() {
-                *stored_window = Some(hwnd.0 as isize);
-            }
-        } else {
-            let _ = CLIPBOARD_HOTKEY_WINDOW.set(Mutex::new(Some(hwnd.0 as isize)));
-        }
-        refresh_registered_hotkey(hwnd);
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).into() {
@@ -858,7 +798,6 @@ fn run_windows_clipboard_listener() -> Result<(), String> {
             DispatchMessageW(&message);
         }
 
-        unregister_current_hotkey(hwnd);
         let _ = RemoveClipboardFormatListener(hwnd);
     }
 
@@ -876,78 +815,7 @@ unsafe extern "system" fn clipboard_window_proc(
         return LRESULT(0);
     }
 
-    if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
-        if let Ok(service) = service() {
-            service.emit_shortcut();
-        }
-        return LRESULT(0);
-    }
-
-    if message == HOTKEY_REFRESH_MESSAGE {
-        refresh_registered_hotkey(hwnd);
-        return LRESULT(0);
-    }
-
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-}
-
-fn refresh_registered_hotkey(hwnd: HWND) {
-    unsafe {
-        unregister_current_hotkey(hwnd);
-
-        let snapshot = service().ok().and_then(|service| service.snapshot().ok());
-
-        if snapshot
-            .as_ref()
-            .is_some_and(|snapshot| !snapshot.settings.shortcut_enabled)
-        {
-            return;
-        }
-
-        let binding = snapshot
-            .and_then(|snapshot| parse_shortcut_binding(&snapshot.settings.shortcut))
-            .unwrap_or_else(default_shortcut_binding);
-
-        match RegisterHotKey(
-            Some(hwnd),
-            HOTKEY_ID,
-            HOT_KEY_MODIFIERS(binding.modifiers | MOD_NOREPEAT.0),
-            binding.key_code,
-        ) {
-            Ok(()) => set_hotkey_registered(true),
-            Err(error) => {
-                set_hotkey_registered(false);
-                eprintln!(
-                    "failed to register clipboard history shortcut {}: {error}",
-                    binding.label
-                );
-            }
-        }
-    }
-}
-
-unsafe fn unregister_current_hotkey(hwnd: HWND) {
-    if hotkey_registered() {
-        let _ = unsafe { UnregisterHotKey(Some(hwnd), HOTKEY_ID) };
-        set_hotkey_registered(false);
-    }
-}
-
-fn hotkey_registered() -> bool {
-    CLIPBOARD_HOTKEY_REGISTERED
-        .get_or_init(|| Mutex::new(false))
-        .lock()
-        .map(|registered| *registered)
-        .unwrap_or(false)
-}
-
-fn set_hotkey_registered(value: bool) {
-    if let Ok(mut registered) = CLIPBOARD_HOTKEY_REGISTERED
-        .get_or_init(|| Mutex::new(false))
-        .lock()
-    {
-        *registered = value;
-    }
 }
 
 pub(crate) fn parse_shortcut_binding(shortcut: &str) -> Option<ShortcutBinding> {

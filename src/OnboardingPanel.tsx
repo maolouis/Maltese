@@ -6,6 +6,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolvePetGif } from "./petAssets";
+import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 
 const ONBOARDING_DONE_KEY = "maltese-onboarding-done";
 
@@ -25,7 +26,7 @@ export function markOnboardingDone() {
   }
 }
 
-const STEPS = ["欢迎", "唤醒快捷键", "开机自启", "完成"] as const;
+const STEPS = ["欢迎", "显示 / 隐藏", "开机自启", "完成"] as const;
 
 export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
   const [step, setStep] = useState(0);
@@ -33,9 +34,7 @@ export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
   const [donePetSrc] = useState(() => resolvePetGif("celebrate"));
 
   // 快捷键步骤状态
-  const [wakeShortcut, setWakeShortcut] = useState(
-    () => window.localStorage.getItem("maltese-wake-shortcut") ?? "Ctrl+Alt+M",
-  );
+  const [wakeShortcut, setWakeShortcut] = useState(loadWakeShortcut);
   const [shortcutError, setShortcutError] = useState("");
   const [shortcutSaved, setShortcutSaved] = useState(false);
 
@@ -71,7 +70,7 @@ export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
     try {
       const registered = await invoke<string>("set_wake_shortcut", { shortcut: next });
       setWakeShortcut(registered);
-      window.localStorage.setItem("maltese-wake-shortcut", registered);
+      saveWakeShortcut(registered);
       setShortcutError("");
       setShortcutSaved(true);
     } catch (error) {
@@ -106,7 +105,7 @@ export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
           <h2>你好，我是线条小狗</h2>
           <p>
             我会待在你的桌面上，陪你看待办、听音乐、收消息。
-            花一分钟完成初始设置，之后就可以随时用快捷键叫我出来。
+            花一分钟完成初始设置，之后就可以随时用快捷键叫我出来，或让我先躲起来。
           </p>
           <div className="onboarding__actions">
             <button type="button" className="onboarding__primary" onClick={() => setStep(1)}>
@@ -121,9 +120,9 @@ export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
 
       {step === 1 && (
         <div className="onboarding__step">
-          <h2>设置全局唤醒快捷键</h2>
+          <h2>设置显示 / 隐藏桌宠的快捷键</h2>
           <p>
-            默认是 <strong>Ctrl+Alt+M</strong>。点击下面的输入框后直接按下你想要的组合键；
+            默认是 <strong>Ctrl+Alt+Shift+M</strong>。点击下面的输入框后直接按下你想要的组合键；
             如果和其他软件冲突，会提示占用原因，可以换一个。
           </p>
           <input
@@ -131,7 +130,7 @@ export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
             value={wakeShortcut}
             readOnly
             onKeyDown={(event) => void recordShortcut(event)}
-            aria-label="全局唤醒快捷键"
+            aria-label="显示或隐藏桌宠的快捷键"
           />
           {shortcutError && <small role="alert" className="onboarding__error">{shortcutError}</small>}
           {shortcutSaved && !shortcutError && <small className="onboarding__ok">快捷键已生效</small>}

@@ -291,7 +291,6 @@ const zhCN: Translations = {
   clipboard: {
     title: "剪贴板历史",
     favoriteCount: (count) => `${count} 条收藏`,
-    expandShortcut: "展开快捷键",
     clear: "清空",
     confirmClear: "确认清空",
     clearHistory: "清空剪贴板历史",
@@ -417,9 +416,6 @@ const zhCN: Translations = {
       enabled: "记录剪贴板",
       captureImages: "记录图片",
       maxItems: "最大历史条数",
-      shortcut: "展开快捷键",
-      shortcutEnabled: "启用展开快捷键",
-      pressKeys: "按下组合键",
     },
 
     colors: {

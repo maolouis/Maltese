@@ -291,7 +291,6 @@ export type Translations = {
   clipboard: {
     title: string;
     favoriteCount: (count: number) => string;
-    expandShortcut: string;
     clear: string;
     confirmClear: string;
     clearHistory: string;
@@ -417,9 +416,6 @@ export type Translations = {
       enabled: string;
       captureImages: string;
       maxItems: string;
-      shortcut: string;
-      shortcutEnabled: string;
-      pressKeys: string;
     };
 
     colors: {

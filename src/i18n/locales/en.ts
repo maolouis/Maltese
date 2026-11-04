@@ -288,7 +288,6 @@ const en: Translations = {
   clipboard: {
     title: "Clipboard history",
     favoriteCount: (count) => (count === 1 ? "1 favorite" : `${count} favorites`),
-    expandShortcut: "Expand shortcut",
     clear: "Clear",
     confirmClear: "Confirm clear",
     clearHistory: "Clear clipboard history",
@@ -414,9 +413,6 @@ const en: Translations = {
       enabled: "Record clipboard",
       captureImages: "Record images",
       maxItems: "Max entries",
-      shortcut: "Expand shortcut",
-      shortcutEnabled: "Enable expand shortcut",
-      pressKeys: "Press keys",
     },
 
     colors: {

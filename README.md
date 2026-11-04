@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.1.1-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.1.2-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -31,7 +31,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **桌宠右键**：直接打开聊天页；配置和隐藏统一收进托盘菜单，避免多层菜单误触。
 - **睡眠缩边高度**：设置中可在 **24–140 px** 之间调整睡觉时露出的屏幕高度。
 - **全屏避让**：检测到游戏或视频全屏时自动缩边，退出后恢复；睡眠 / 全屏 / 手动缩边使用独立原因栈，不会互相抢状态。
-- **全局唤醒**：默认 `Ctrl+Alt+M`，可自行录入；支持开机自启。
+- **显示 / 隐藏桌宠**：只保留一个全局快捷键，默认 `Ctrl+Alt+Shift+M`；按一次隐藏，再按一次显示，可自行录入；支持开机自启。剪贴板不再单独占用快捷键。
 
 ### 快捷面板
 
@@ -46,7 +46,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 ### 待办、剪贴板与音乐
 
 - **待办笔记本**：今日任务、每日笔记、历史归档与复盘，支持拖拽排序、Markdown 保存、自动结转。
-- **剪贴板历史**：文本与图片记录，搜索、收藏、备注；支持全局快捷键唤出。
+- **剪贴板历史**：文本与图片记录，搜索、收藏、备注；从悬停气泡或快捷入口打开。
 - **音乐**：读取 Windows 媒体会话，识别网易云 / QQ 音乐 / Spotify / 浏览器播放，显示歌名、歌手、专辑、封面与歌词，支持播放、暂停、切歌、音量、随机和循环。
 
 ### 消息提醒

@@ -22,7 +22,6 @@ import {
   ExternalLink,
   GripVertical,
   ImageIcon,
-  Keyboard,
   Minus,
   Music2,
   NotebookPen,
@@ -68,6 +67,7 @@ import { UpdatePanel } from "./UpdatePanel";
 import { PetChat } from "./PetChat";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
+import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { MediaWaveform } from "./MediaWaveform";
 import {
   LOCALE_CODES,
@@ -179,8 +179,6 @@ type ClipboardHistorySettings = {
   enabled: boolean;
   captureImages: boolean;
   maxItems: number;
-  shortcut: string;
-  shortcutEnabled: boolean;
 };
 
 type ClipboardHistoryImage = {
@@ -377,7 +375,6 @@ const TODO_GROW_START_ROWS = 2;
 const TODO_SCROLL_START_ROWS = 6;
 const MAX_CUSTOM_SETTING_PRESETS = 6;
 const DEFAULT_TASK_TEXT_COLOR = "#ffffff";
-const DEFAULT_CLIPBOARD_SHORTCUT = "Ctrl+X";
 const AUDIO_ACTIVE_THRESHOLD = 0.000015;
 const DEFAULT_MEDIA_STATE: MediaState = {
   available: false,
@@ -461,8 +458,6 @@ const DEFAULT_CLIPBOARD_HISTORY: ClipboardHistorySnapshot = {
     enabled: true,
     captureImages: true,
     maxItems: 30,
-    shortcut: DEFAULT_CLIPBOARD_SHORTCUT,
-    shortcutEnabled: true,
   },
   items: [],
 };
@@ -624,155 +619,13 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
-type ShortcutKeyboardEvent = Pick<
-  KeyboardEvent,
-  "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey"
->;
-
-const MODIFIER_KEY_NAMES = new Set([
-  "Alt",
-  "AltGraph",
-  "Control",
-  "Meta",
-  "Shift",
-]);
-
-function normalizeShortcutKeyLabel(key: string) {
-  if (key.length === 1) {
-    return key.toUpperCase();
-  }
-
-  switch (key) {
-    case " ":
-    case "Spacebar":
-      return "Space";
-    case "Escape":
-      return "Esc";
-    case "ArrowUp":
-      return "Up";
-    case "ArrowDown":
-      return "Down";
-    case "ArrowLeft":
-      return "Left";
-    case "ArrowRight":
-      return "Right";
-    default:
-      return key;
-  }
-}
-
-function buildShortcutFromEvent(event: ShortcutKeyboardEvent) {
-  if (MODIFIER_KEY_NAMES.has(event.key)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-
-  if (event.ctrlKey) {
-    parts.push("Ctrl");
-  }
-
-  if (event.altKey) {
-    parts.push("Alt");
-  }
-
-  if (event.shiftKey) {
-    parts.push("Shift");
-  }
-
-  if (event.metaKey) {
-    parts.push("Win");
-  }
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  parts.push(normalizeShortcutKeyLabel(event.key));
-  return parts.join("+");
-}
-
-function normalizeClipboardShortcut(shortcut: string | undefined) {
-  const text = shortcut?.trim();
-
-  if (!text) {
-    return DEFAULT_CLIPBOARD_SHORTCUT;
-  }
-
-  const parts = text
-    .split("+")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const modifiers = new Set<string>();
-  let keyLabel = "";
-
-  for (const part of parts) {
-    const normalized = part.toLowerCase();
-
-    if (normalized === "ctrl" || normalized === "control") {
-      modifiers.add("Ctrl");
-    } else if (normalized === "alt" || normalized === "option") {
-      modifiers.add("Alt");
-    } else if (normalized === "shift") {
-      modifiers.add("Shift");
-    } else if (
-      normalized === "win" ||
-      normalized === "windows" ||
-      normalized === "meta" ||
-      normalized === "cmd" ||
-      normalized === "super"
-    ) {
-      modifiers.add("Win");
-    } else if (!keyLabel) {
-      keyLabel = normalizeShortcutKeyLabel(part);
-    }
-  }
-
-  if (!keyLabel || modifiers.size === 0) {
-    return DEFAULT_CLIPBOARD_SHORTCUT;
-  }
-
-  return ["Ctrl", "Alt", "Shift", "Win"]
-    .filter((modifier) => modifiers.has(modifier))
-    .concat(keyLabel)
-    .join("+");
-}
-
 function normalizeClipboardSettings(
   settings: ClipboardHistorySettings,
 ): ClipboardHistorySettings {
   return {
     ...settings,
     maxItems: clamp(Math.round(settings.maxItems), 5, 200),
-    shortcut: normalizeClipboardShortcut(settings.shortcut),
-    shortcutEnabled: settings.shortcutEnabled !== false,
   };
-}
-
-function matchesClipboardShortcut(
-  event: KeyboardEvent,
-  shortcut: string | undefined,
-) {
-  if (isEditableTarget(event.target)) {
-    return false;
-  }
-
-  return (
-    buildShortcutFromEvent(event) === normalizeClipboardShortcut(shortcut)
-  );
-}
-
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  return (
-    target.isContentEditable ||
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement
-  );
 }
 
 function normalizeSettings(
@@ -2067,7 +1920,6 @@ function LayoutEditor({
   saveDirectoryDraft,
   savePathState,
   highlightSavePath,
-  focusClipboardShortcutToken,
   presets,
   launchAtStartup,
   agentStatus,
@@ -2088,7 +1940,6 @@ function LayoutEditor({
   onLaunchAtStartupChange,
   onClearAgentStatus,
   onInstallAgentHooks,
-  onClipboardShortcutFocusHandled,
 }: {
   locale: LocaleCode;
   settings: IslandSettings;
@@ -2098,7 +1949,6 @@ function LayoutEditor({
   saveDirectoryDraft: string;
   savePathState: SavePathState;
   highlightSavePath: boolean;
-  focusClipboardShortcutToken: number;
   presets: IslandPreset[];
   launchAtStartup: boolean;
   agentStatus: AgentStatusSnapshot;
@@ -2119,16 +1969,12 @@ function LayoutEditor({
   onLaunchAtStartupChange: (enabled: boolean) => void;
   onClearAgentStatus: (provider: AgentProvider) => void;
   onInstallAgentHooks: () => void;
-  onClipboardShortcutFocusHandled: () => void;
 }) {
   const t = useTranslation();
   const savePathPanelRef = useRef<HTMLElement | null>(null);
   const savePathInputRef = useRef<HTMLInputElement | null>(null);
-  const clipboardShortcutPanelRef = useRef<HTMLElement | null>(null);
-  const clipboardShortcutButtonRef = useRef<HTMLButtonElement | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetNameDraft, setPresetNameDraft] = useState("");
-  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
   const [projectLinkFailed, setProjectLinkFailed] = useState(false);
 
   const openProjectLink = async (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -2183,56 +2029,6 @@ function LayoutEditor({
 
     return () => window.cancelAnimationFrame(frame);
   }, [highlightSavePath]);
-
-  useEffect(() => {
-    if (focusClipboardShortcutToken <= 0) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      const editorPanel = clipboardShortcutPanelRef.current?.closest(".editor-panel");
-
-      if (editorPanel instanceof HTMLElement && clipboardShortcutPanelRef.current) {
-        const targetTop = clipboardShortcutPanelRef.current.offsetTop - 12;
-        editorPanel.scrollTo({ top: targetTop, behavior: "smooth" });
-      }
-
-      clipboardShortcutButtonRef.current?.focus({ preventScroll: true });
-      setIsRecordingShortcut(true);
-      onClipboardShortcutFocusHandled();
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [focusClipboardShortcutToken, onClipboardShortcutFocusHandled]);
-
-  const handleShortcutKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-      if (!isRecordingShortcut) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.key === "Escape") {
-        setIsRecordingShortcut(false);
-        return;
-      }
-
-      const shortcut = buildShortcutFromEvent(event.nativeEvent);
-
-      if (!shortcut) {
-        return;
-      }
-
-      onClipboardSettingsChange({
-        ...clipboardSettings,
-        shortcut,
-      });
-      setIsRecordingShortcut(false);
-    },
-    [clipboardSettings, isRecordingShortcut, onClipboardSettingsChange],
-  );
 
   const agentStatusRows = AGENT_PROVIDERS.map((provider) => {
     const status = agentStatus[provider];
@@ -2690,16 +2486,7 @@ function LayoutEditor({
         ) : null}
       </section>
 
-      <section
-        className={[
-          "settings-section",
-          "settings-section--clipboard",
-          focusClipboardShortcutToken > 0 ? "settings-section--attention" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        ref={clipboardShortcutPanelRef}
-      >
+      <section className="settings-section settings-section--clipboard">
         <div className="settings-section__header">
           <span>{t.settings.clipboard.title}</span>
         </div>
@@ -2726,47 +2513,6 @@ function LayoutEditor({
             onClipboardSettingsChange({ ...clipboardSettings, maxItems })
           }
         />
-        <ToggleControl
-          label={t.settings.clipboard.shortcutEnabled}
-          checked={clipboardSettings.shortcutEnabled}
-          onChange={(shortcutEnabled) =>
-            onClipboardSettingsChange({ ...clipboardSettings, shortcutEnabled })
-          }
-        />
-        <div
-          className={[
-            "shortcut-control",
-            clipboardSettings.shortcutEnabled ? "" : "shortcut-control--disabled",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          <div className="shortcut-control__meta">
-            <span>{t.settings.clipboard.shortcut}</span>
-            <strong>{normalizeClipboardShortcut(clipboardSettings.shortcut)}</strong>
-          </div>
-          <button
-            ref={clipboardShortcutButtonRef}
-            className={[
-              "shortcut-record-button",
-              isRecordingShortcut ? "shortcut-record-button--recording" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            type="button"
-            disabled={!clipboardSettings.shortcutEnabled}
-            onClick={() => setIsRecordingShortcut(true)}
-            onKeyDown={handleShortcutKeyDown}
-            onBlur={() => setIsRecordingShortcut(false)}
-          >
-            <Keyboard size={14} strokeWidth={2.3} />
-            <span>
-              {isRecordingShortcut
-                ? t.settings.clipboard.pressKeys
-                : normalizeClipboardShortcut(clipboardSettings.shortcut)}
-            </span>
-          </button>
-        </div>
       </section>
 
       <section className="settings-section settings-section--colors">
@@ -4362,15 +4108,6 @@ function ClipboardHistoryPanel({
           )}
         </div>
         <div className="clipboard-panel__tools">
-          {snapshot.settings.shortcutEnabled ? (
-            <span
-              className="clipboard-shortcut-display"
-              aria-label={t.clipboard.expandShortcut}
-            >
-              <Keyboard size={14} strokeWidth={2.3} />
-              <span>{normalizeClipboardShortcut(snapshot.settings.shortcut)}</span>
-            </span>
-          ) : null}
           <button
             className={[
               "clipboard-clear-button",
@@ -4856,9 +4593,7 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
 
 function AssistantPanel() {
   const [notice, setNotice] = useState("选择一个入口，线条小狗会陪你完成下一步");
-  const [wakeShortcut, setWakeShortcut] = useState(
-    () => window.localStorage.getItem("maltese-wake-shortcut") ?? "Ctrl+Alt+M",
-  );
+  const [wakeShortcut, setWakeShortcut] = useState(loadWakeShortcut);
   const [wakeShortcutError, setWakeShortcutError] = useState("");
   const [commonScripts, setCommonScripts] = useState<Array<{ name: string; path: string; kind: string }>>([]);
   const [discoveredShortcuts, setDiscoveredShortcuts] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
@@ -4872,7 +4607,7 @@ function AssistantPanel() {
     void invoke<string>("set_wake_shortcut", { shortcut: wakeShortcut })
       .then((registered) => {
         setWakeShortcut(registered);
-        window.localStorage.setItem("maltese-wake-shortcut", registered);
+        saveWakeShortcut(registered);
         setWakeShortcutError("");
       })
       .catch((error) => setWakeShortcutError(String(error)));
@@ -4970,9 +4705,9 @@ function AssistantPanel() {
     try {
       const registered = await invoke<string>("set_wake_shortcut", { shortcut: nextShortcut });
       setWakeShortcut(registered);
-      window.localStorage.setItem("maltese-wake-shortcut", registered);
+      saveWakeShortcut(registered);
       setWakeShortcutError("");
-      setNotice(`唤醒快捷键已设为 ${registered}`);
+      setNotice(`显示 / 隐藏快捷键已设为 ${registered}`);
     } catch (error) {
       setWakeShortcutError(String(error));
     }
@@ -5136,17 +4871,17 @@ function AssistantPanel() {
         </div>
       )}
       <div className="assistant-panel__shortcut">
-        <span className="assistant-panel__label">全局唤醒</span>
+        <span className="assistant-panel__label">显示 / 隐藏桌宠</span>
         <input
           value={wakeShortcut}
           readOnly
           onKeyDown={(event) => void recordWakeShortcut(event)}
-          aria-label="全局唤醒快捷键"
+          aria-label="显示或隐藏桌宠的快捷键"
           title="点击后按下新的组合键"
         />
         {wakeShortcutError && <small role="alert">{wakeShortcutError}</small>}
       </div>
-      <p className="assistant-panel__hint">点击快捷键输入框后直接录入组合键；注册失败会保留原快捷键并显示占用原因。</p>
+      <p className="assistant-panel__hint">按一次隐藏桌宠，再按一次让它回来。点击输入框后可直接录入新的组合键。</p>
     </section>
   );
 }
@@ -5267,9 +5002,6 @@ function IslandApp({
   const [agentHooksInstallError, setAgentHooksInstallError] = useState("");
   const [clearingAgentProvider, setClearingAgentProvider] =
     useState<AgentProvider | null>(null);
-  const [focusClipboardShortcutToken, setFocusClipboardShortcutToken] =
-    useState(0);
-  const clipboardShortcutToggleAt = useRef(0);
   const shouldInitializeDefaultSaveDirectory = useRef(
     window.localStorage.getItem(TODO_SAVE_DIRECTORY_STORAGE_KEY) === null,
   );
@@ -6108,20 +5840,17 @@ function IslandApp({
     return () => window.clearInterval(timer);
   }, [mode, settings.roam]);
 
-  // 全局快捷键：唤醒并展开 / 再次按下收起
+  // 全局快捷键只负责隐藏 / 显示；从缩边状态回来时退出缩边。
   useEffect(() => {
     if (!isTauri()) {
       return;
     }
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    void listen<{ wasVisible?: boolean }>("maltese-hotkey-toggle", (event) => {
-      setIsTucked(false);
-      if (!event.payload?.wasVisible) {
-        setMode("expanded");
-        return;
+    void listen<{ visible?: boolean }>("maltese-hotkey-toggle", (event) => {
+      if (event.payload?.visible) {
+        setIsTucked(false);
       }
-      setMode((current) => (current === "expanded" ? "collapsed" : "expanded"));
     }).then((cleanup) => {
       if (cancelled) cleanup();
       else unlisten = cleanup;
@@ -6145,31 +5874,6 @@ function IslandApp({
     setMessageSource(source);
     openIslandPage("qq");
   }, [openIslandPage, qqMail.closeReader]);
-
-  const openClipboardHistory = useCallback(() => {
-    openIslandPage("clipboard");
-  }, [openIslandPage]);
-
-  const toggleClipboardHistory = useCallback(() => {
-    const now = Date.now();
-
-    if (now - clipboardShortcutToggleAt.current < 250) {
-      return;
-    }
-
-    clipboardShortcutToggleAt.current = now;
-
-    if (mode === "expanded" && page === "clipboard") {
-      setIslandMode("collapsed");
-      return;
-    }
-
-    openClipboardHistory();
-  }, [mode, openClipboardHistory, page, setIslandMode]);
-
-  const clearClipboardShortcutFocus = useCallback(() => {
-    setFocusClipboardShortcutToken(0);
-  }, []);
 
   const collapseIsland = useCallback(() => {
     setIslandMode("collapsed");
@@ -6888,7 +6592,6 @@ function IslandApp({
 
     let didCancel = false;
     let unlistenChanges: (() => void) | null = null;
-    let unlistenShortcut: (() => void) | null = null;
 
     void listen("clipboard-history-changed", () => {
       void refreshClipboardHistory();
@@ -6904,32 +6607,11 @@ function IslandApp({
         console.error("Failed to listen for clipboard history changes", error);
       });
 
-    void listen("clipboard-history-shortcut", () => {
-      if (clipboardHistory.settings.shortcutEnabled) {
-        toggleClipboardHistory();
-      }
-    })
-      .then((nextUnlisten) => {
-        if (didCancel) {
-          nextUnlisten();
-        } else {
-          unlistenShortcut = nextUnlisten;
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to listen for clipboard history shortcut", error);
-      });
-
     return () => {
       didCancel = true;
       unlistenChanges?.();
-      unlistenShortcut?.();
     };
-  }, [
-    clipboardHistory.settings.shortcutEnabled,
-    refreshClipboardHistory,
-    toggleClipboardHistory,
-  ]);
+  }, [refreshClipboardHistory]);
 
   useEffect(() => {
     void refreshMediaState();
@@ -7282,15 +6964,6 @@ function IslandApp({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        clipboardHistory.settings.shortcutEnabled &&
-        matchesClipboardShortcut(event, clipboardHistory.settings.shortcut)
-      ) {
-        event.preventDefault();
-        toggleClipboardHistory();
-        return;
-      }
-
       if (event.key === "Escape") {
         collapseIsland();
       }
@@ -7298,12 +6971,7 @@ function IslandApp({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    clipboardHistory.settings.shortcut,
-    clipboardHistory.settings.shortcutEnabled,
-    collapseIsland,
-    toggleClipboardHistory,
-  ]);
+  }, [collapseIsland]);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -7459,7 +7127,6 @@ function IslandApp({
             saveDirectoryDraft={saveDirectoryDraft}
             savePathState={savePathState}
             highlightSavePath={saveState === "needs-path"}
-            focusClipboardShortcutToken={focusClipboardShortcutToken}
             presets={settingPresets}
             launchAtStartup={launchAtStartup}
             agentStatus={agentStatus}
@@ -7480,7 +7147,6 @@ function IslandApp({
             onLaunchAtStartupChange={updateLaunchAtStartup}
             onClearAgentStatus={clearAgentStatus}
             onInstallAgentHooks={installAgentHooks}
-            onClipboardShortcutFocusHandled={clearClipboardShortcutFocus}
           />
         )}
         {page === "music" && (
