@@ -49,7 +49,7 @@
 - [x] LineDogPet 状态素材接入，增加摸头、双击庆祝、右键抱起和快捷动作栏。
 - [x] 快捷面板与豆包余额接口配置入口。
 - [x] 本地计算器、Clash、Watt、PowerToys、Geek、常用脚本启动命令。
-- [x] 扫描 `C:\Users\Administrator\Desktop\常用脚本` 下的 `.bat/.cmd/.ps1/.py/.lnk` 并支持直接启动。
+- [x] 扫描 `<桌面>\常用脚本` 下的 `.bat/.cmd/.ps1/.py/.lnk` 并支持直接启动。
 - [x] 有道智云 v3 文本翻译签名与 Windows 凭据保存。
 - [x] 全局 Maltese 唤醒快捷键与冲突检测，默认 Ctrl+Alt+M，可在快捷面板直接录入。
 - [x] 收起态改为 LineDogPet 式桌宠本体，展开态改为文字标签导航。

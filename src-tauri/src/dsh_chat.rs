@@ -281,13 +281,21 @@ mod tests {
     #[test]
     #[ignore]
     fn live_headless_chat() {
-        let cli = std::env::var("MALTESE_DSH_CLI")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(r"E:\dsh\resources\runtime\cli\bin\dsh.cmd"));
-        let patch = std::env::var("MALTESE_DSH_CHAT_PATCH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(r"E:\MalteseWork\restore-credentials.yml"));
-        let reply = run_once(&cli, &patch, "只回复 OK 两个字母，不要做任何事", None).unwrap();
+        let Ok(cli) = std::env::var("MALTESE_DSH_CLI") else {
+            eprintln!("skip: set MALTESE_DSH_CLI to run the live DSH test");
+            return;
+        };
+        let Ok(patch) = std::env::var("MALTESE_DSH_CHAT_PATCH") else {
+            eprintln!("skip: set MALTESE_DSH_CHAT_PATCH to run the live DSH test");
+            return;
+        };
+        let reply = run_once(
+            &PathBuf::from(cli),
+            &PathBuf::from(patch),
+            "只回复 OK 两个字母，不要做任何事",
+            None,
+        )
+        .unwrap();
         assert!(!reply.text.trim().is_empty());
         assert!(reply.session_id.is_some());
     }

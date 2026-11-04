@@ -138,7 +138,7 @@ pub fn installed_executable() -> Result<PathBuf, String> {
 
 pub(crate) fn normalized_path(path: &str) -> String {
     // 统一分隔符并折叠重复反斜杠：注册表里可能写 E:\\Weixin\\，
-    // 而 QueryFullProcessImageNameW 返回 E:\Weixin\Weixin.exe。
+    // 而 QueryFullProcessImageNameW 返回单反斜杠的完整进程路径。
     let mut normalized = String::with_capacity(path.len());
     let mut previous_separator = false;
     for character in path.trim_start_matches(r"\\?\").chars() {

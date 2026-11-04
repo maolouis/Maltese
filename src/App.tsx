@@ -4700,7 +4700,7 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
     <section className="video-automation" aria-label="自动刷视频">
       <div className="video-automation__head">
         <div>
-          <span className="assistant-panel__label">DSH 视频助手</span>
+          <span className="assistant-panel__label">自动翻页</span>
           <strong>{snapshot.running ? snapshot.waitingForBrowser ? "等待视频页回到前台" : "正在观看" : "已暂停"}</strong>
         </div>
         <span className="video-automation__steps">已翻页 {snapshot.steps} 次</span>
@@ -4882,6 +4882,8 @@ function AssistantPanel() {
       .then(setCommonScripts)
       .catch(() => setCommonScripts([]));
   }, []);
+  // 快捷方式列表完全来自当前用户的桌面/开始菜单和本机 localStorage，
+// 不写死任何人的固定入口；“看视频”是独立内置功能，不依赖这些快捷方式。
   useEffect(() => {
     void invoke<Array<{ label: string; path: string; kind: string; category: string }>>("discover_shortcuts")
       .then(setDiscoveredShortcuts)
@@ -5043,6 +5045,15 @@ function AssistantPanel() {
           <button type="button" onClick={addCustomShortcut}>添加</button>
         </div>
       )}
+      <div className="assistant-panel__section-head">
+        <span>看视频</span>
+        <small>内置功能，不占用你的快捷方式</small>
+      </div>
+      <VideoAutomationPanel onNotice={setNotice} />
+      <div className="assistant-panel__section-head">
+        <span>快捷方式</span>
+        <small>只读取这台电脑上发现和自定义的入口</small>
+      </div>
       <div className="assistant-panel__grid">
         {actions.map((action) => (
           <button
@@ -5102,7 +5113,6 @@ function AssistantPanel() {
           </div>
         ))}
       </div>
-      <VideoAutomationPanel onNotice={setNotice} />
       {commonScripts.length > 0 && (
         <div className="assistant-panel__scripts">
           <span className="assistant-panel__label">常用脚本</span>
