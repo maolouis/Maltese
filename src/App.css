@@ -3959,6 +3959,7 @@ input,
   object-fit: contain;
   image-rendering: auto;
   pointer-events: none;
+  opacity: var(--pet-opacity, 1);
   filter: drop-shadow(0 4px 8px rgba(11, 13, 20, 0.2));
 }
 
@@ -5057,6 +5058,28 @@ input,
 
 .island-overlay > * {
   pointer-events: auto;
+}
+
+/* 小狗在屏幕右侧时，气泡翻到小狗左边：气泡向左长，小狗钉在窗口右边不移动。 */
+.island--overlay-left .island__collapsed.island__collapsed--pet-only {
+  left: auto;
+  right: 0;
+}
+
+.island--overlay-left .island-overlay {
+  left: 0;
+  right: calc(var(--pet-slot-w, 148px) + 8px);
+  justify-content: flex-end;
+}
+
+.island--overlay-left .island-overlay .pet-cloud__tail--1 {
+  left: auto;
+  right: -12px;
+}
+
+.island--overlay-left .island-overlay .pet-cloud__tail--2 {
+  left: auto;
+  right: -24px;
 }
 
 .island-overlay .pet-cloud {

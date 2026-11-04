@@ -249,6 +249,7 @@ type IslandSettings = {
   fontFamily: IslandFont;
   glassIntensity: number;
   opacity: number;
+  petOpacity: number;
   collapsedScale: number;
   expandedScale: number;
   marginY: number;
@@ -467,6 +468,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   fontFamily: "system",
   glassIntensity: 72,
   opacity: 95,
+  petOpacity: 100,
   collapsedScale: 0.89,
   expandedScale: 0.91,
   marginY: 0,
@@ -658,6 +660,11 @@ function normalizeSettings(
       100,
     ),
     opacity: clamp(Number(settings?.opacity ?? DEFAULT_SETTINGS.opacity), 50, 100),
+    petOpacity: clamp(
+      Number(settings?.petOpacity ?? DEFAULT_SETTINGS.petOpacity),
+      30,
+      100,
+    ),
     collapsedScale: clamp(
       Number(collapsedScale),
       0.75,
@@ -1277,6 +1284,7 @@ export function IslandShell({
     isLiquidGlass ? `island--glass-${nativeGlassState}` : "",
     showTitle ? "" : "island--title-hidden",
     overlayOpen ? "island--overlay-open" : "",
+    overlayOpen ? `island--overlay-${panelSide}` : "",
     mode === "expanded" ? `island--panel-${panelSide}` : "",
   ]
     .filter(Boolean)
@@ -2126,6 +2134,15 @@ function LayoutEditor({
           step={1}
           suffix="%"
           onChange={(opacity) => onSettingsChange({ ...settings, opacity })}
+        />
+        <SliderControl
+          label="小狗不透明度"
+          value={settings.petOpacity}
+          min={30}
+          max={100}
+          step={1}
+          suffix="%"
+          onChange={(petOpacity) => onSettingsChange({ ...settings, petOpacity })}
         />
         <SliderControl
           label={t.settings.layout.collapsedScale}
@@ -5127,12 +5144,14 @@ function IslandApp({
 
       return ({
         "--island-opacity": settings.opacity / 100,
+        "--pet-opacity": settings.petOpacity / 100,
         "--island-scale": mode === "collapsed" ? settings.collapsedScale : settings.expandedScale,
         // 小狗本体尺寸永远跟随“收起大小”，展开面板时也不变。
         "--pet-scale": settings.collapsedScale,
         "--collapsed-island-width": `${collapsedIslandWidth}px`,
         "--expanded-island-height": `${expandedIslandHeight}px`,
         "--task-text-color": settings.taskTextColor,
+        "--pet-bubble-text": settings.bubbleTextColor,
         "--island-pulse-color": settings.pulseColor,
         "--island-pulse-glow-color": hexToRgba(settings.pulseColor, 0.72),
         "--island-pulse-brightness": `${settings.pulseBrightness}%`,

@@ -1,46 +1,60 @@
 # Handoff
 
-更新时间：2026-11-04 18:55（Asia/Shanghai）
+更新时间：2026-11-04 20:15（Asia/Shanghai）
 
 ## 当前分支与提交
 
-- `main`：`b75417b fix: 右下/右上复位回到屏幕中央，显示器归属按小狗槽判定`
-- `dsh`：`262f687`（同一修复，另含 `dsh-plugin/` 与 handoff 文档）
-- 两个分支均已推送到 `origin`。
-- 本轮打了 tag：`v1.1.4`（annotated，已推送 origin）。
+- `dsh`：本轮 v1.1.5 修复提交（含 `dsh-plugin/` 与本文档）。
+- `main`：同一 v1.1.5 修复（不含 `dsh-plugin/`）。
+- 两个分支均已推送到 `origin`，并打 annotated tag `v1.1.5`。
+- 上一版 tag：`v1.1.4`。
 
-## 本轮完成（v1.1.4）
+## 本轮完成（v1.1.5）
 
-### 1. 修复「复位到右下/右上却回到屏幕中央」
+### 1. 修复右侧贴边时弹窗/气泡跑到屏幕外
 
-- 现象：设置里选「右下/右上」后，小狗没有落在角落，而是回到屏幕水平居中。
-- 根因：`monitor_for_island_position` 用旧整窗宽度常量（`STAGE_WINDOW_WIDTH=640`）
-  计算小狗中心点，而 `custom_position` 记录的是收起态小狗槽的左上角（约 151–168px）。
-  右下/右上角的槽位中心被算到显示器右缘之外，归属判定失败 → `custom_position` 被丢弃
-  → 回退到默认居中位置。此前 de3edad 只修了 `lock_island_corner` 的落位计算，漏了归属判定。
-- 修复：`monitor_for_island_position` 增加 `collapsed_scale` 参数，按槽位实际尺寸算中心点；
-  槽位尺寸统一收敛到 `slot_width_css` / `slot_height_css`，删除旧常量。
-- 回归测试：`corner_slot_centers_stay_inside_their_monitor`（1x / 2x 缩放、四角 + 屏外拒绝）。
-- 验证：`cargo test --target x86_64-pc-windows-msvc --lib` 65 passed / 0 failed / 9 ignored。
+- 现象：v1.1.4 中小狗复位到右下 / 右上后，展开面板仍只向右生长，
+  窗口大部分落在屏幕外，看起来像“点了没反应”。
+- 修复：`apply_stage_geometry` 用 `expanded_panel_side` 根据左右剩余空间选边；
+  右侧不够就向左展开，窗口 x 同步左移，小狗屏幕位置不变。
+- hover 气泡同样处理：`set_island_overlay` 复用选边逻辑；向左时 CSS
+  把小狗钉在窗口右边（`island--overlay-left`），气泡向左长，小狗不左移。
+- 回归测试：`expanded_panel_flips_away_from_screen_edges`
+  （左缘 / 右缘 / 两侧都不够 / 负坐标副屏）。
 
-### 2. 版本与发布产物
+### 2. 修复气泡文字颜色不生效
 
-- 版本升至 `1.1.4`（package.json / tauri.conf.json / Cargo.toml 三处同步）。
-- 已构建 `release/v1.1.4/maltese-assistant.exe`（24,300,544 bytes，18:46 编译，含本次修复）
-  与 `WebView2Loader.dll`（160,320）。
-- 已打包 `release/maltese-assistant-v1.1.4-win64.zip`（12,190,808，含 exe + dll）。
-- 发布说明 `docs/releases/v1.1.4.md`。
-- `v1.1.4` tag 与 main/dsh 均已推送 origin。
+- 主窗口浮层之前没有设置 `--pet-bubble-text`，只有独立气泡窗口读取
+  localStorage，导致设置颜色后 hover 气泡仍是默认色。
+- 现在主窗口根节点直接下发 `--pet-bubble-text`；独立气泡窗口增加
+  `storage` 监听，改色后已打开的气泡也会即时刷新。
+- 独立设置窗口改色仍通过 `maltese-settings-updated` 同步回主窗口。
+
+### 3. 复用 LineDogPet 设置：小狗不透明度
+
+- 新增 `petOpacity`（30%–100%，默认 100），只作用于小狗图片，
+  不影响气泡 / 面板；主设置页与独立设置窗口均可调。
+- 旧配置没有该字段时自动使用默认值。
+
+## 版本与产物
+
+- 版本 `1.1.5`（package.json / tauri.conf.json / Cargo.toml / Cargo.lock）。
+- `release/v1.1.5/maltese-assistant.exe`（24,258,560 bytes）
+  + `WebView2Loader.dll`（160,320）。
+- `release/maltese-assistant-v1.1.5-win64.zip`（11,862,371 bytes，zip 根目录含 exe + dll）。
+- 发布说明 `docs/releases/v1.1.5.md`。
+
+## 验证
+
+- `cargo test --target x86_64-pc-windows-msvc --lib`：66 passed / 0 failed / 9 ignored。
+- `tsc --noEmit` 通过；Vite 生产构建通过。
+- 实机确认：右下角展开面板向左生长，窗口右边缘不超出 2560 宽屏幕。
 
 ## 已知问题 / 下一步
 
-- **GitHub Release 已创建**（2026-11-04）：v1.1.4 Release 已发布，
-  https://github.com/maolouis/Maltese/releases/tag/v1.1.4
-  资产 `maltese-assistant-v1.1.4-win64.zip`（12,190,808 B，含 exe + WebView2Loader.dll）已上传。
-  使用方式见仓库 README 与 Release 正文。
 - `tests/i18n.tsx` 与当前 UI 仍有历史偏差（媒体状态需要 `sessions`、布局入口已不是
-  `.dot-button--layout`、启动不再有 `.island__open-button`），本轮没有把它纳入提交。
-- 展开面板仍只向右生长，右下/右上角展开时面板可能贴近或超出屏幕边缘，后续可考虑
-  右侧角自动改为向左展开。
-- DSH 插件是 Host-only companion，仅在 `dsh` 分支；切回 `main` 后 `dsh-plugin/` 会从
-  工作区消失，已安装插件会失效。保持在 `dsh` 分支或重新安装。
+  `.dot-button--layout`、启动不再有 `.island__open-button`），本轮未纳入提交。
+- LineDogPet 的其他设置尚未全量复用：跟随模式 / 鼠标指针皮肤 / 脚印 / 特效 /
+  AI Key / 多宠物 / Bongo 模式 / 深色模式等需要按优先级逐项移植。
+- DSH 插件是 Host-only companion，仅在 `dsh` 分支；切回 `main` 后 `dsh-plugin/`
+  会从工作区消失，已安装插件会失效。保持在 `dsh` 分支或重新安装。
