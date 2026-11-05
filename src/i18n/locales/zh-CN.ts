@@ -278,6 +278,10 @@ const zhCN: Translations = {
     moveUp: "往前移",
     moveDown: "往后移",
     delete: "删除",
+    selectAll: "全选现有表情",
+    selectAllHint: "把当前表情的全部内置 GIF 加回轮播列表",
+    allSelected: "当前表情的全部 GIF 都已在轮播列表中",
+    pathLabel: "路径",
     reset: "恢复默认顺序",
     builtin: "内置",
     custom: "自定义",
@@ -307,6 +311,22 @@ const zhCN: Translations = {
       chase: "追逐",
       peek: "偷看",
     },
+  },
+
+  updateNotice: {
+    available: (version) => `发现新版本 v${version}`,
+    body: "点击「立即更新」下载并安装，完成后应用会重新启动。",
+    install: "立即更新",
+    later: "稍后",
+    downloading: (percent) => (percent === null ? "正在下载更新…" : `正在下载更新… ${percent}%`),
+    downloadingUnknown: "正在下载更新…",
+    installing: "正在安装更新，应用即将重新启动…",
+    done: "更新已安装，正在重新启动…",
+    error: "更新失败",
+    retry: "重试",
+    errorDetail: (detail) => `原因：${detail}`,
+    bubbleTitle: (version) => `发现新版本 v${version}`,
+    bubbleBody: "打开快捷面板，点击「立即更新」即可升级。",
   },
 
   plugins: {

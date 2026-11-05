@@ -14,10 +14,8 @@ export const MESSAGE_SOURCE_LABELS: Record<MessageSource, string> = zhCN.message
 
 export function messagePreviewText(preview: MessagePreview, copy: Translations["messages"] = zhCN.messages): string {
   if (preview.source === "wechat") {
-    const title = preview.title.trim();
-    const body = preview.body.trim();
-    if (title && body) return `${title}：${body}`;
-    return body || title || copy.wechatPreview;
+    // 微信提醒只显示统一的隐私文案，不把聊天摘要带进收起岛。
+    return copy.wechatPreview;
   }
   if (preview.source === "qqMail") return preview.body.trim() || copy.newMail;
   return copy.qqPreview(preview.title.trim() || "QQ", preview.body.trim() || copy.newMessage);

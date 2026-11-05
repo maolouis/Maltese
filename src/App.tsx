@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -66,6 +67,12 @@ import { resolvePetGif } from "./petAssets";
 import { rotationFramesForState, usePetGifRotationConfig } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { UpdatePanel } from "./UpdatePanel";
+import { UpdateBanner } from "./UpdateBanner";
+import {
+  getUpdateState,
+  startAutoUpdateCheck,
+  subscribeToUpdate,
+} from "./updaterController";
 import { PetChat } from "./PetChat";
 import { PluginsPanel } from "./PluginsPanel";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
@@ -1725,6 +1732,7 @@ export function IslandShell({
           aria-hidden={!isExpanded}
           inert={!isExpanded}
         >
+          <UpdateBanner />
           <header className="island__header">
             <div className="island__title">
               <CircleDot
@@ -5955,6 +5963,8 @@ function IslandApp({
   const overlayGenerationRef = useRef(0);
   const overlayHoveredRef = useRef(false);
   const overlayHideTimerRef = useRef<number | null>(null);
+  const updateState = useSyncExternalStore(subscribeToUpdate, getUpdateState);
+  const shownUpdateVersionRef = useRef("");
 
   const applyPetOverlay = useCallback((next: PetOverlay | null) => {
     const current = petOverlayRef.current;
@@ -6085,6 +6095,31 @@ function IslandApp({
       hidePetOverlay();
     }, settings.bubbleDurationMs);
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
+
+  // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
+  useEffect(() => {
+    if (
+      updateState.stage !== "available" ||
+      !updateState.nextVersion ||
+      mode !== "collapsed" ||
+      !settings.bubbleOn
+    ) {
+      return;
+    }
+    if (shownUpdateVersionRef.current === updateState.nextVersion) return;
+    shownUpdateVersionRef.current = updateState.nextVersion;
+    showCloudBubble(
+      t.updateNotice.bubbleTitle(updateState.nextVersion),
+      t.updateNotice.bubbleBody,
+    );
+  }, [mode, settings.bubbleOn, showCloudBubble, t, updateState.nextVersion, updateState.stage]);
+
+  // 主窗口启动后自动检查更新；设置窗口和其他辅助窗口不重复检查。
+  useEffect(() => {
+    if (!isTauri()) return;
+    if (getCurrentWindow().label !== "main") return;
+    startAutoUpdateCheck();
+  }, []);
 
   // 进行中待办：开始后先确认一次，之后按设置的间隔提醒当前待办和已计时。
   useEffect(() => {

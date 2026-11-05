@@ -1,0 +1,129 @@
+/* 主面板顶部的 OTA 更新条：浅色云朵主题，不遮挡页签。 */
+.island-update-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 9px 10px;
+  border: 1px solid #f3d8bb;
+  border-radius: 12px;
+  background: #fff8ef;
+  color: #4a3d31;
+}
+
+.island-update-banner__copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.island-update-banner__copy > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #d9822b;
+}
+
+.island-update-banner__copy > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.island-update-banner__copy strong {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.island-update-banner__copy span {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #8b7762;
+  overflow-wrap: anywhere;
+}
+
+.island-update-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.island-update-banner__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 25px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.island-update-banner__install {
+  border: 1px solid #e7a15c;
+  background: #eea052;
+  color: #fff;
+}
+
+.island-update-banner__install:hover {
+  background: #e5923f;
+}
+
+.island-update-banner__later {
+  border: 1px solid #eadccb;
+  background: transparent;
+  color: #8b7762;
+}
+
+.island-update-banner__later:hover {
+  background: #fff1e0;
+}
+
+.island-update-banner__progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  color: #8b7762;
+}
+
+.island-update-banner__track {
+  position: relative;
+  height: 4px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #f0dfcb;
+}
+
+.island-update-banner__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: #eea052;
+  transition: width 160ms ease;
+}
+
+.island-update-banner--error {
+  border-color: #efc8c3;
+  background: #fff5f3;
+}
+
+.island-update-banner--error .island-update-banner__copy > svg,
+.island-update-banner--error strong {
+  color: #b04a42;
+}
+
+.island-update-banner--done {
+  border-color: #cfe7d8;
+  background: #f4fbf6;
+}
+
+.island-update-banner--done .island-update-banner__copy > svg,
+.island-update-banner--done strong {
+  color: #3f8059;
+}

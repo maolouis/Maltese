@@ -25,7 +25,8 @@ body,
   background: #ffffff;
   color: var(--pet-bubble-text, #2b2f3a);
   border-radius: 26px;
-  box-shadow: 0 8px 22px rgba(11, 13, 20, 0.24);
+  /* 气泡与云朵面板都保持纯白轮廓，不要下方的黑色投影。 */
+  box-shadow: none;
   animation: pet-bubble-pop 220ms cubic-bezier(0.2, 1.4, 0.4, 1);
 }
 

@@ -40,6 +40,8 @@ const listeners = new Set<() => void>();
 let proxy: string | null = null;
 let pending: Update | null = null;
 let initialized = false;
+let configured = false;
+let autoCheckStarted = false;
 
 function setState(patch: Partial<UpdateState>) {
   state = { ...state, ...patch };
@@ -75,10 +77,11 @@ async function initialize() {
     return;
   }
 
-  const [version, configured] = await Promise.all([
+  const [version, hasUpdaterConfig] = await Promise.all([
     getVersion().catch(() => ""),
     invoke<boolean>("updater_configured").catch(() => false),
   ]);
+  configured = hasUpdaterConfig;
   proxy = await invoke<string | null>("get_updater_proxy").catch(() => null);
 
   setState({
@@ -98,7 +101,7 @@ async function closePending() {
   }
 }
 
-export async function checkForUpdate() {
+export async function checkForUpdate(silent = false) {
   if (busy(state.stage) || state.stage === "disabled") return;
 
   await closePending();
@@ -116,8 +119,34 @@ export async function checkForUpdate() {
     setState({ stage: "available", nextVersion: found.version });
   } catch (error) {
     console.error("Failed to check for updates", error);
+    if (silent) {
+      // 后台检查失败不打扰用户；设置页仍可手动重试并看到详细原因。
+      setState({ stage: configured ? "idle" : "disabled", detail: "" });
+      return;
+    }
     setState({ stage: "error", detail: errorReason(error) });
   }
+}
+
+/**
+ * 主窗口启动后自动检查一次，之后每 4 小时检查一次。
+ * 只有设置了 updater 公钥的发布构建才会真正发请求；普通开发构建直接跳过。
+ */
+export function startAutoUpdateCheck() {
+  if (autoCheckStarted || !isTauri()) return;
+  autoCheckStarted = true;
+
+  const tick = () => {
+    if (!configured || busy(state.stage) || state.stage === "available") return;
+    void checkForUpdate(true);
+  };
+
+  window.setTimeout(() => {
+    void initialize().then(() => {
+      tick();
+      window.setInterval(tick, 4 * 60 * 60 * 1000);
+    });
+  }, 6000);
 }
 
 export async function installUpdate() {

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { ArrowDown, ArrowUp, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useTranslation } from "./i18n";
 import {
   defaultPetGifItems,
@@ -29,9 +29,17 @@ export function PetGifRotationSettings() {
 
   const items = config[state] ?? [];
   const states = Object.keys(t.petGifs.states);
+  const availableItems = defaultPetGifItems(state);
+  const selectedKeys = new Set(items.map((item) => item.path ?? item.src).filter(Boolean));
+  const missingItems = availableItems.filter((item) => !selectedKeys.has(item.src));
 
   const saveItems = (nextItems: PetGifRotationItem[]) => {
     savePetGifRotationConfig({ ...config, [state]: nextItems });
+  };
+
+  const selectAll = () => {
+    if (missingItems.length === 0) return;
+    saveItems([...items, ...missingItems]);
   };
 
   const move = (index: number, offset: number) => {
@@ -125,6 +133,16 @@ export function PetGifRotationSettings() {
         <button
           type="button"
           className="sw-secondary"
+          disabled={missingItems.length === 0}
+          title={missingItems.length === 0 ? t.petGifs.allSelected : t.petGifs.selectAllHint}
+          onClick={selectAll}
+        >
+          <CheckCheck size={13} />
+          {t.petGifs.selectAll}
+        </button>
+        <button
+          type="button"
+          className="sw-secondary"
           onClick={() => saveItems(defaultPetGifItems(state))}
         >
           <RotateCcw size={13} />
@@ -153,6 +171,13 @@ export function PetGifRotationSettings() {
               <div className="pet-gif-item__copy">
                 <strong title={item.name}>{item.name}</strong>
                 <span>{item.custom ? t.petGifs.custom : t.petGifs.builtin}</span>
+                <code
+                  className="pet-gif-item__path"
+                  title={item.path ?? item.src}
+                  aria-label={`${t.petGifs.pathLabel}: ${item.path ?? item.src}`}
+                >
+                  {item.path ?? item.src}
+                </code>
               </div>
               <div className="pet-gif-item__actions">
                 <button

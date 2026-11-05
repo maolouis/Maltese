@@ -1,22 +1,22 @@
 # 应用内更新
 
-小岛在「设置 → 关于小岛 → 查看最新版本」里检查新版本，发现更新后可以在应用内下载、安装并自动重启。
-实现基于 Tauri 2 的 `tauri-plugin-updater`，所有更新包都用 minisign 签名，App 内置公钥校验，签名不符的包不会被安装。
+主窗口启动约 6 秒后自动检查一次新版本，之后每 4 小时检查一次；发现更新时收起态弹云朵气泡，展开态在面板顶部显示更新条。也可以继续在「设置 → 关于小岛 → 查看最新版本」里手动检查。实现基于 Tauri 2 的 `tauri-plugin-updater`，所有更新包都用 minisign 签名，App 内置公钥校验，签名不符的包不会被安装。
 
 ## 检查与安装流程
 
 1. 前端调用 `check()`，依次尝试 `plugins.updater.endpoints` 里的地址：GitHub 直连、`ghfast.top`、`gh-proxy.com`，第一个能取到清单的胜出。
-2. 清单里的 `version` 高于当前版本时，界面显示「发现新版本 vX.Y.Z」。
-3. 点「下载并安装」后，安装包下载到本地临时目录，边下边用清单里的 `signature` 校验。
+2. 清单里的 `version` 高于当前版本时，收起态弹气泡、展开态显示「发现新版本 vX.Y.Z」更新条。
+3. 点「立即更新」后，安装包下载到本地临时目录，边下边用清单里的 `signature` 校验。
 4. Windows 走 NSIS 安装模式 `passive`：显示安装进度条，装完由安装器拉起新版本，旧进程自动退出。
 
-检查与下载的进度存在 `src/updaterController.ts` 的模块级状态里，设置页关掉或切到别的页面都不会中断，回来还能看到实时百分比。
+检查与下载的进度存在 `src/updaterController.ts` 的模块级状态里，设置页关掉或切到别的页面都不会中断，回来还能看到实时百分比。后台自动检查失败只写日志，不弹错误；设置页手动检查会显示详细原因。
 
 相关代码：
 
 - `src-tauri/tauri.conf.json`：`plugins.updater`（端点、安装模式）
 - `src-tauri/capabilities/default.json`：`updater:default` 权限
-- `src/updaterController.ts`：检查 / 下载 / 安装状态机，跨页面存活
+- `src/updaterController.ts`：检查 / 下载 / 安装状态机，跨页面存活；`startAutoUpdateCheck()` 负责启动自动检查
+- `src/UpdateBanner.tsx`：主面板顶部的自动更新提示条
 - `src/UpdatePanel.tsx`：设置页里的检查更新面板，只负责渲染
 - `scripts/prepare-release-config.mjs`：构建发布包时写入公钥与签名开关
 - `scripts/make-latest-json.mjs`：根据构建产物生成 `latest.json`
@@ -30,7 +30,7 @@ GitHub 的 `github.com` 在国内经常连不上（`api.github.com` 往往还能
 - **多端点**：`tauri.conf.json` 里配了 GitHub 直连和两个公共加速前缀，插件会按顺序尝试，任一成功即返回。面板失败时会显示「原因：…」方便判断是网络问题还是清单缺失。
 - **系统代理**：前端启动时调用 `get_updater_proxy`（`src-tauri/src/lib.rs`），依次读 `HTTPS_PROXY` / `HTTP_PROXY` 环境变量和 Windows 系统代理（`Internet Settings\ProxyServer`），把结果传给 `check()` / `downloadAndInstall()`。开了 Clash 之类的系统代理时，更新自动走代理。
 
-清单同时提供 `windows-x86_64-nsis` 与 `windows-x86_64-msi`，客户端按当前安装格式选择对应包；通用 `windows-x86_64` 入口保留为 NSIS 回退。
+清单提供 `windows-x86_64-nsis`，如果构建时同时产出了已签名的 MSI，也会附带 `windows-x86_64-msi`；通用 `windows-x86_64` 入口保留为 NSIS 回退。
 
 清单里的下载地址由 `scripts/make-latest-json.mjs --base-url` 决定：
 

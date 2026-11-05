@@ -149,6 +149,17 @@
   color: #9aa0ad;
 }
 
+.pet-gif-item__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: #a6acb8;
+  user-select: text;
+}
+
 .pet-gif-item__actions {
   display: flex;
   align-items: center;

@@ -276,6 +276,10 @@ export type Translations = {
     moveUp: string;
     moveDown: string;
     delete: string;
+    selectAll: string;
+    selectAllHint: string;
+    allSelected: string;
+    pathLabel: string;
     reset: string;
     builtin: string;
     custom: string;
@@ -285,6 +289,22 @@ export type Translations = {
     deleteFailed: string;
     order: (index: number) => string;
     states: Record<string, string>;
+  };
+
+  updateNotice: {
+    available: (version: string) => string;
+    body: string;
+    install: string;
+    later: string;
+    downloading: (percent: number | null) => string;
+    downloadingUnknown: string;
+    installing: string;
+    done: string;
+    error: string;
+    retry: string;
+    errorDetail: (detail: string) => string;
+    bubbleTitle: (version: string) => string;
+    bubbleBody: string;
   };
 
   plugins: {

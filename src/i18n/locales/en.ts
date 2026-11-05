@@ -275,6 +275,10 @@ const en: Translations = {
     moveUp: "Move earlier",
     moveDown: "Move later",
     delete: "Delete",
+    selectAll: "Select all existing",
+    selectAllHint: "Add every built-in GIF for this expression back to the carousel",
+    allSelected: "Every GIF for this expression is already in the carousel",
+    pathLabel: "Path",
     reset: "Reset to default order",
     builtin: "Built-in",
     custom: "Custom",
@@ -304,6 +308,22 @@ const en: Translations = {
       chase: "Chasing",
       peek: "Peeking",
     },
+  },
+
+  updateNotice: {
+    available: (version) => `New version v${version} available`,
+    body: "Click Update now to download and install, then the app restarts.",
+    install: "Update now",
+    later: "Later",
+    downloading: (percent) => (percent === null ? "Downloading update…" : `Downloading update… ${percent}%`),
+    downloadingUnknown: "Downloading update…",
+    installing: "Installing update, the app will restart shortly…",
+    done: "Update installed, restarting…",
+    error: "Update failed",
+    retry: "Retry",
+    errorDetail: (detail) => `Reason: ${detail}`,
+    bubbleTitle: (version) => `New version v${version} available`,
+    bubbleBody: "Open the shortcut panel, then click Update now.",
   },
 
   plugins: {
