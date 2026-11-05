@@ -369,7 +369,6 @@ type IslandShellProps = {
   onCollapse: () => void;
   onResetPosition: () => void;
   onMinimize: () => void;
-  onTuck: () => void;
   onReveal: () => void;
   onSleepTuck: () => void;
   onSleepReveal: () => void;
@@ -1235,7 +1234,6 @@ export function IslandShell({
   onCollapse,
   onResetPosition,
   onMinimize,
-  onTuck,
   onReveal,
   onSleepTuck,
   onSleepReveal,
@@ -1714,7 +1712,7 @@ export function IslandShell({
                   <button
                     type="button"
                     className="pet-bubble-panel__sleep"
-                    onClick={() => { onOverlayClose(); onTuck(); }}
+                    onClick={() => onPetAction("sleeping")}
                   >
                     让小狗睡觉
                   </button>
@@ -5960,7 +5958,8 @@ function IslandApp({
   const [petOverlay, setPetOverlay] = useState<PetOverlay | null>(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const petOverlayRef = useRef<PetOverlay | null>(null);
-  const overlayGenerationRef = useRef(0);
+  // 用时间戳做起点，保证 WebView 重载后 generation 仍大于原生侧记录的值。
+  const overlayGenerationRef = useRef(Date.now());
   const overlayHoveredRef = useRef(false);
   const overlayHideTimerRef = useRef<number | null>(null);
   const updateState = useSyncExternalStore(subscribeToUpdate, getUpdateState);
@@ -5976,12 +5975,13 @@ function IslandApp({
       setOverlayOpen(true);
       return;
     }
-    const generation = (overlayGenerationRef.current += 1);
+    overlayGenerationRef.current = Math.max(Date.now(), overlayGenerationRef.current + 1);
+    const generation = overlayGenerationRef.current;
     petOverlayRef.current = next;
     if (next) {
       // 先把小狗固定到窗口底部，再把窗口向上放大，最后渲染面板，避免裁切与跳动。
       setOverlayOpen(true);
-      void invoke("set_island_overlay", { overlay: next.mode })
+      void invoke("set_island_overlay", { overlay: next.mode, generation })
         .catch(() => undefined)
         .finally(() => {
           if (overlayGenerationRef.current === generation) {
@@ -5996,7 +5996,7 @@ function IslandApp({
       if (overlayGenerationRef.current !== generation) {
         return;
       }
-      void invoke("set_island_overlay", { overlay: null })
+      void invoke("set_island_overlay", { overlay: null, generation })
         .catch(() => undefined)
         .finally(() => {
           if (overlayGenerationRef.current === generation) {
@@ -6160,9 +6160,9 @@ function IslandApp({
 
     return () => {
       window.clearInterval(timer);
-      if (window.localStorage.getItem("focusd-todo-reminder-key") === startedKey) {
-        window.localStorage.removeItem("focusd-todo-reminder-key");
-      }
+      // 不要在这里删除 startedKey：mode/缩边变化会让 effect 重建，
+      // 删除后每次收起/睡觉都会重复弹一次“开始计时”气泡。
+      // 同一个待办只在真正开始时提示一次，切到下一条待办自然会换 key。
     };
   }, [
     activeTodo,
@@ -7737,6 +7737,10 @@ function IslandApp({
     }
     recordDiaryEvent("pet", t.diary.pet(t.diary.petActions[action]));
     setPetAction(action);
+    if (action === "sleeping") {
+      // 睡觉不是五秒动作：立刻缩到最近的屏幕边缘，保持趴睡，鼠标靠近才醒。
+      tuckIsland("manual");
+    }
     if (petActionTimer.current !== null) {
       window.clearTimeout(petActionTimer.current);
     }
@@ -7744,7 +7748,7 @@ function IslandApp({
       petActionTimer.current = null;
       setPetAction(null);
     }, action === "sleeping" ? 5000 : 2600);
-  }, [recordDiaryEvent, t]);
+  }, [recordDiaryEvent, t, tuckIsland]);
   useEffect(() => {
     if (!isTauri()) {
       return;
@@ -7826,7 +7830,6 @@ function IslandApp({
         onCollapse={collapseIsland}
         onResetPosition={resetIslandPosition}
         onMinimize={minimizeIsland}
-        onTuck={tuckIsland}
         onReveal={revealIsland}
         onSleepTuck={tuckForSleep}
         onSleepReveal={revealForSleep}

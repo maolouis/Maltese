@@ -508,11 +508,28 @@ struct OverlaySnapshot {
 }
 
 static OVERLAY_SNAPSHOT: std::sync::Mutex<Option<OverlaySnapshot>> = std::sync::Mutex::new(None);
+// 浮层请求按前端递增的 generation 串行执行：快速收起/重新弹出时，
+// 迟到的旧请求不能覆盖新请求，否则窗口会被旧 close 缩回去，气泡只剩下一条。
+static OVERLAY_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static OVERLAY_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 // 浮层打开时主窗口需要正常接收鼠标事件，暂停“鼠标不在岛内就穿透”的逻辑。
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
-fn set_island_overlay(app: AppHandle, overlay: Option<String>) -> Result<(), String> {
+fn set_island_overlay(
+    app: AppHandle,
+    overlay: Option<String>,
+    generation: Option<u64>,
+) -> Result<(), String> {
+    let _request_guard = OVERLAY_REQUEST_LOCK
+        .lock()
+        .map_err(|_| "浮层请求状态不可用".to_string())?;
+    if let Some(generation) = generation {
+        let previous = OVERLAY_REQUEST_GENERATION.fetch_max(generation, Ordering::SeqCst);
+        if generation < previous {
+            return Ok(());
+        }
+    }
     let window = main_window(&app)?;
     let state = read_window_state();
     // 必须和 apply_stage_geometry 用同一块显示器：多屏时 current_monitor() 可能是错的，
@@ -2367,9 +2384,16 @@ fn apply_stage_geometry(
     let work_bottom = work_area.position.y + work_area.size.height as i32;
     let dog_centered_x = monitor_position.x + ((monitor_size.width as i32 - slot_w_phys) / 2);
     let dog_normal_y = work_bottom - slot_h_phys - physical_top_offset;
-    // 缩边方向：离上边缘近就往上缩（翻转后露头），否则往下缩。
+    // 缩边方向：按小狗实际所在位置选最近的上/下边缘。
+    // 不能只看默认的 dog_normal_y，否则手动放在屏幕顶部的小狗睡觉时
+    // 会突然跳到屏幕底部缩边。
     let visible_head_phys = (tucked_visible_height * scale).round() as i32;
-    let tuck_top = (dog_normal_y - work_top) < (work_bottom - (dog_normal_y + slot_h_phys));
+    let dog_anchor_y = state
+        .custom_position
+        .map(|position| position.y)
+        .unwrap_or(dog_normal_y);
+    let tuck_top =
+        (dog_anchor_y - work_top) < (work_bottom - (dog_anchor_y + slot_h_phys));
     let dog_tucked_y = if tuck_top {
         // 顶部缩边时露出的窗口底部高度同样可调；多留一点窗口，避免翻转后的头被裁掉。
         work_top - slot_h_phys + (visible_head_phys + (6.0 * scale).round() as i32)
