@@ -177,4 +177,4 @@ Maltese 在设计和实现过程中参考了以下开源项目。感谢作者与
 
 ## License
 
-本项目代码采用 [MIT License](LICENSE)。线条小狗美术素材不适用 MIT License，版权归 LineDogPet 原作者所有，禁止商用。
+本项目代码采用 [MIT License](LICENSE)。线条小狗美术素材不适用 MIT License，禁止商用。
