@@ -1,14 +1,9 @@
-// 每个快捷方式单独绑定全局热键。
-//
-// 这里不复用“唤醒岛”的那个热键窗口：唤醒热键只有一个，而快捷方式
-// 数量会变化，需要整组重新注册。窗口仍是 message-only window，逻辑
-// 与 wake_shortcut 保持一致，避免全局键盘钩子带来的权限和性能问题。
+// 快捷面板的系统级热键：只负责打开整个快捷方式面板，不再给每个入口
+// 单独注册热键。窗口仍是 message-only window，逻辑与 wake_shortcut 一致，
+// 避免全局键盘钩子带来的权限和性能问题。
 
 use crate::clipboard_history::{parse_shortcut_binding, ShortcutBinding};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
-    path::PathBuf,
     sync::{mpsc, Mutex, OnceLock},
     thread,
     time::Duration,
@@ -28,61 +23,26 @@ use windows::Win32::{
     },
 };
 
-const FIRST_HOTKEY_ID: i32 = 0x6200;
-const MAX_SHORTCUT_HOTKEYS: usize = 64;
-const UPDATE_HOTKEYS_MESSAGE: u32 = WM_APP + 0x66;
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortcutHotkeyRequest {
-    pub path: String,
-    pub shortcut: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortcutHotkeyIssue {
-    pub path: String,
-    pub message: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortcutHotkeyResult {
-    pub registered: usize,
-    pub issues: Vec<ShortcutHotkeyIssue>,
-}
-
-#[derive(Clone)]
-struct ActiveHotkey {
-    id: i32,
-    path: String,
-}
+const HOTKEY_ID: i32 = 0x6300;
+const UPDATE_HOTKEY_MESSAGE: u32 = WM_APP + 0x66;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static HOTKEY_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
-static ACTIVE: Mutex<Vec<ActiveHotkey>> = Mutex::new(Vec::new());
-static PENDING: Mutex<
-    Option<(
-        Vec<ShortcutHotkeyRequest>,
-        mpsc::Sender<ShortcutHotkeyResult>,
-    )>,
-> = Mutex::new(None);
+static ACTIVE: Mutex<Option<ShortcutBinding>> = Mutex::new(None);
+static PENDING: Mutex<Option<(String, mpsc::Sender<Result<String, String>>)>> = Mutex::new(None);
 
 pub fn init(app: &AppHandle) {
     if APP.set(app.clone()).is_ok() {
         thread::spawn(|| {
             if let Err(error) = run_hotkey_loop() {
-                eprintln!("failed to initialize shortcut hotkeys: {error}");
+                eprintln!("failed to initialize shortcut panel hotkey: {error}");
             }
         });
     }
 }
 
 #[tauri::command]
-pub fn set_shortcut_hotkeys(
-    bindings: Vec<ShortcutHotkeyRequest>,
-) -> Result<ShortcutHotkeyResult, String> {
+pub fn set_shortcut_panel_hotkey(shortcut: String) -> Result<String, String> {
     // 启动早期热键线程可能还没创建窗口，短暂等待，避免前端首次同步失败。
     let mut hwnd = None;
     for _ in 0..30 {
@@ -92,20 +52,20 @@ pub fn set_shortcut_hotkeys(
         }
         thread::sleep(Duration::from_millis(50));
     }
-    let hwnd = hwnd.ok_or_else(|| "快捷方式热键服务尚未准备好。".to_string())?;
+    let hwnd = hwnd.ok_or_else(|| "快捷面板热键服务尚未准备好。".to_string())?;
 
     let (sender, receiver) = mpsc::channel();
     {
         let mut pending = PENDING.lock().map_err(|error| error.to_string())?;
         if pending.is_some() {
-            return Err("快捷方式热键正在更新。".to_string());
+            return Err("快捷面板热键正在更新。".to_string());
         }
-        *pending = Some((bindings.into_iter().take(MAX_SHORTCUT_HOTKEYS).collect(), sender));
+        *pending = Some((shortcut, sender));
     }
     unsafe {
         PostMessageW(
             Some(HWND(hwnd as *mut _)),
-            UPDATE_HOTKEYS_MESSAGE,
+            UPDATE_HOTKEY_MESSAGE,
             WPARAM(0),
             LPARAM(0),
         )
@@ -113,12 +73,12 @@ pub fn set_shortcut_hotkeys(
     }
     receiver
         .recv_timeout(Duration::from_secs(3))
-        .map_err(|error| format!("快捷方式热键更新超时：{error}"))
+        .map_err(|error| format!("快捷面板热键更新超时：{error}"))?
 }
 
 fn run_hotkey_loop() -> Result<(), String> {
     unsafe {
-        let class_name = w!("MalteseShortcutHotkeys");
+        let class_name = w!("MalteseShortcutPanelHotkey");
         let module = GetModuleHandleW(None).map_err(|error| error.to_string())?;
         let instance = HINSTANCE(module.0);
         let class = WNDCLASSW {
@@ -128,12 +88,12 @@ fn run_hotkey_loop() -> Result<(), String> {
             ..Default::default()
         };
         if RegisterClassW(&class) == 0 {
-            return Err("无法注册快捷方式热键窗口。".to_string());
+            return Err("无法注册 Maltese 快捷面板热键窗口。".to_string());
         }
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
-            w!("Maltese Shortcut Hotkeys"),
+            w!("Maltese Shortcut Panel Hotkey"),
             WINDOW_STYLE(0),
             0,
             0,
@@ -151,71 +111,72 @@ fn run_hotkey_loop() -> Result<(), String> {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
-        clear_hotkeys(hwnd);
+        let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
     }
     Ok(())
 }
 
-fn clear_hotkeys(hwnd: HWND) {
-    let active = ACTIVE.lock().map(|mut items| std::mem::take(&mut *items));
-    if let Ok(items) = active {
-        unsafe {
-            for item in items {
-                let _ = UnregisterHotKey(Some(hwnd), item.id);
-            }
-        }
+fn register_binding(hwnd: HWND, binding: &ShortcutBinding) -> Result<(), String> {
+    unsafe {
+        RegisterHotKey(
+            Some(hwnd),
+            HOTKEY_ID,
+            HOT_KEY_MODIFIERS(binding.modifiers | MOD_NOREPEAT.0),
+            binding.key_code,
+        )
+        .map_err(|error| format!("快捷键 {} 已被占用或无法注册：{error}", binding.label))
     }
 }
 
-fn apply_hotkeys(hwnd: HWND, requests: Vec<ShortcutHotkeyRequest>) -> ShortcutHotkeyResult {
-    clear_hotkeys(hwnd);
-
-    let mut seen_paths = HashSet::new();
-    let mut issues = Vec::new();
-    let mut registered = 0usize;
-
-    for (index, request) in requests.into_iter().enumerate() {
-        let path = request.path.trim().to_string();
-        let shortcut = request.shortcut.trim().to_string();
-        if path.is_empty() || shortcut.is_empty() {
-            continue;
-        }
-        if !seen_paths.insert(path.clone()) {
-            continue;
-        }
-        let Some(binding) = parse_shortcut_binding(&shortcut) else {
-            issues.push(ShortcutHotkeyIssue {
-                path,
-                message: "热键无效，请使用至少一个修饰键加一个按键。".to_string(),
-            });
-            continue;
-        };
-        let id = FIRST_HOTKEY_ID + index as i32;
-        let result = unsafe {
-            RegisterHotKey(
-                Some(hwnd),
-                id,
-                HOT_KEY_MODIFIERS(binding.modifiers | MOD_NOREPEAT.0),
-                binding.key_code,
-            )
-        };
-        match result {
-            Ok(()) => {
-                if let Ok(mut active) = ACTIVE.lock() {
-                    active.push(ActiveHotkey { id, path });
-                }
-                registered += 1;
+fn apply_hotkey(hwnd: HWND, shortcut: String) -> Result<String, String> {
+    let shortcut = shortcut.trim().to_string();
+    if shortcut.is_empty() {
+        let previous = ACTIVE.lock().map_err(|error| error.to_string())?.take();
+        if previous.is_some() {
+            unsafe {
+                let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
             }
-            Err(error) => issues.push(ShortcutHotkeyIssue {
-                path,
-                message: format!("热键 {} 已被占用或无法注册：{error}", binding.label),
-            }),
+        }
+        return Ok(String::new());
+    }
+
+    let binding = parse_shortcut_binding(&shortcut)
+        .ok_or_else(|| "快捷键无效，请至少使用一个修饰键。".to_string())?;
+
+    // 重复提交同一个组合键时保持原注册不变，避免前端启动同步和页面内校验互相抢注册。
+    {
+        let active = ACTIVE.lock().map_err(|error| error.to_string())?;
+        if let Some(current) = active.as_ref() {
+            if current.label == binding.label {
+                return Ok(current.label.clone());
+            }
         }
     }
 
-    ShortcutHotkeyResult {
-        registered,
-        issues,
+    let previous = ACTIVE.lock().map_err(|error| error.to_string())?.take();
+    if previous.is_some() {
+        unsafe {
+            let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
+        }
+    }
+
+    match register_binding(hwnd, &binding) {
+        Ok(()) => {
+            let label = binding.label.clone();
+            *ACTIVE.lock().map_err(|error| error.to_string())? = Some(binding);
+            Ok(label)
+        }
+        Err(error) => {
+            // 新组合键注册失败时恢复旧热键，避免用户原来的设置被误清除。
+            if let Some(old) = previous {
+                if register_binding(hwnd, &old).is_ok() {
+                    if let Ok(mut active) = ACTIVE.lock() {
+                        *active = Some(old);
+                    }
+                }
+            }
+            Err(error)
+        }
     }
 }
 
@@ -225,30 +186,19 @@ unsafe extern "system" fn hotkey_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if message == WM_HOTKEY {
-        let id = wparam.0 as i32;
-        let target = ACTIVE
-            .lock()
-            .ok()
-            .and_then(|items| items.iter().find(|item| item.id == id).cloned());
-        if let Some(target) = target {
-            if let Err(error) = crate::launch_shortcut_path(PathBuf::from(&target.path)) {
-                eprintln!("failed to launch shortcut hotkey target: {error}");
-                if let Some(app) = APP.get() {
-                    let _ = app.emit(
-                        "maltese-shortcut-hotkey-error",
-                        serde_json::json!({ "path": target.path, "message": error }),
-                    );
-                }
+    if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
+        if let Some(app) = APP.get() {
+            if crate::show_island(app).is_ok() {
+                let _ = app.emit_to("main", "maltese-open-shortcut-panel", serde_json::json!({}));
             }
         }
         return LRESULT(0);
     }
 
-    if message == UPDATE_HOTKEYS_MESSAGE {
+    if message == UPDATE_HOTKEY_MESSAGE {
         let pending = PENDING.lock().ok().and_then(|mut value| value.take());
-        if let Some((requests, sender)) = pending {
-            let result = apply_hotkeys(hwnd, requests);
+        if let Some((shortcut, sender)) = pending {
+            let result = apply_hotkey(hwnd, shortcut);
             let _ = sender.send(result);
         }
         return LRESULT(0);

@@ -257,6 +257,13 @@ const zhCN: Translations = {
     clearAllHint: (count) =>
       `将清空 ${count} 个快捷方式，只会从列表移除，不会删除桌面文件；再点一次确认`,
     clearAllDone: (count) => `已清空 ${count} 个快捷方式（不会删除桌面文件）`,
+    panelHotkey: "快捷面板热键",
+    panelHotkeyHint: "按这个键直接打开整个快捷方式面板；点击后录入，右键清除。",
+    panelHotkeyRecording: "请按键…",
+    panelHotkeyEmpty: "点击设置",
+    panelHotkeySet: (shortcut) => `快捷面板热键已设为 ${shortcut}`,
+    panelHotkeyCleared: "已清除快捷面板热键",
+    panelHotkeyModifierRequired: "请至少按住 Ctrl、Alt、Shift 或 Win 之一，再按一个字母/数字/功能键。",
   },
 
   petGifs: {

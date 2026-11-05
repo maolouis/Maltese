@@ -3289,7 +3289,7 @@ pub fn run() {
             translation::translate_text,
             translation::set_translation_shortcut,
             wake_shortcut::set_wake_shortcut,
-            shortcut_hotkeys::set_shortcut_hotkeys,
+            shortcut_hotkeys::set_shortcut_panel_hotkey,
             plugins::list_plugins,
             plugins::install_plugin,
             plugins::remove_plugin,

@@ -254,6 +254,13 @@ const en: Translations = {
     clearAllHint: (count) =>
       `Remove ${count} shortcuts from this list only; desktop files will not be deleted. Click again to confirm.`,
     clearAllDone: (count) => `Cleared ${count} shortcuts. Desktop files were not deleted.`,
+    panelHotkey: "Shortcut panel hotkey",
+    panelHotkeyHint: "One key opens the whole shortcut panel. Click to record, right-click to clear.",
+    panelHotkeyRecording: "Press keys…",
+    panelHotkeyEmpty: "Click to set",
+    panelHotkeySet: (shortcut) => `Shortcut panel hotkey set to ${shortcut}`,
+    panelHotkeyCleared: "Shortcut panel hotkey cleared",
+    panelHotkeyModifierRequired: "Hold Ctrl, Alt, Shift, or Win, then press a letter, number, or function key.",
   },
 
   petGifs: {

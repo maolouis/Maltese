@@ -73,10 +73,9 @@ import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import {
   formatShortcutFromEvent,
-  loadShortcutHotkeys,
-  saveShortcutHotkeys,
-  type ShortcutHotkeyMap,
-} from "./shortcutHotkeys";
+  loadShortcutPanelHotkey,
+  saveShortcutPanelHotkey,
+} from "./shortcutPanelHotkey";
 import { MediaWaveform } from "./MediaWaveform";
 import {
   LOCALE_CODES,
@@ -4893,9 +4892,9 @@ function AssistantPanel() {
   const [draftLabel, setDraftLabel] = useState("");
   const [draftPath, setDraftPath] = useState("");
   const [clearAllArmed, setClearAllArmed] = useState(false);
-  const [shortcutHotkeys, setShortcutHotkeys] = useState<ShortcutHotkeyMap>(loadShortcutHotkeys);
-  const [recordingHotkeyPath, setRecordingHotkeyPath] = useState<string | null>(null);
-  const [hotkeyIssues, setHotkeyIssues] = useState<Record<string, string>>({});
+  const [panelHotkey, setPanelHotkey] = useState(loadShortcutPanelHotkey);
+  const [recordingPanelHotkey, setRecordingPanelHotkey] = useState(false);
+  const [panelHotkeyError, setPanelHotkeyError] = useState("");
 
   useEffect(() => {
     if (!clearAllArmed) {
@@ -5062,92 +5061,45 @@ function AssistantPanel() {
     discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcut.path)).length +
     customShortcuts.length;
 
-  const hotkeyPaths = useMemo(
-    () => [...new Set([
-      ...discoveredShortcuts
-        .filter((shortcut) => !hiddenShortcutSet.has(shortcut.path))
-        .slice(0, 24)
-        .map((shortcut) => shortcut.path),
-      ...customShortcuts.map((shortcut) => shortcut.path),
-    ])],
-    [customShortcuts, discoveredShortcuts, hiddenShortcuts],
-  );
-  const hotkeyBindings = useMemo(
-    () => hotkeyPaths
-      .map((path) => ({ path, shortcut: shortcutHotkeys[path]?.trim() ?? "" }))
-      .filter((binding) => binding.shortcut.length > 0),
-    [hotkeyPaths, shortcutHotkeys],
-  );
-
   useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    void invoke<{
-      registered: number;
-      issues: Array<{ path: string; message: string }>;
-    }>("set_shortcut_hotkeys", { bindings: hotkeyBindings })
-      .then((result) => {
-        if (cancelled) return;
-        const issues: Record<string, string> = {};
-        for (const issue of result.issues) issues[issue.path] = issue.message;
-        setHotkeyIssues(issues);
-        if (result.issues.length > 0) {
-          setNotice(result.issues[0].message);
-        }
-      })
-      .catch(() => {
-        // 浏览器预览或原生命令尚未就绪时不影响列表。
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hotkeyBindings]);
-
-  useEffect(() => {
-    if (!recordingHotkeyPath) return;
+    if (!recordingPanelHotkey) return;
     const handler = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
       if (event.key === "Escape") {
-        setRecordingHotkeyPath(null);
+        setRecordingPanelHotkey(false);
         return;
       }
       if (event.repeat) return;
       const combo = formatShortcutFromEvent(event);
       if (!combo) {
-        setNotice("请至少按住 Ctrl、Alt、Shift 或 Win 之一，再按一个字母/数字/功能键。");
+        setPanelHotkeyError(t.assistant.panelHotkeyModifierRequired);
         return;
       }
-      setShortcutHotkeys((current) => {
-        const next = { ...current, [recordingHotkeyPath]: combo };
-        saveShortcutHotkeys(next);
-        return next;
-      });
-      setHotkeyIssues((current) => {
-        const next = { ...current };
-        delete next[recordingHotkeyPath];
-        return next;
-      });
-      setRecordingHotkeyPath(null);
-      setNotice(`已设置快捷键 ${combo}（按 Esc 可取消录入）`);
+      setRecordingPanelHotkey(false);
+      void invoke<string>("set_shortcut_panel_hotkey", { shortcut: combo })
+        .then((registered) => {
+          setPanelHotkey(registered);
+          saveShortcutPanelHotkey(registered);
+          setPanelHotkeyError("");
+          setNotice(t.assistant.panelHotkeySet(registered));
+        })
+        .catch((error) => setPanelHotkeyError(String(error)));
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [recordingHotkeyPath]);
+  }, [recordingPanelHotkey, t.assistant.panelHotkeyModifierRequired, t.assistant.panelHotkeySet]);
 
-  const clearShortcutHotkey = (path: string) => {
-    setShortcutHotkeys((current) => {
-      const next = { ...current };
-      delete next[path];
-      saveShortcutHotkeys(next);
-      return next;
-    });
-    setHotkeyIssues((current) => {
-      const next = { ...current };
-      delete next[path];
-      return next;
-    });
-    setNotice("已清除这个快捷方式的独立热键");
+  const clearPanelHotkey = () => {
+    if (!panelHotkey) return;
+    void invoke("set_shortcut_panel_hotkey", { shortcut: "" })
+      .then(() => {
+        setPanelHotkey("");
+        saveShortcutPanelHotkey("");
+        setPanelHotkeyError("");
+        setNotice(t.assistant.panelHotkeyCleared);
+      })
+      .catch((error) => setPanelHotkeyError(String(error)));
   };
 
   const clearAllShortcuts = () => {
@@ -5165,17 +5117,6 @@ function AssistantPanel() {
       ...discoveredShortcuts.map((shortcut) => shortcut.path),
     ]);
     persistCustomShortcuts([]);
-    setShortcutHotkeys((current) => {
-      const next = { ...current };
-      for (const path of [
-        ...discoveredShortcuts.map((shortcut) => shortcut.path),
-        ...customShortcuts.map((shortcut) => shortcut.path),
-      ]) {
-        delete next[path];
-      }
-      saveShortcutHotkeys(next);
-      return next;
-    });
     setClearAllArmed(false);
     setAdding(false);
     setNotice(t.assistant.clearAllDone(removableShortcutCount));
@@ -5233,7 +5174,6 @@ function AssistantPanel() {
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
         <div className="assistant-panel__section-meta">
-          <small>点 ⌨ 可给每个入口绑定独立全局热键，右键清除</small>
           {hiddenShortcuts.length > 0 && (
             <button
               type="button"
@@ -5254,6 +5194,30 @@ function AssistantPanel() {
             </button>
           )}
         </div>
+      </div>
+      <div className="assistant-panel__panel-hotkey">
+        <span className="assistant-panel__label">{t.assistant.panelHotkey}</span>
+        <button
+          type="button"
+          className={`assistant-panel__hotkey-button${recordingPanelHotkey ? " assistant-panel__hotkey-button--recording" : ""}${panelHotkeyError ? " assistant-panel__hotkey-button--error" : ""}`}
+          title={panelHotkeyError || t.assistant.panelHotkeyHint}
+          aria-label={t.assistant.panelHotkeyHint}
+          onClick={() => {
+            setPanelHotkeyError("");
+            setRecordingPanelHotkey(true);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            clearPanelHotkey();
+          }}
+        >
+          {recordingPanelHotkey
+            ? t.assistant.panelHotkeyRecording
+            : panelHotkey || t.assistant.panelHotkeyEmpty}
+        </button>
+        <small role={panelHotkeyError ? "alert" : undefined}>
+          {panelHotkeyError || t.assistant.panelHotkeyHint}
+        </small>
       </div>
       <div className="assistant-panel__grid">
         {actions.map((action) => (
@@ -5290,21 +5254,6 @@ function AssistantPanel() {
             </button>
             <button
               type="button"
-              className={`assistant-card__hotkey${recordingHotkeyPath === shortcut.path ? " assistant-card__hotkey--recording" : ""}${hotkeyIssues[shortcut.path] ? " assistant-card__hotkey--error" : ""}`}
-              title={hotkeyIssues[shortcut.path] ?? (shortcutHotkeys[shortcut.path] ? `${shortcutHotkeys[shortcut.path]}（右键清除）` : "点击设置独立全局热键")}
-              aria-label={`设置 ${shortcut.label} 的独立热键`}
-              onClick={() => setRecordingHotkeyPath(shortcut.path)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                clearShortcutHotkey(shortcut.path);
-              }}
-            >
-              {recordingHotkeyPath === shortcut.path
-                ? "请按键…"
-                : shortcutHotkeys[shortcut.path] ?? "⌨ 热键"}
-            </button>
-            <button
-              type="button"
               className="assistant-card__remove"
               title="从列表移除（不删除桌面文件）"
               aria-label={`从列表移除 ${shortcut.label}`}
@@ -5326,21 +5275,6 @@ function AssistantPanel() {
                 <strong title={shortcut.label}>{shortcut.label}</strong>
                 <small title={shortcut.path}>自定义快捷方式</small>
               </span>
-            </button>
-            <button
-              type="button"
-              className={`assistant-card__hotkey${recordingHotkeyPath === shortcut.path ? " assistant-card__hotkey--recording" : ""}${hotkeyIssues[shortcut.path] ? " assistant-card__hotkey--error" : ""}`}
-              title={hotkeyIssues[shortcut.path] ?? (shortcutHotkeys[shortcut.path] ? `${shortcutHotkeys[shortcut.path]}（右键清除）` : "点击设置独立全局热键")}
-              aria-label={`设置 ${shortcut.label} 的独立热键`}
-              onClick={() => setRecordingHotkeyPath(shortcut.path)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                clearShortcutHotkey(shortcut.path);
-              }}
-            >
-              {recordingHotkeyPath === shortcut.path
-                ? "请按键…"
-                : shortcutHotkeys[shortcut.path] ?? "⌨ 热键"}
             </button>
             <button
               type="button"
@@ -6472,12 +6406,40 @@ function IslandApp({
   }, []);
 
   const openIslandPage = useCallback((nextPage: IslandPage) => {
+    hidePetOverlay();
     setPage(nextPage);
     setMode("expanded");
     setIsTucked(false);
-  }, []);
+  }, [hidePetOverlay]);
 
-  
+  // 快捷面板只有一个系统级热键：打开整个快捷方式面板，而不是逐个启动应用。
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    const saved = loadShortcutPanelHotkey();
+    if (saved) {
+      void invoke<string>("set_shortcut_panel_hotkey", { shortcut: saved }).catch((error) => {
+        console.error("Failed to register shortcut panel hotkey", error);
+      });
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void listen("maltese-open-shortcut-panel", () => {
+      openIslandPage("assistant");
+    })
+      .then((cleanup) => {
+        if (cancelled) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch((error) => {
+        console.error("Failed to listen for shortcut panel hotkey", error);
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [openIslandPage]);
 
   const openMessages = useCallback((source: MessageSource) => {
     qqMail.closeReader();
@@ -7582,16 +7544,6 @@ function IslandApp({
       setActiveTodoId(null);
     }
   }, [activeTodoId, todos]);
-
-  // 快捷方式的独立热键在应用启动时就注册，不必先打开“快捷入口”页。
-  useEffect(() => {
-    if (!isTauri()) return;
-    const bindings = Object.entries(loadShortcutHotkeys())
-      .map(([path, shortcut]) => ({ path, shortcut }))
-      .filter((binding) => binding.shortcut.trim().length > 0);
-    if (bindings.length === 0) return;
-    void invoke("set_shortcut_hotkeys", { bindings }).catch(() => undefined);
-  }, []);
 
   useEffect(() => {
     if (didCheckDate.current) {

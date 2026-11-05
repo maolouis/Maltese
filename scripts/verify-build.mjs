@@ -137,6 +137,25 @@ try {
   fail(`插件系统检查失败：${error}`);
 }
 
+// 5.5 快捷面板热键：必须是“面板级”一个热键，而不是每个快捷方式一个。
+try {
+  const appSource = fs.readFileSync(path.join(root, "src/App.tsx"), "utf8");
+  const hotkeySource = fs.readFileSync(path.join(root, "src/shortcutPanelHotkey.ts"), "utf8");
+  const nativeSource = fs.readFileSync(path.join(root, "src-tauri/src/shortcut_hotkeys.rs"), "utf8");
+  if (!appSource.includes("set_shortcut_panel_hotkey") || !appSource.includes("maltese-open-shortcut-panel")) {
+    fail("快捷面板热键没有接入“打开整个快捷面板”的原生事件");
+  }
+  if (!hotkeySource.includes("maltese-shortcut-panel-hotkey") || !nativeSource.includes("maltese-open-shortcut-panel")) {
+    fail("快捷面板热键的存储键或原生事件名不一致");
+  }
+  if (appSource.includes("set_shortcut_hotkeys") || appSource.includes("assistant-card__hotkey")) {
+    fail("仍存在逐快捷方式热键的旧实现");
+  }
+  console.log("[verify] ✓ 快捷面板热键为面板级单热键");
+} catch (error) {
+  fail(`快捷面板热键检查失败：${error}`);
+}
+
 // 6. 版本号一致性
 try {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));

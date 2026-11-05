@@ -4934,43 +4934,57 @@ input,
   background: transparent;
   color: inherit;
   font: inherit;
-  padding: 10px 92px 10px 12px;
+  padding: 10px 32px 10px 12px;
   text-align: left;
   cursor: pointer;
 }
 
-.assistant-card__hotkey {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
-  max-width: 78px;
-  overflow: hidden;
-  padding: 2px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 8px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.assistant-panel__panel-hotkey {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.assistant-panel__panel-hotkey small {
+  flex: 1;
+  min-width: 180px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.assistant-panel__panel-hotkey small[role="alert"] {
+  color: #ffad98;
+}
+
+.assistant-panel__hotkey-button {
+  min-width: 116px;
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 216, 170, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 216, 170, 0.1);
+  color: #ffe7c8;
+  font: inherit;
+  font-size: 10.5px;
   cursor: pointer;
 }
 
-.assistant-card__hotkey:hover {
-  border-color: rgba(255, 216, 170, 0.5);
+.assistant-panel__hotkey-button:hover {
+  border-color: rgba(255, 216, 170, 0.6);
   background: rgba(255, 216, 170, 0.2);
   color: #fff;
 }
 
-.assistant-card__hotkey--recording {
+.assistant-panel__hotkey-button--recording {
   border-color: #ffcf9b;
   background: rgba(255, 184, 112, 0.28);
   color: #fff;
   animation: assistant-hotkey-pulse 900ms ease-in-out infinite;
 }
 
-.assistant-card__hotkey--error {
+.assistant-panel__hotkey-button--error {
   border-color: rgba(255, 120, 120, 0.75);
   color: #ffb4b4;
 }
@@ -5664,16 +5678,22 @@ input,
   color: #7c828f;
 }
 
-.island__expanded .assistant-card__hotkey {
-  right: 8px;
-  bottom: 8px;
-  border-color: #e1e4eb;
-  background: #eef0f5;
-  color: #7c828f;
+.island__expanded .assistant-panel__panel-hotkey small {
+  color: #8a909c;
 }
 
-.island__expanded .assistant-card__hotkey:hover,
-.island__expanded .assistant-card__hotkey--recording {
+.island__expanded .assistant-panel__panel-hotkey small[role="alert"] {
+  color: #c45c2e;
+}
+
+.island__expanded .assistant-panel__hotkey-button {
+  border-color: #e1e4eb;
+  background: #eef0f5;
+  color: #5f6672;
+}
+
+.island__expanded .assistant-panel__hotkey-button:hover,
+.island__expanded .assistant-panel__hotkey-button--recording {
   border-color: #f0b77b;
   background: #fff3e5;
   color: #9a5b1b;

@@ -255,6 +255,13 @@ export type Translations = {
     clearAllConfirm: string;
     clearAllHint: (count: number) => string;
     clearAllDone: (count: number) => string;
+    panelHotkey: string;
+    panelHotkeyHint: string;
+    panelHotkeyRecording: string;
+    panelHotkeyEmpty: string;
+    panelHotkeySet: (shortcut: string) => string;
+    panelHotkeyCleared: string;
+    panelHotkeyModifierRequired: string;
   };
 
   petGifs: {
