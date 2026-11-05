@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.2.5-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.2.6-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -62,9 +62,10 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
   - 可在微信来源右侧的 OCR 按钮或设置中关闭。
 - **QQ 邮箱**：岛内阅读邮件正文并返回列表。
 
-### 桌宠聊天（DSH）
+### 桌宠聊天（DSH / 本地模型）
 
 - 展开面板切到 **聊天**，通过本机 DSH CLI 的 `headless` profile 对话。
+- **本地模型**：点击聊天右上角的模型设置，可切换到 Ollama / LM Studio / llama.cpp 等 OpenAI 兼容接口，填写服务地址和模型名即可；内容只在本机流转。
 - 支持多轮会话、Enter 发送、Shift+Enter 换行、清空对话；聊天记录只保存在本机 `localStorage`。
 - 自动探测 DSH CLI；也可用 `MALTESE_DSH_CLI` 指定 `dsh.cmd` 路径。
 - 实现与排错见 [docs/pet-chat.md](docs/pet-chat.md)。

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
+import { LocalChatSettings } from "./LocalChatSettings";
 import { UpdatePanel } from "./UpdatePanel";
 import "./SettingsWindow.css";
 
@@ -404,6 +405,11 @@ export default function SettingsWindow() {
       <section className="sw-card">
         <h2>其他</h2>
         <Switch label="随机闲逛" hint="空闲时小狗在桌面慢慢挪一小步" checked={settings.roam} onChange={(value) => update("roam", value)} />
+      </section>
+
+      <section className="sw-card">
+        <h2>聊天模型</h2>
+        <LocalChatSettings embedded />
       </section>
 
       <section className="sw-card">

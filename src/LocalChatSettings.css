@@ -1,0 +1,217 @@
+.local-chat-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: 0 0 auto;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid rgba(20, 24, 35, 0.09);
+  border-radius: 12px;
+  background: #fbfbfd;
+  color: #2a2e37;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 24, 35, 0.16) transparent;
+}
+
+.local-chat-settings--embedded {
+  max-height: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.local-chat-settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.local-chat-settings__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #4a505b;
+}
+
+.local-chat-settings__close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #8b919d;
+  cursor: pointer;
+}
+
+.local-chat-settings__close:hover {
+  background: rgba(20, 24, 35, 0.07);
+  color: #3c424d;
+}
+
+.local-chat-settings__backends {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f0f1f5;
+}
+
+.local-chat-settings__backends button {
+  min-height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #737a86;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.local-chat-settings__backends button.is-active {
+  background: #ffffff;
+  color: #343a45;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(20, 24, 35, 0.1);
+}
+
+.local-chat-settings__presets {
+  display: flex;
+  gap: 6px;
+}
+
+.local-chat-settings__presets button {
+  min-height: 23px;
+  padding: 2px 8px;
+  border: 1px solid rgba(20, 24, 35, 0.1);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #5f6673;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.local-chat-settings__presets button:hover {
+  border-color: #e5b184;
+  color: #a65f1d;
+}
+
+.local-chat-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  color: #626a77;
+}
+
+.local-chat-settings__field input {
+  width: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid rgba(20, 24, 35, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #2a2e37;
+  font: inherit;
+  font-size: 11px;
+}
+
+.local-chat-settings__field input:focus-visible {
+  outline: 2px solid #f0a04b;
+  outline-offset: 1px;
+}
+
+.local-chat-settings__hint {
+  margin: 0;
+  color: #8a919d;
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.local-chat-settings__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.local-chat-settings__test {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid #e6c49f;
+  border-radius: 8px;
+  background: #fff8ef;
+  color: #a65f1d;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.local-chat-settings__test:hover:not(:disabled) {
+  background: #fff0dc;
+}
+
+.local-chat-settings__test:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.local-chat-settings__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.local-chat-settings__status.is-ok {
+  color: #3f8059;
+}
+
+.local-chat-settings__status.is-error {
+  color: #a33a2a;
+}
+
+.local-chat-settings__spin {
+  animation: local-chat-spin 900ms linear infinite;
+}
+
+@keyframes local-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.local-chat-settings__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.local-chat-settings__done {
+  min-height: 26px;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #f0a04b;
+  color: #ffffff;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.local-chat-settings__done:hover {
+  background: #e08f3b;
+}

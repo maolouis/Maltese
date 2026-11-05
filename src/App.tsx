@@ -1305,7 +1305,10 @@ export function IslandShell({
     setSystemIdleSeconds(0);
     setNowTick(Date.now());
   }, []);
+  // 只有收起态才进入睡眠缩边。展开面板/聊天时如果仍按系统闲置判断睡眠，
+  // 每次打开都会被睡眠 effect 立刻重新缩回去，表现为“点了没反应”。
   const restingAsleep =
+    mode === "collapsed" &&
     petState === "idle" &&
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;

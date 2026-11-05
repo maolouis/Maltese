@@ -1,15 +1,15 @@
 {
-  "version": "1.2.5",
-  "notes": "# Maltese v1.2.5\n\n## 修复\n\n- **收起或右键后不再残留半截气泡**\n  - 浮层的打开/关闭请求现在带递增 generation 并按顺序执行；快速收起、重新弹出时，迟到的旧请求不会再把新气泡的窗口缩回去。\n  - 修复气泡已经渲染、主窗口却仍停在收起尺寸，导致只看到一条白色边或半个气泡的问题。\n- **待办提醒不再重复弹气泡**\n  - 修正「开始计时」提示的清理逻辑：收起、缩边、睡觉不再让同一个待办反复弹提示。\n  - 这也避免了睡觉时反复出现气泡、遮住趴睡状态。\n- **睡觉功能恢复**\n  - 悬停面板里的「让小狗睡觉」现在会真正缩到最近的屏幕边缘并保持趴睡，鼠标靠近才醒。\n  - 手动放在屏幕上方的桌宠睡觉时不再突然跳到屏幕底部缩边，而是从上方缩边并翻转露头。\n  - 缩边方向按小狗实际位置选择最近的边缘。\n\n## 验证\n\n- `pnpm build`（含 `tsc --noEmit`）通过。\n- `node --test tests/*.test.mjs`：34 项全部通过。\n- `cargo test`：71 项通过，9 项忽略。\n- 实机验证：屏幕上方的桌宠睡觉后从上方缩边；悬停面板睡觉按钮保持趴睡；收起后无残留气泡。",
-  "pub_date": "2026-11-05T08:45:12Z",
+  "version": "1.2.6",
+  "notes": "# Maltese v1.2.6\n\n## 聊天接入本地模型\n\n- 聊天页右上角新增「聊天模型」设置，可在 DSH 和本地模型之间切换。\n- 兼容 Ollama、LM Studio、llama.cpp 等提供 OpenAI Chat Completions 接口的服务：\n  - 支持填写服务地址、模型名称和可选 API Key；\n  - 「测试连接」会读取 `/v1/models`，显示发现的模型并提供输入建议；\n  - 接口地址可填服务根地址，程序会自动补齐 `/v1`。\n- 本地模型对话携带最近 16 条聊天记录，内容只在本机与所填服务之间流转。\n- 聊天记录和本地模型配置都只保存在本机；DSH 原有行为保持不变。\n\n## 修复\n\n- 修复系统闲置后打开面板/聊天会被睡眠逻辑立刻重新缩回的问题。睡眠现在只在收起态生效，展开聊天或面板时不会被打断。\n- 聊天页保留 v1.2.5 的气泡与睡觉缩边修复。\n\n## 验证\n\n- `pnpm build`（含 `tsc --noEmit`）通过。\n- `node --test tests/*.test.mjs`：34 项全部通过。\n- `cargo test`：74 项通过，9 项忽略。\n- 用本地 OpenAI 兼容 mock 服务实测：测试连接返回模型列表；聊天消息成功返回本地模型回复。",
+  "pub_date": "2026-11-05T10:23:02Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0JWSGtPOFdENjAyb3RhaEdXTjlxRytGd2E3dTN1SGFzbHVvTThNdEc3QkdBb3dWRzRYemtSQVNrNmhvWmtDR2VkR3lTd3VORmwxd3JvTHlrb1M5ZFFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODY4MzEyCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjVfeDY0LXNldHVwLmV4ZQpzYnNwYzF2OW80Mmt6a1JXV0hRSFdXQnVqZjRSQ3BQNFR4TDFmRVR5OTZISHVCdVFvVjFJdS9UZGtaTVZRRksvVXV2L3lvMUhQbnNyd1BXejFYSWxBUT09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.5/Maltese-1.2.5-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0I5MmhlNHIrTW52ci8ybTM1ZldWaUQ5dlJnNStURUFMZHhYUEtSWDdXNGR1N2FyWnJybHpLVDFhL2cyVHNVOW1UcW9FM3cycjA0YU10SWlvME40dUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODc0MTgyCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjZfeDY0LXNldHVwLmV4ZQoySmFJWXFSWWRUaTRRYlpJL0pZT1JVWnN6SUtDQzhKd3dqK05jUUcyNDhPK1k5YS9lT3RFMnVqd20ySU00YmY2UHpCS1lDUFM2OXpBcGxpbTZGQWZDdz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.6/Maltese-1.2.6-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0JWSGtPOFdENjAyb3RhaEdXTjlxRytGd2E3dTN1SGFzbHVvTThNdEc3QkdBb3dWRzRYemtSQVNrNmhvWmtDR2VkR3lTd3VORmwxd3JvTHlrb1M5ZFFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODY4MzEyCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjVfeDY0LXNldHVwLmV4ZQpzYnNwYzF2OW80Mmt6a1JXV0hRSFdXQnVqZjRSQ3BQNFR4TDFmRVR5OTZISHVCdVFvVjFJdS9UZGtaTVZRRksvVXV2L3lvMUhQbnNyd1BXejFYSWxBUT09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.5/Maltese-1.2.5-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0I5MmhlNHIrTW52ci8ybTM1ZldWaUQ5dlJnNStURUFMZHhYUEtSWDdXNGR1N2FyWnJybHpLVDFhL2cyVHNVOW1UcW9FM3cycjA0YU10SWlvME40dUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODc0MTgyCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjZfeDY0LXNldHVwLmV4ZQoySmFJWXFSWWRUaTRRYlpJL0pZT1JVWnN6SUtDQzhKd3dqK05jUUcyNDhPK1k5YS9lT3RFMnVqd20ySU00YmY2UHpCS1lDUFM2OXpBcGxpbTZGQWZDdz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.6/Maltese-1.2.6-x64-setup.exe"
     }
   }
 }

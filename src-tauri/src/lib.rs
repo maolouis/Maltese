@@ -4,6 +4,7 @@ mod netease;
 mod desktop_extras;
 mod dsh_api;
 mod dsh_chat;
+mod local_chat;
 mod icons;
 mod lyrics;
 mod media_control;
@@ -3241,6 +3242,8 @@ pub fn run() {
             wechat_reminders::set_wechat_reminders_enabled,
             wechat_reminders::set_wechat_read_content,
             dsh_chat::dsh_chat,
+            local_chat::local_chat,
+            local_chat::local_chat_models,
             wechat_reminders::open_wechat,
             qq_notifications::get_qq_notification_state,
             qq_notifications::set_qq_notifications_enabled,

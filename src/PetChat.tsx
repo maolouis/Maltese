@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { LoaderCircle, Send, Sparkles, Trash2 } from "lucide-react";
+import { LoaderCircle, Send, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { useTranslation } from "./i18n";
+import { LocalChatSettings } from "./LocalChatSettings";
+import {
+  loadLocalChatConfig,
+  LOCAL_CHAT_UPDATED_EVENT,
+  type LocalChatConfig,
+} from "./localChat";
 import "./PetChat.css";
 
 type DshChatReply = { text: string; sessionId: string | null };
@@ -52,6 +58,8 @@ export function PetChat() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chatConfig, setChatConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
+  const [showModelSettings, setShowModelSettings] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -60,6 +68,16 @@ export function PetChat() {
       list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
     }
   }, [messages, busy]);
+
+  useEffect(() => {
+    const sync = () => setChatConfig(loadLocalChatConfig());
+    window.addEventListener("storage", sync);
+    window.addEventListener(LOCAL_CHAT_UPDATED_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(LOCAL_CHAT_UPDATED_EVENT, sync);
+    };
+  }, []);
 
   const persist = useCallback((next: ChatMessage[]) => {
     const trimmed = next.slice(-MAX_MESSAGES);
@@ -78,6 +96,11 @@ export function PetChat() {
       setError(t.chat.desktopOnly);
       return;
     }
+    if (chatConfig.backend === "local" && !chatConfig.model.trim()) {
+      setError(t.chat.modelNotConfigured);
+      setShowModelSettings(true);
+      return;
+    }
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
@@ -90,20 +113,35 @@ export function PetChat() {
     setError(null);
     setBusy(true);
     try {
-      const reply = await invoke<DshChatReply>("dsh_chat", {
-        message: text,
-        sessionId,
-      });
-      if (reply.sessionId) {
-        setSessionId(reply.sessionId);
-        window.localStorage.setItem(SESSION_KEY, reply.sessionId);
+      let replyText: string;
+      if (chatConfig.backend === "local") {
+        replyText = await invoke<string>("local_chat", {
+          baseUrl: chatConfig.baseUrl,
+          model: chatConfig.model,
+          apiKey: chatConfig.apiKey.trim() || null,
+          message: text,
+          history: messages.slice(-16).map((message) => ({
+            role: message.role,
+            content: message.text,
+          })),
+        });
+      } else {
+        const reply = await invoke<DshChatReply>("dsh_chat", {
+          message: text,
+          sessionId,
+        });
+        if (reply.sessionId) {
+          setSessionId(reply.sessionId);
+          window.localStorage.setItem(SESSION_KEY, reply.sessionId);
+        }
+        replyText = reply.text;
       }
       persist([
         ...next,
         {
           id: createId(),
           role: "assistant",
-          text: reply.text,
+          text: replyText,
           at: Date.now(),
         },
       ]);
@@ -112,7 +150,19 @@ export function PetChat() {
     } finally {
       setBusy(false);
     }
-  }, [busy, draft, messages, persist, sessionId, t.chat.desktopOnly]);
+  }, [
+    busy,
+    chatConfig.apiKey,
+    chatConfig.backend,
+    chatConfig.baseUrl,
+    chatConfig.model,
+    draft,
+    messages,
+    persist,
+    sessionId,
+    t.chat.desktopOnly,
+    t.chat.modelNotConfigured,
+  ]);
 
   const clear = useCallback(() => {
     persist([]);
@@ -128,20 +178,42 @@ export function PetChat() {
           <span className="pet-chat__spark"><Sparkles size={15} strokeWidth={1.9} /></span>
           <div>
             <strong>{t.chat.title}</strong>
-            <small>{busy ? t.chat.thinking : t.chat.hint}</small>
+            <small>
+              {busy
+                ? t.chat.thinking
+                : chatConfig.backend === "local"
+                  ? t.chat.modelBadgeLocal(chatConfig.model)
+                  : t.chat.hint}
+            </small>
           </div>
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          title={t.chat.clear}
-          aria-label={t.chat.clear}
-          disabled={busy || messages.length === 0}
-          onClick={clear}
-        >
-          <Trash2 size={15} strokeWidth={1.8} />
-        </button>
+        <div className="pet-chat__header-actions">
+          <button
+            className={`pet-chat__model-toggle${showModelSettings ? " is-active" : ""}`}
+            type="button"
+            title={t.chat.modelSettings}
+            aria-label={t.chat.modelSettings}
+            aria-expanded={showModelSettings}
+            onClick={() => setShowModelSettings((open) => !open)}
+          >
+            <Settings2 size={15} strokeWidth={1.8} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title={t.chat.clear}
+            aria-label={t.chat.clear}
+            disabled={busy || messages.length === 0}
+            onClick={clear}
+          >
+            <Trash2 size={15} strokeWidth={1.8} />
+          </button>
+        </div>
       </header>
+
+      {showModelSettings && (
+        <LocalChatSettings onClose={() => setShowModelSettings(false)} />
+      )}
 
       <div className="pet-chat__list" ref={listRef} role="log" aria-live="polite">
         {messages.length === 0 && (

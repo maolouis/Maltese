@@ -25,6 +25,27 @@ export type Translations = {
     clear: string;
     thinking: string;
     desktopOnly: string;
+    modelSettings: string;
+    modelBackend: string;
+    modelDsh: string;
+    modelDshHint: string;
+    modelLocal: string;
+    modelLocalHint: string;
+    modelBaseUrl: string;
+    modelBaseUrlHint: string;
+    modelName: string;
+    modelNamePlaceholder: string;
+    modelApiKey: string;
+    modelApiKeyHint: string;
+    modelPresetOllama: string;
+    modelPresetLmStudio: string;
+    modelTest: string;
+    modelTesting: string;
+    modelTestOk: (count: number) => string;
+    modelTestEmpty: string;
+    modelClose: string;
+    modelNotConfigured: string;
+    modelBadgeLocal: (model: string) => string;
   };
   messages: {
     title: string;

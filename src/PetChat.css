@@ -35,6 +35,32 @@
   color: #c4772e;
 }
 
+.pet-chat__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.pet-chat__model-toggle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #7c828f;
+  cursor: pointer;
+}
+
+.pet-chat__model-toggle:hover,
+.pet-chat__model-toggle.is-active {
+  background: #fff2e2;
+  color: #a65f1d;
+}
+
 .pet-chat__heading strong {
   display: block;
   font-size: 13px;
