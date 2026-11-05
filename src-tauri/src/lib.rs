@@ -9,6 +9,8 @@ mod lyrics;
 mod media_control;
 mod messenger_activation;
 mod notification_diagnostics;
+mod pet_gifs;
+mod plugins;
 mod qq_notifications;
 mod qq_mail;
 mod wechat_reminder_source;
@@ -16,6 +18,7 @@ mod wechat_ocr;
 mod wechat_reminders;
 mod translation;
 mod wake_shortcut;
+mod shortcut_hotkeys;
 mod video_automation;
 
 use serde::{Deserialize, Serialize};
@@ -1160,6 +1163,43 @@ fn discover_shortcuts() -> Result<Vec<DiscoveredShortcut>, String> {
     Ok(discovered)
 }
 
+fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
+    let extension = canonical_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "ps1" => {
+            let mut command = Command::new("powershell.exe");
+            command
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(canonical_path);
+            spawn_detached(command)
+        }
+        "py" => {
+            let mut command = Command::new("py.exe");
+            command.arg(canonical_path);
+            spawn_detached(command)
+        }
+        "bat" | "cmd" | "lnk" | "url" => {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/C", "start", "", canonical_path.to_string_lossy().as_ref()]);
+            spawn_detached(command)
+        }
+        _ => spawn_detached(Command::new(canonical_path)),
+    }
+}
+
+/// 打开用户明确指定的入口。桌面发现的入口走白名单校验；
+/// 自定义快捷方式和用户为快捷方式绑定的全局热键走这里。
+pub(crate) fn launch_shortcut_path(path: PathBuf) -> Result<(), String> {
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("无法读取快捷入口：{error}"))?;
+    launch_canonical_path(&canonical_path)
+}
+
 #[tauri::command]
 fn launch_discovered_shortcut(path: String) -> Result<(), String> {
     let requested = PathBuf::from(path.trim());
@@ -1168,25 +1208,14 @@ fn launch_discovered_shortcut(path: String) -> Result<(), String> {
     if !allowed {
         return Err("只能打开自动发现目录中的入口。".to_string());
     }
-    let extension = canonical_path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
-    match extension.as_str() {
-        "ps1" => {
-            let mut command = Command::new("powershell.exe");
-            command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(canonical_path);
-            spawn_detached(command)
-        }
-        "py" => {
-            let mut command = Command::new("py.exe");
-            command.arg(canonical_path);
-            spawn_detached(command)
-        }
-        "bat" | "cmd" | "lnk" => {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/C", "start", "", canonical_path.to_string_lossy().as_ref()]);
-            spawn_detached(command)
-        }
-        _ => spawn_detached(Command::new(canonical_path)),
-    }
+    launch_canonical_path(&canonical_path)
+}
+
+/// 自定义快捷方式允许任意本机路径（由用户主动添加），
+/// 不复用“只能打开自动发现目录”的限制。
+#[tauri::command]
+fn launch_custom_shortcut(path: String) -> Result<(), String> {
+    launch_shortcut_path(PathBuf::from(path.trim()))
 }
 
 fn common_scripts_directory() -> PathBuf {
@@ -2313,7 +2342,20 @@ fn apply_stage_geometry(
     };
     let mut positioned_state = state;
     if !has_custom_monitor {
-        positioned_state.custom_position = None;
+        // 多屏切换或 DPI 变化时，按旧坐标找显示器可能失败。过去这里直接
+        // 丢弃 custom_position，结果固定在右下角的小狗会突然回到屏幕中央
+        // （看起来像往左上方漂）。现在保留用户位置，并夹到当前显示器工作区。
+        if let Some(position) = state.custom_position {
+            let slot_w = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+            let slot_h = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
+            let work = monitor.work_area();
+            let max_x = work.position.x + work.size.width as i32 - slot_w;
+            let max_y = work.position.y + work.size.height as i32 - slot_h;
+            positioned_state.custom_position = Some(IslandPosition {
+                x: position.x.clamp(work.position.x, max_x.max(work.position.x)),
+                y: position.y.clamp(work.position.y, max_y.max(work.position.y)),
+            });
+        }
     }
     // 小狗在收起态几何下的锚点（展开窗口时小狗保持不动，面板朝空闲的一侧长）。
     let slot_w_phys = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
@@ -2629,6 +2671,15 @@ fn resolve_stage_position(
 }
 
 fn record_dragged_position(position: PhysicalPosition<i32>) {
+    // 浮层展开时窗口会主动改变尺寸/位置；这些 Moved 事件不是用户拖拽，
+    // 绝不能写进 custom_position，否则关闭浮层后小狗会留下左上偏移。
+    if OVERLAY_SNAPSHOT
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+    {
+        return;
+    }
     mutate_window_state(|state| {
         if state.is_dragging && !state.is_tucked {
             state.custom_position = Some(IslandPosition {
@@ -3129,6 +3180,7 @@ pub fn run() {
                 eprintln!("failed to initialize clipboard history: {error}");
             }
             wake_shortcut::init(app.handle());
+            shortcut_hotkeys::init(app.handle());
             video_automation::init(app.handle());
             dsh_api::init(app.handle());
             if let Err(error) = qq_mail::init(app.handle()) {
@@ -3199,6 +3251,7 @@ pub fn run() {
             launch_tool,
             discover_shortcuts,
             launch_discovered_shortcut,
+            launch_custom_shortcut,
             list_common_scripts,
             run_common_script,
             get_updater_proxy,
@@ -3236,6 +3289,14 @@ pub fn run() {
             translation::translate_text,
             translation::set_translation_shortcut,
             wake_shortcut::set_wake_shortcut,
+            shortcut_hotkeys::set_shortcut_hotkeys,
+            plugins::list_plugins,
+            plugins::install_plugin,
+            plugins::remove_plugin,
+            plugins::open_plugins_directory,
+            plugins::run_plugin_action,
+            pet_gifs::add_pet_gif,
+            pet_gifs::remove_pet_gif,
             video_automation::get_video_automation_state,
             video_automation::set_video_automation_config,
             video_automation::start_video_automation,

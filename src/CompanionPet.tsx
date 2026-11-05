@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
+import { rotationFramesForState, usePetGifRotationConfig } from "./petGifRotation";
+import { usePetGifRotation } from "./usePetGifRotation";
 import "./DesktopExtras.css";
 
 type PetLook = {
@@ -29,6 +31,11 @@ function readLook(): PetLook {
 // 陪玩狗：独立透明窗口里的一只小狗，可拖动、可摸头。
 export default function CompanionPet() {
   const [look, setLook] = useState<PetLook>(readLook);
+  const gifRotationConfig = usePetGifRotationConfig();
+  const gifSrc = usePetGifRotation(
+    rotationFramesForState(gifRotationConfig, "idle"),
+    { intervalMs: 11_000 },
+  );
   const [squash, setSquash] = useState(false);
   const pressRef = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
 
@@ -88,7 +95,7 @@ export default function CompanionPet() {
       }}
     >
       <img
-        src="/assets/pets/idle/1.gif"
+        src={gifSrc}
         alt=""
         draggable={false}
         style={{

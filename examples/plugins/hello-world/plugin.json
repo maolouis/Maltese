@@ -1,0 +1,23 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "description": "Maltese 最小插件示例：点击按钮弹出一个问候窗口。",
+  "author": "Maltese",
+  "homepage": "https://github.com/maolouis/Maltese",
+  "actions": [
+    {
+      "id": "say-hello",
+      "label": "打招呼",
+      "description": "用 PowerShell 弹出一个 Hello World 窗口",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${pluginDir}\\hello.ps1"
+      ]
+    }
+  ]
+}

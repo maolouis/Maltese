@@ -205,6 +205,7 @@ export type Translations = {
     layoutEditor: string;
     chat: string;
     video: string;
+    plugins: string;
   };
 
   agent: {
@@ -254,6 +255,57 @@ export type Translations = {
     clearAllConfirm: string;
     clearAllHint: (count: number) => string;
     clearAllDone: (count: number) => string;
+  };
+
+  petGifs: {
+    title: string;
+    subtitle: string;
+    expression: string;
+    count: (count: number) => string;
+    add: string;
+    addHint: string;
+    empty: string;
+    reorderHint: string;
+    moveUp: string;
+    moveDown: string;
+    delete: string;
+    reset: string;
+    builtin: string;
+    custom: string;
+    addFailed: string;
+    notGif: string;
+    tooLarge: string;
+    deleteFailed: string;
+    order: (index: number) => string;
+    states: Record<string, string>;
+  };
+
+  plugins: {
+    title: string;
+    subtitle: string;
+    builtin: string;
+    installPlaceholder: string;
+    install: string;
+    openDirectory: string;
+    refresh: string;
+    empty: string;
+    emptyHint: string;
+    actions: string;
+    noActions: string;
+    run: string;
+    running: string;
+    remove: string;
+    removeConfirm: string;
+    enable: string;
+    disable: string;
+    disabled: string;
+    installed: (name: string) => string;
+    installFailed: string;
+    loadFailed: string;
+    security: string;
+    openVideo: string;
+    version: string;
+    by: string;
   };
 
   music: {
@@ -433,7 +485,6 @@ export type Translations = {
 
     todo: {
       title: string;
-      carryOverIncomplete: string;
       rotateTodos: string;
       rotationSeconds: string;
       reminderMinutes: string;

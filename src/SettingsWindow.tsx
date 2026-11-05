@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
+import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import "./SettingsWindow.css";
 
 const STORAGE_KEY = "focusd-island-settings";
@@ -304,6 +305,8 @@ export default function SettingsWindow() {
           <Slider label="跟随宠大小" value={settings.cursorPetSize} min={30} max={180} step={1} suffix="px" onChange={(value) => update("cursorPetSize", value)} />
         )}
       </section>
+
+      <PetGifRotationSettings />
 
       <section className="sw-card">
         <h2>气泡与声音</h2>

@@ -1,6 +1,6 @@
 [package]
 name = "maltese-assistant"
-version = "1.1.9"
+version = "1.2.0"
 description = "A line-dog desktop assistant for Windows."
 authors = ["you"]
 edition = "2021"
@@ -37,7 +37,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "for
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"

@@ -55,7 +55,52 @@ if (missing.length > 0) {
   console.log(`[verify] ✓ 桌宠素材完整（${referenced.size} 个路径）`);
 }
 
-// 3. 构建产物检查
+// 3. GIF 轮播检查：主狗、陪玩狗、鼠标跟随狗都必须接入共享轮播 hook，
+// 且闲置素材必须真的有多张；否则回归时“主狗不动/其他狗不轮播”很难发现。
+try {
+  const carouselSources = [
+    ["src/App.tsx", "主狗"],
+    ["src/CompanionPet.tsx", "陪玩狗"],
+    ["src/CursorPet.tsx", "鼠标跟随狗"],
+  ];
+  for (const [file, label] of carouselSources) {
+    const source = fs.readFileSync(path.join(root, file), "utf8");
+    if (!source.includes("usePetGifRotation") || !source.includes("rotationFramesForState")) {
+      fail(`${label}没有接入 GIF 轮播（${file}）`);
+    }
+  }
+  const hookSource = fs.readFileSync(path.join(root, "src/usePetGifRotation.ts"), "utf8");
+  if (!hookSource.includes("setInterval")) {
+    fail("GIF 轮播 hook 没有周期性切换逻辑");
+  }
+  const rotationSource = fs.readFileSync(path.join(root, "src/petGifRotation.ts"), "utf8");
+  if (
+    !rotationSource.includes("maltese-pet-gif-rotation") ||
+    !rotationSource.includes("convertFileSrc")
+  ) {
+    fail("GIF 轮播顺序/自定义素材模块不完整");
+  }
+  const settingsSource = fs.readFileSync(path.join(root, "src/SettingsWindow.tsx"), "utf8");
+  if (!settingsSource.includes("PetGifRotationSettings")) {
+    fail("设置窗口没有表情轮播顺序设置入口");
+  }
+  const petGifBackend = fs.readFileSync(path.join(root, "src-tauri/src/pet_gifs.rs"), "utf8");
+  if (!petGifBackend.includes("add_pet_gif") || !petGifBackend.includes("remove_pet_gif")) {
+    fail("Rust 端缺少自定义 GIF 的添加/删除命令");
+  }
+  const idleAssets = fs
+    .readdirSync(path.join(petDir, "idle"))
+    .filter((name) => name.toLowerCase().endsWith(".gif"));
+  if (!fs.existsSync(path.join(petDir, "idle.gif")) || idleAssets.length < 2) {
+    fail(`闲置 GIF 变体不足，无法轮播（根图 ${fs.existsSync(path.join(petDir, "idle.gif")) ? "有" : "无"} / 子图 ${idleAssets.length} 张）`);
+  } else {
+    console.log(`[verify] ✓ GIF 轮播已接入主狗、陪玩狗、鼠标跟随狗（闲置变体 ${idleAssets.length + 1} 张）`);
+  }
+} catch (error) {
+  fail(`GIF 轮播检查失败：${error}`);
+}
+
+// 4. 构建产物检查
 const dist = path.join(root, "dist");
 if (built) {
   for (const file of ["index.html", "assets"]) {
@@ -71,10 +116,34 @@ if (built) {
   }
 }
 
-// 4. 版本号一致性
+// 5. 插件系统检查：示例清单必须可解析，内置刷视频必须仍在插件列表里。
+
+try {
+  const example = JSON.parse(
+    fs.readFileSync(path.join(root, "examples/plugins/hello-world/plugin.json"), "utf8"),
+  );
+  if (!example.id || !example.name || !Array.isArray(example.actions) || example.actions.length === 0) {
+    fail("示例插件 plugin.json 缺少 id/name/actions");
+  }
+  const pluginSource = fs.readFileSync(path.join(root, "src-tauri/src/plugins.rs"), "utf8");
+  if (!pluginSource.includes("video-automation") || !pluginSource.includes("run_plugin_action")) {
+    fail("插件系统没有包含内置刷视频或动作执行入口");
+  }
+  if (!fs.existsSync(path.join(root, "docs/plugins.md"))) {
+    fail("缺少插件开发文档 docs/plugins.md");
+  }
+  console.log("[verify] ✓ 插件系统与示例清单正常");
+} catch (error) {
+  fail(`插件系统检查失败：${error}`);
+}
+
+// 6. 版本号一致性
 try {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const conf = JSON.parse(fs.readFileSync(path.join(root, "src-tauri/tauri.conf.json"), "utf8"));
+  if (!conf.app?.security?.assetProtocol?.enable) {
+    fail("未启用 assetProtocol，设置窗口无法预览应用数据目录里的自定义 GIF");
+  }
   const cargo = fs.readFileSync(path.join(root, "src-tauri/Cargo.toml"), "utf8");
   const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
   if (pkg.version !== conf.version || pkg.version !== cargoVersion) {

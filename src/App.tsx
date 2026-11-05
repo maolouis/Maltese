@@ -62,12 +62,21 @@ import {
 import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
-import { PET_GIF_VARIANTS, resolvePetGif } from "./petAssets";
+import { resolvePetGif } from "./petAssets";
+import { rotationFramesForState, usePetGifRotationConfig } from "./petGifRotation";
+import { usePetGifRotation } from "./usePetGifRotation";
 import { UpdatePanel } from "./UpdatePanel";
 import { PetChat } from "./PetChat";
+import { PluginsPanel } from "./PluginsPanel";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
+import {
+  formatShortcutFromEvent,
+  loadShortcutHotkeys,
+  saveShortcutHotkeys,
+  type ShortcutHotkeyMap,
+} from "./shortcutHotkeys";
 import { MediaWaveform } from "./MediaWaveform";
 import {
   LOCALE_CODES,
@@ -278,7 +287,6 @@ type IslandSettings = {
   showTitle: boolean;
   showCollapsedText: boolean;
   showIdleTodoCount: boolean;
-  carryOverIncompleteTodos: boolean;
   rotateTodos: boolean;
   todoRotationSeconds: number;
   todoReminderMinutes: number;
@@ -505,7 +513,6 @@ const DEFAULT_SETTINGS: IslandSettings = {
   showTitle: false,
   showCollapsedText: true,
   showIdleTodoCount: true,
-  carryOverIncompleteTodos: false,
   rotateTodos: false,
   todoRotationSeconds: 5,
   todoReminderMinutes: 30,
@@ -758,10 +765,7 @@ function normalizeSettings(
       typeof settings?.showIdleTodoCount === "boolean"
         ? settings.showIdleTodoCount
         : DEFAULT_SETTINGS.showIdleTodoCount,
-    carryOverIncompleteTodos:
-      typeof settings?.carryOverIncompleteTodos === "boolean"
-        ? settings.carryOverIncompleteTodos
-        : DEFAULT_SETTINGS.carryOverIncompleteTodos,
+    // 未完成的待办永远保留，不再由“自动写入下一天”开关控制。
     rotateTodos: settings?.rotateTodos === true,
     todoRotationSeconds: typeof settings?.todoRotationSeconds === "number" && Number.isFinite(settings.todoRotationSeconds)
       ? clamp(Math.round(settings.todoRotationSeconds), 1, 3_600)
@@ -1266,7 +1270,7 @@ export function IslandShell({
   const isLiquidGlass = appearanceMode === "liquidGlass";
   const petSlotWidth = Math.max(148, 152 * collapsedScale + 16);
   const petSlotHeight = Math.max(124, 128 * collapsedScale + 16);
-  const [petGifSrc, setPetGifSrc] = useState<string>(() => resolvePetGif(petState));
+  const gifRotationConfig = usePetGifRotationConfig();
   const [petSquash, setPetSquash] = useState(false);
   // 参考 LineDogPet：只有整个系统闲置一段时间才睡觉，用户一动键鼠立刻醒。
   const [systemIdleSeconds, setSystemIdleSeconds] = useState(0);
@@ -1301,6 +1305,16 @@ export function IslandShell({
     petState === "idle" &&
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
+  // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
+  const carouselFrames = rotationFramesForState(gifRotationConfig, petState);
+  const petCarouselSrc = usePetGifRotation(carouselFrames, {
+    intervalMs: 10_000,
+    enabled: !(petState === "idle" && (restingAsleep || isTucked)),
+  });
+  const displayedPetGifSrc =
+    petState === "idle" && (restingAsleep || isTucked)
+      ? SLEEPING_FRAME
+      : petCarouselSrc;
   // 睡眠缩边与全屏避让共用 isTucked，必须记住“这次是谁缩的边”。
   // 否则全屏避让缩边后会被睡眠逻辑立刻展开，反之亦然，表现为边缘频闪。
   const sleepTuckedRef = useRef(false);
@@ -1358,24 +1372,7 @@ export function IslandShell({
       onOverlayClose();
     }
   }, [collapsedScale, overlayOpen, onOverlayClose]);
-  useEffect(() => {
-    if (petState !== "idle") {
-      setPetGifSrc((current) => resolvePetGif(petState, current));
-      return;
-    }
-    // 参考 LineDogPet：平时保持清醒的小动作轮播；系统闲置够久、或者缩边到任务栏时趴下睡。
-    if (restingAsleep || isTucked) {
-      setPetGifSrc((current) => (current === SLEEPING_FRAME ? current : SLEEPING_FRAME));
-      return;
-    }
-    // 不再周期性替换 GIF：新 GIF 会从第 0 帧重新开始，视觉上就是一次闪断。
-    // 让同一张待机动画自然循环，状态切换时才换图。
-    setPetGifSrc((current) =>
-      IDLE_ROTATION.includes(current) && current !== SLEEPING_FRAME
-        ? current
-        : AWAKE_IDLE_FRAMES[0],
-    );
-  }, [petState, restingAsleep, isTucked]);
+
   const className = [
     "island",
     `island--${mode}`,
@@ -1491,9 +1488,10 @@ export function IslandShell({
     (event: ReactPointerEvent<HTMLElement>) => {
       didDragRef.current = false;
       // 展开（云朵面板）时拖拽会把面板偏移记成小狗位置，只允许收起态拖动。
+      // 按住鼠标左键即可拖动；移动阈值在 handleWindowDragMove 里判断，
+      // 因而不影响单击摸摸头、双击庆祝和右键聊天。
       if (
         event.button !== 0
-        || !event.ctrlKey
         || isTucked
         || mode !== "collapsed"
         || overlayOpen
@@ -1584,18 +1582,27 @@ export function IslandShell({
             role="button"
             tabIndex={0}
             aria-label={collapsedLabel}
-            title="单击摸摸头，双击庆祝，右键抱起来；按住 Ctrl 拖动可换位置"
+            title="单击摸摸头，双击庆祝，按住左键拖动换位置；按住 Ctrl 悬停打开互动面板"
             onPointerDown={(event) => {
               wakePet();
               prepareWindowDrag(event);
             }}
-            onPointerMove={handleWindowDragMove}
+            onPointerMove={(event) => {
+              handleWindowDragMove(event);
+              // Ctrl + 悬停才打开互动面板；普通悬停只唤醒小狗，
+              // 避免鼠标经过桌宠时突然弹出大面板。
+              if (event.ctrlKey && !overlayOpen && !isTucked) {
+                onPetHoverStart();
+              }
+            }}
             onPointerUp={cancelWindowDrag}
             onPointerCancel={cancelWindowDrag}
-            onMouseEnter={() => {
+            onMouseEnter={(event) => {
               // 鼠标一靠近就醒（LineDogPet 的 wake 行为）
               wakePet();
-              onPetHoverStart();
+              if (event.ctrlKey) {
+                onPetHoverStart();
+              }
             }}
             onMouseLeave={onPetHoverEnd}
             onClick={(event) => {
@@ -1630,11 +1637,14 @@ export function IslandShell({
             }}
           >
             <img
-              src={petGifSrc}
+              src={displayedPetGifSrc}
               alt=""
               draggable={false}
-              className={petGifSrc === SLEEPING_FRAME ? "maltese-pet__rest" : ""}
-              onError={() => setPetGifSrc(`/assets/pets/${petState}.gif`)}
+              className={displayedPetGifSrc === SLEEPING_FRAME ? "maltese-pet__rest" : ""}
+              onError={(event) => {
+                // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
+                event.currentTarget.src = resolvePetGif(petState);
+              }}
             />
           </span>
         </div>
@@ -1787,13 +1797,13 @@ export function IslandShell({
               <button
                 className={`island-tab ${page === "video" ? "dot-button--active" : ""}`}
                 type="button"
-                title={t.island.video}
-                aria-label={t.island.video}
+                title={t.island.plugins}
+                aria-label={t.island.plugins}
                 onClick={(event) => {
                   event.stopPropagation();
                   onPageChange("video");
                 }}
-              >{t.island.video}</button>
+              >{t.island.plugins}</button>
               <button
                 className="island-tab"
                 type="button"
@@ -2584,13 +2594,6 @@ function LayoutEditor({
         <div className="settings-section__header">
           <span>{t.settings.todo.title}</span>
         </div>
-        <ToggleControl
-          label={t.settings.todo.carryOverIncomplete}
-          checked={settings.carryOverIncompleteTodos}
-          onChange={(carryOverIncompleteTodos) =>
-            onSettingsChange({ ...settings, carryOverIncompleteTodos })
-          }
-        />
         <ToggleControl
           label={t.settings.todo.rotateTodos}
           checked={settings.rotateTodos}
@@ -4720,15 +4723,29 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
 
 function VideoPage() {
   const [notice, setNotice] = useState("");
+  const t = useTranslation();
 
   return (
-    <section className="video-page" aria-label="看视频">
-      <div className="assistant-panel__section-head">
-        <span>看视频</span>
-        <small>内置自动翻页，不占用快捷方式</small>
+    <section className="plugins-page" aria-label={t.plugins.title}>
+      <div id="video-automation-plugin" className="plugin-video-card">
+        <div className="plugin-video-card__head">
+          <div>
+            <span className="assistant-panel__label">{t.plugins.builtin}</span>
+            <strong>自动刷视频</strong>
+          </div>
+          <small>内置在宿主里的插件，不占用快捷方式</small>
+        </div>
+        <VideoAutomationPanel onNotice={setNotice} />
+        {notice && <p className="video-page__notice" role="status">{notice}</p>}
       </div>
-      <VideoAutomationPanel onNotice={setNotice} />
-      {notice && <p className="video-page__notice" role="status">{notice}</p>}
+      <PluginsPanel
+        onOpenBuiltin={() => {
+          document.getElementById("video-automation-plugin")?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }}
+      />
     </section>
   );
 }
@@ -4783,15 +4800,8 @@ const ACTIVITY_MOODS: Record<string, PetState> = {
   game: "chase",
 };
 
-// 闲置轮播：待机图 + 睡觉图 + 放松图，保证不会一直停在睡觉那一帧。
-// 收起态默认就是“趴在桌面边缘睡觉”的姿势；闲置时偶尔换个待机/放松动作，
-// 再回到睡眠，像真的在桌边打盹。
+// 睡觉/缩边时固定趴睡帧；其余表情由设置页的轮播顺序决定。
 const SLEEPING_FRAME = "/assets/pets/rest.gif";
-const AWAKE_IDLE_FRAMES: string[] = [
-  ...PET_GIF_VARIANTS.idle,
-  ...PET_GIF_VARIANTS.relax,
-];
-const IDLE_ROTATION: string[] = [SLEEPING_FRAME, ...AWAKE_IDLE_FRAMES];
 
 // 根据前台进程生成的情感互动台词（相当于 LineDogPet 的“偷偷观察你”）。
 const ACTIVITY_LINES: Record<string, string[]> = {
@@ -4883,6 +4893,9 @@ function AssistantPanel() {
   const [draftLabel, setDraftLabel] = useState("");
   const [draftPath, setDraftPath] = useState("");
   const [clearAllArmed, setClearAllArmed] = useState(false);
+  const [shortcutHotkeys, setShortcutHotkeys] = useState<ShortcutHotkeyMap>(loadShortcutHotkeys);
+  const [recordingHotkeyPath, setRecordingHotkeyPath] = useState<string | null>(null);
+  const [hotkeyIssues, setHotkeyIssues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!clearAllArmed) {
@@ -4991,7 +5004,10 @@ function AssistantPanel() {
   };
 
   const launchPath = (label: string, path: string) => {
-    void invoke("launch_discovered_shortcut", { path })
+    const command = customShortcuts.some((shortcut) => shortcut.path === path)
+      ? "launch_custom_shortcut"
+      : "launch_discovered_shortcut";
+    void invoke(command, { path })
       .then(() => setNotice(label + " 已打开"))
       .catch((error) => setNotice(label + " 打开失败：" + String(error)));
   };
@@ -5046,6 +5062,94 @@ function AssistantPanel() {
     discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcut.path)).length +
     customShortcuts.length;
 
+  const hotkeyPaths = useMemo(
+    () => [...new Set([
+      ...discoveredShortcuts
+        .filter((shortcut) => !hiddenShortcutSet.has(shortcut.path))
+        .slice(0, 24)
+        .map((shortcut) => shortcut.path),
+      ...customShortcuts.map((shortcut) => shortcut.path),
+    ])],
+    [customShortcuts, discoveredShortcuts, hiddenShortcuts],
+  );
+  const hotkeyBindings = useMemo(
+    () => hotkeyPaths
+      .map((path) => ({ path, shortcut: shortcutHotkeys[path]?.trim() ?? "" }))
+      .filter((binding) => binding.shortcut.length > 0),
+    [hotkeyPaths, shortcutHotkeys],
+  );
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    void invoke<{
+      registered: number;
+      issues: Array<{ path: string; message: string }>;
+    }>("set_shortcut_hotkeys", { bindings: hotkeyBindings })
+      .then((result) => {
+        if (cancelled) return;
+        const issues: Record<string, string> = {};
+        for (const issue of result.issues) issues[issue.path] = issue.message;
+        setHotkeyIssues(issues);
+        if (result.issues.length > 0) {
+          setNotice(result.issues[0].message);
+        }
+      })
+      .catch(() => {
+        // 浏览器预览或原生命令尚未就绪时不影响列表。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hotkeyBindings]);
+
+  useEffect(() => {
+    if (!recordingHotkeyPath) return;
+    const handler = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecordingHotkeyPath(null);
+        return;
+      }
+      if (event.repeat) return;
+      const combo = formatShortcutFromEvent(event);
+      if (!combo) {
+        setNotice("请至少按住 Ctrl、Alt、Shift 或 Win 之一，再按一个字母/数字/功能键。");
+        return;
+      }
+      setShortcutHotkeys((current) => {
+        const next = { ...current, [recordingHotkeyPath]: combo };
+        saveShortcutHotkeys(next);
+        return next;
+      });
+      setHotkeyIssues((current) => {
+        const next = { ...current };
+        delete next[recordingHotkeyPath];
+        return next;
+      });
+      setRecordingHotkeyPath(null);
+      setNotice(`已设置快捷键 ${combo}（按 Esc 可取消录入）`);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [recordingHotkeyPath]);
+
+  const clearShortcutHotkey = (path: string) => {
+    setShortcutHotkeys((current) => {
+      const next = { ...current };
+      delete next[path];
+      saveShortcutHotkeys(next);
+      return next;
+    });
+    setHotkeyIssues((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
+    setNotice("已清除这个快捷方式的独立热键");
+  };
+
   const clearAllShortcuts = () => {
     if (!removableShortcutCount) {
       return;
@@ -5061,6 +5165,17 @@ function AssistantPanel() {
       ...discoveredShortcuts.map((shortcut) => shortcut.path),
     ]);
     persistCustomShortcuts([]);
+    setShortcutHotkeys((current) => {
+      const next = { ...current };
+      for (const path of [
+        ...discoveredShortcuts.map((shortcut) => shortcut.path),
+        ...customShortcuts.map((shortcut) => shortcut.path),
+      ]) {
+        delete next[path];
+      }
+      saveShortcutHotkeys(next);
+      return next;
+    });
     setClearAllArmed(false);
     setAdding(false);
     setNotice(t.assistant.clearAllDone(removableShortcutCount));
@@ -5118,7 +5233,7 @@ function AssistantPanel() {
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
         <div className="assistant-panel__section-meta">
-          <small>只读取这台电脑上发现和自定义的入口</small>
+          <small>点 ⌨ 可给每个入口绑定独立全局热键，右键清除</small>
           {hiddenShortcuts.length > 0 && (
             <button
               type="button"
@@ -5175,6 +5290,21 @@ function AssistantPanel() {
             </button>
             <button
               type="button"
+              className={`assistant-card__hotkey${recordingHotkeyPath === shortcut.path ? " assistant-card__hotkey--recording" : ""}${hotkeyIssues[shortcut.path] ? " assistant-card__hotkey--error" : ""}`}
+              title={hotkeyIssues[shortcut.path] ?? (shortcutHotkeys[shortcut.path] ? `${shortcutHotkeys[shortcut.path]}（右键清除）` : "点击设置独立全局热键")}
+              aria-label={`设置 ${shortcut.label} 的独立热键`}
+              onClick={() => setRecordingHotkeyPath(shortcut.path)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                clearShortcutHotkey(shortcut.path);
+              }}
+            >
+              {recordingHotkeyPath === shortcut.path
+                ? "请按键…"
+                : shortcutHotkeys[shortcut.path] ?? "⌨ 热键"}
+            </button>
+            <button
+              type="button"
               className="assistant-card__remove"
               title="从列表移除（不删除桌面文件）"
               aria-label={`从列表移除 ${shortcut.label}`}
@@ -5196,6 +5326,21 @@ function AssistantPanel() {
                 <strong title={shortcut.label}>{shortcut.label}</strong>
                 <small title={shortcut.path}>自定义快捷方式</small>
               </span>
+            </button>
+            <button
+              type="button"
+              className={`assistant-card__hotkey${recordingHotkeyPath === shortcut.path ? " assistant-card__hotkey--recording" : ""}${hotkeyIssues[shortcut.path] ? " assistant-card__hotkey--error" : ""}`}
+              title={hotkeyIssues[shortcut.path] ?? (shortcutHotkeys[shortcut.path] ? `${shortcutHotkeys[shortcut.path]}（右键清除）` : "点击设置独立全局热键")}
+              aria-label={`设置 ${shortcut.label} 的独立热键`}
+              onClick={() => setRecordingHotkeyPath(shortcut.path)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                clearShortcutHotkey(shortcut.path);
+              }}
+            >
+              {recordingHotkeyPath === shortcut.path
+                ? "请按键…"
+                : shortcutHotkeys[shortcut.path] ?? "⌨ 热键"}
             </button>
             <button
               type="button"
@@ -6292,7 +6437,8 @@ function IslandApp({
 
   // 随机闲逛：收起状态下每隔一会儿挪一小步
   useEffect(() => {
-    if (!isTauri() || !settings.roam) {
+    // 固定在某个角落时不再随机闲逛，否则用户会觉得小狗自己往左上角跑。
+    if (!isTauri() || !settings.roam || settings.lockCorner) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -6302,7 +6448,7 @@ function IslandApp({
       void invoke("roam_island_step").catch(() => undefined);
     }, 32_000);
     return () => window.clearInterval(timer);
-  }, [mode, settings.roam]);
+  }, [mode, settings.lockCorner, settings.roam]);
 
   // 全局快捷键只负责隐藏 / 显示；从缩边状态回来时退出缩边。
   useEffect(() => {
@@ -6969,17 +7115,9 @@ function IslandApp({
       const lastSavedSignature = window.localStorage.getItem(
         TODO_LAST_SAVED_SIGNATURE_STORAGE_KEY,
       );
-      const carryOverCreatedAt = Date.now();
-      const carriedTodos = settings.carryOverIncompleteTodos
-        ? todos
-            .filter((todo) => !todo.completed)
-            .map((todo, index) => ({
-              ...todo,
-              id: createTodoId(),
-              completed: false,
-              createdAt: carryOverCreatedAt + index,
-            }))
-        : [];
+      // 只把“已打勾完成”的待办归入历史；未完成的永远留在列表里，
+// 跨天/重启/更新都不清空，并保留原来的 id、创建时间和计时。
+      const carriedTodos = todos.filter((todo) => !todo.completed);
 
       if (
         (todos.length > 0 || dailyNote.trim()) &&
@@ -6999,7 +7137,9 @@ function IslandApp({
 
       setTodos(carriedTodos);
       setDailyNote("");
-      setActiveTodoId(null);
+      setActiveTodoId((current) =>
+        current && carriedTodos.some((todo) => todo.id === current) ? current : null,
+      );
       setCurrentTodoDate(nextDate);
       setTodoPageMode("today");
       setSelectedArchiveDate(null);
@@ -7018,7 +7158,6 @@ function IslandApp({
       dailyNote,
       saveDirectory,
       saveTodosToDisk,
-      settings.carryOverIncompleteTodos,
       todos,
       upsertArchive,
     ],
@@ -7443,6 +7582,16 @@ function IslandApp({
       setActiveTodoId(null);
     }
   }, [activeTodoId, todos]);
+
+  // 快捷方式的独立热键在应用启动时就注册，不必先打开“快捷入口”页。
+  useEffect(() => {
+    if (!isTauri()) return;
+    const bindings = Object.entries(loadShortcutHotkeys())
+      .map(([path, shortcut]) => ({ path, shortcut }))
+      .filter((binding) => binding.shortcut.trim().length > 0);
+    if (bindings.length === 0) return;
+    void invoke("set_shortcut_hotkeys", { bindings }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (didCheckDate.current) {
