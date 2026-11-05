@@ -250,6 +250,14 @@ const zhCN: Translations = {
     noTasks: "No tasks",
   },
 
+  assistant: {
+    clearAll: "全部删除",
+    clearAllConfirm: "再点一次确认",
+    clearAllHint: (count) =>
+      `将清空 ${count} 个快捷方式，只会从列表移除，不会删除桌面文件；再点一次确认`,
+    clearAllDone: (count) => `已清空 ${count} 个快捷方式（不会删除桌面文件）`,
+  },
+
   music: {
     playerLabel: "音乐播放器",
     controlFailed: "控制失败",

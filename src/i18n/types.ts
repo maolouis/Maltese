@@ -249,6 +249,13 @@ export type Translations = {
     noTasks: string;
   };
 
+  assistant: {
+    clearAll: string;
+    clearAllConfirm: string;
+    clearAllHint: (count: number) => string;
+    clearAllDone: (count: number) => string;
+  };
+
   music: {
     playerLabel: string;
     controlFailed: string;

@@ -4871,6 +4871,8 @@ input,
 .assistant-panel__section-meta {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }
@@ -4890,6 +4892,28 @@ input,
 .assistant-panel__restore:hover {
   background: #e2e6ee;
   color: #333a45;
+}
+
+.assistant-panel__clear-all {
+  border: 0;
+  border-radius: 7px;
+  background: #fbe9e6;
+  color: #a8483d;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 5px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.assistant-panel__clear-all:hover,
+.assistant-panel__clear-all--armed {
+  background: #f4c7bf;
+  color: #8f2f24;
+}
+
+.assistant-panel__clear-all--armed {
+  font-weight: 600;
 }
 
 .assistant-card--custom {

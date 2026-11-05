@@ -247,6 +247,14 @@ const en: Translations = {
     noTasks: "No tasks",
   },
 
+  assistant: {
+    clearAll: "Clear all",
+    clearAllConfirm: "Click again to confirm",
+    clearAllHint: (count) =>
+      `Remove ${count} shortcuts from this list only; desktop files will not be deleted. Click again to confirm.`,
+    clearAllDone: (count) => `Cleared ${count} shortcuts. Desktop files were not deleted.`,
+  },
+
   music: {
     playerLabel: "Music player",
     controlFailed: "Control failed",

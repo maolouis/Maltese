@@ -4870,6 +4870,7 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
 }
 
 function AssistantPanel() {
+  const t = useTranslation();
   const [notice, setNotice] = useState("选择一个入口，线条小狗会陪你完成下一步");
   const [wakeShortcut, setWakeShortcut] = useState(loadWakeShortcut);
   const [wakeShortcutError, setWakeShortcutError] = useState("");
@@ -4881,6 +4882,15 @@ function AssistantPanel() {
   const [adding, setAdding] = useState(false);
   const [draftLabel, setDraftLabel] = useState("");
   const [draftPath, setDraftPath] = useState("");
+  const [clearAllArmed, setClearAllArmed] = useState(false);
+
+  useEffect(() => {
+    if (!clearAllArmed) {
+      return;
+    }
+    const timer = window.setTimeout(() => setClearAllArmed(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [clearAllArmed]);
 
   useEffect(() => {
     void invoke<string>("set_wake_shortcut", { shortcut: wakeShortcut })
@@ -5032,6 +5042,29 @@ function AssistantPanel() {
   const discoveredActions = discoveredShortcuts
     .filter((shortcut) => !hiddenShortcutSet.has(shortcut.path))
     .slice(0, 24);
+  const removableShortcutCount =
+    discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcut.path)).length +
+    customShortcuts.length;
+
+  const clearAllShortcuts = () => {
+    if (!removableShortcutCount) {
+      return;
+    }
+    if (!clearAllArmed) {
+      setClearAllArmed(true);
+      setNotice(t.assistant.clearAllHint(removableShortcutCount));
+      return;
+    }
+    // 自动发现项只写隐藏列表，自定义项清空 localStorage；两者都不碰真实文件。
+    persistHiddenShortcuts([
+      ...hiddenShortcuts,
+      ...discoveredShortcuts.map((shortcut) => shortcut.path),
+    ]);
+    persistCustomShortcuts([]);
+    setClearAllArmed(false);
+    setAdding(false);
+    setNotice(t.assistant.clearAllDone(removableShortcutCount));
+  };
 
   const handleAction = async (tool: string) => {
     await launch(tool);
@@ -5093,6 +5126,16 @@ function AssistantPanel() {
               onClick={restoreHiddenShortcuts}
             >
               恢复隐藏（{hiddenShortcuts.length}）
+            </button>
+          )}
+          {removableShortcutCount > 0 && (
+            <button
+              type="button"
+              className={`assistant-panel__clear-all${clearAllArmed ? " assistant-panel__clear-all--armed" : ""}`}
+              title={t.assistant.clearAllHint(removableShortcutCount)}
+              onClick={clearAllShortcuts}
+            >
+              {clearAllArmed ? t.assistant.clearAllConfirm : t.assistant.clearAll}
             </button>
           )}
         </div>
