@@ -31,9 +31,9 @@ test("NSIS and MSI users receive the matching installer format and signature", (
   assert.equal(output.version, "0.2.12");
   assert.equal(output.notes, "Fixture release notes");
   assert.equal(output.platforms["windows-x86_64-nsis"].signature, "fixture NSIS signature");
-  assert.match(output.platforms["windows-x86_64-nsis"].url, /v0\.2\.12\/fly-island_0\.2\.12_x64-setup\.exe$/);
+  assert.match(output.platforms["windows-x86_64-nsis"].url, /v0\.2\.12\/Maltese-0\.2\.12-x64-setup\.exe$/);
   assert.equal(output.platforms["windows-x86_64-msi"].signature, "fixture MSI signature");
-  assert.match(output.platforms["windows-x86_64-msi"].url, /v0\.2\.12\/fly-island_0\.2\.12_x64_en-US\.msi$/);
+  assert.match(output.platforms["windows-x86_64-msi"].url, /v0\.2\.12\/Maltese-0\.2\.12-x64\.msi$/);
   assert.deepEqual(output.platforms["windows-x86_64"], output.platforms["windows-x86_64-nsis"]);
 });
 

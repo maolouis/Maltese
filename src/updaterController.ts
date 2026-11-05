@@ -39,7 +39,7 @@ const listeners = new Set<() => void>();
 
 let proxy: string | null = null;
 let pending: Update | null = null;
-let initialized = false;
+let initialization: Promise<void> | null = null;
 let configured = false;
 let autoCheckStarted = false;
 
@@ -68,26 +68,29 @@ function busy(stage: UpdateStage) {
   return stage === "checking" || stage === "downloading" || stage === "installing";
 }
 
-async function initialize() {
-  if (initialized) return;
-  initialized = true;
+function initialize() {
+  if (initialization) return initialization;
 
-  if (!isTauri()) {
-    setState({ stage: "disabled" });
-    return;
-  }
+  initialization = (async () => {
+    if (!isTauri()) {
+      setState({ stage: "disabled" });
+      return;
+    }
 
-  const [version, hasUpdaterConfig] = await Promise.all([
-    getVersion().catch(() => ""),
-    invoke<boolean>("updater_configured").catch(() => false),
-  ]);
-  configured = hasUpdaterConfig;
-  proxy = await invoke<string | null>("get_updater_proxy").catch(() => null);
+    const [version, hasUpdaterConfig] = await Promise.all([
+      getVersion().catch(() => ""),
+      invoke<boolean>("updater_configured").catch(() => false),
+    ]);
+    configured = hasUpdaterConfig;
+    proxy = await invoke<string | null>("get_updater_proxy").catch(() => null);
 
-  setState({
-    version,
-    stage: configured ? state.stage : "disabled",
-  });
+    setState({
+      version,
+      stage: configured ? state.stage : "disabled",
+    });
+  })();
+
+  return initialization;
 }
 
 async function closePending() {

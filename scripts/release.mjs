@@ -13,7 +13,7 @@
 // changes. Published versions are never overwritten.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadSigningEnvironment } from "./release-signing.mjs";
 
 const CONFIG = "src-tauri/tauri.conf.json";
@@ -101,11 +101,14 @@ const latestArgs = ["scripts/make-latest-json.mjs", "--notes-file", notesFile];
 if (baseUrl) latestArgs.push("--base-url", baseUrl);
 run("node", latestArgs);
 
-const installer = readdirSync(BUNDLE_DIR).find((name) => name.endsWith(`_${version}_x64-setup.exe`));
-if (!installer) fail(`Missing installer in ${BUNDLE_DIR}.`);
+// make-latest-json stages ASCII asset names because GitHub rewrites non-ASCII
+// names during upload; publish those staged copies, not the raw bundle names.
+const assetBase = `Maltese-${version}-x64`;
+const installer = `${assetBase}-setup.exe`;
+if (!existsSync(`${BUNDLE_DIR}/${installer}`)) fail(`Missing staged installer ${BUNDLE_DIR}/${installer}.`);
 const installers = [`${BUNDLE_DIR}/${installer}`];
-const msi = existsSync(MSI_DIR) && readdirSync(MSI_DIR).find((name) => name.endsWith(`_${version}_x64_en-US.msi`));
-if (msi) installers.push(`${MSI_DIR}/${msi}`);
+const msi = `${assetBase}.msi`;
+if (existsSync(`${MSI_DIR}/${msi}`)) installers.push(`${MSI_DIR}/${msi}`);
 const checksumPath = `${BUNDLE_DIR}/SHA256SUMS.txt`;
 writeFileSync(checksumPath, installers.map((path) =>
   `${createHash("sha256").update(readFileSync(path)).digest("hex")}  ${path.split("/").pop()}`,

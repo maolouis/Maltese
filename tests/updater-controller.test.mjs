@@ -114,6 +114,13 @@ test("download failures release the update and allow a new check", async () => {
   assert.equal(app.getUpdateState().stage, "available");
 });
 
+test("silent background check failures do not surface an error", async () => {
+  const app = await controller({ check: async () => { throw "offline"; } });
+  await app.checkForUpdate(true);
+  assert.equal(app.getUpdateState().stage, "idle");
+  assert.equal(app.getUpdateState().detail, "");
+});
+
 test("check failures can be retried without retaining stale errors", async () => {
   let checks = 0;
   const app = await controller({ check: async () => {

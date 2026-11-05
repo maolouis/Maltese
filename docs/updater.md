@@ -32,6 +32,8 @@ GitHub 的 `github.com` 在国内经常连不上（`api.github.com` 往往还能
 
 清单提供 `windows-x86_64-nsis`，如果构建时同时产出了已签名的 MSI，也会附带 `windows-x86_64-msi`；通用 `windows-x86_64` 入口保留为 NSIS 回退。
 
+发布资产统一使用 ASCII 文件名（如 `Maltese-1.2.2-x64-setup.exe`）。GitHub 上传时会把中文/空格资产名改写掉，`make-latest-json.mjs` 会先复制一份 ASCII 名字的安装包和 `.sig`，再写进清单，避免下载地址指向不存在的文件。
+
 清单里的下载地址由 `scripts/make-latest-json.mjs --base-url` 决定：
 
 ```powershell

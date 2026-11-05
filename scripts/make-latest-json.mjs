@@ -2,7 +2,7 @@
 // https://github.com/maolouis/Maltese/releases/latest/download/latest.json
 //
 // Usage: node scripts/make-latest-json.mjs [--notes-file docs/releases/vX.Y.Z.md]
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const REPO = "maolouis/Maltese";
@@ -46,11 +46,18 @@ if (!existsSync(signaturePath)) {
 }
 
 const notes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8").trim() : "";
-// GitHub asset URLs may contain Chinese characters and spaces; percent-encode
-// them so the updater receives a valid ASCII URL.
+// GitHub rewrites non-ASCII release asset names (the Chinese product name became
+// "Maltese._..." during upload), so every release uses a stable ASCII asset name.
+// Stage a copy under that name; content and signature are unchanged.
+const assetBase = `Maltese-${version}-x64`;
+const nsisAsset = `${assetBase}-setup.exe`;
+const stagedInstaller = join(BUNDLE_DIR, nsisAsset);
+const stagedSignature = `${stagedInstaller}.sig`;
+copyFileSync(join(BUNDLE_DIR, installer), stagedInstaller);
+copyFileSync(signaturePath, stagedSignature);
 const nsisTarget = {
-  signature: readFileSync(signaturePath, "utf8").trim(),
-  url: `${baseUrl}/${encodeURIComponent(installer)}`,
+  signature: readFileSync(stagedSignature, "utf8").trim(),
+  url: `${baseUrl}/${nsisAsset}`,
 };
 
 const platforms = {
@@ -66,9 +73,14 @@ if (msi) {
     console.error(`Missing signed MSI: ${msiSignaturePath}. An MSI present in the bundle must be signed; remove it or sign it before generating latest.json.`);
     process.exit(1);
   }
+  const msiAsset = `${assetBase}.msi`;
+  const stagedMsi = join(MSI_DIR, msiAsset);
+  const stagedMsiSignature = `${stagedMsi}.sig`;
+  copyFileSync(join(MSI_DIR, msi), stagedMsi);
+  copyFileSync(msiSignaturePath, stagedMsiSignature);
   platforms["windows-x86_64-msi"] = {
-    signature: readFileSync(msiSignaturePath, "utf8").trim(),
-    url: `${baseUrl}/${encodeURIComponent(msi)}`,
+    signature: readFileSync(stagedMsiSignature, "utf8").trim(),
+    url: `${baseUrl}/${msiAsset}`,
   };
 }
 
@@ -83,6 +95,6 @@ const target = join(BUNDLE_DIR, "latest.json");
 writeFileSync(target, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`Wrote ${target}`);
 console.log(`Upload these release assets:`);
-console.log(`  ${join(BUNDLE_DIR, installer)}`);
-console.log(`  ${signaturePath}`);
+console.log(`  ${stagedInstaller}`);
+console.log(`  ${stagedSignature}`);
 console.log(`  ${target}`);
