@@ -6042,6 +6042,12 @@ function IslandApp({
   }, [activeTodoTitle]);
 
   const scheduleBubbleHide = useCallback(() => {
+    // 云朵消息按自己的 TTL 关闭，不能被小狗/浮层的一次 mouseleave 提前收掉。
+    // 气泡向左弹出时窗口整体左移，更容易产生 mouseleave；旧逻辑会在 420ms
+    // 后关掉气泡，看起来就是“消息有时候不显示”。
+    if (petOverlayRef.current?.mode === "cloud") {
+      return;
+    }
     if (overlayHideTimerRef.current !== null) {
       window.clearTimeout(overlayHideTimerRef.current);
     }
