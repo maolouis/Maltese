@@ -4943,6 +4943,9 @@ function AssistantPanel() {
   const [scanDir, setScanDir] = useState(loadShortcutScanDir);
   const [scanDraft, setScanDraft] = useState(loadShortcutScanDir);
   const [scanError, setScanError] = useState("");
+  const [appQuery, setAppQuery] = useState("");
+  const [appResults, setAppResults] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
+  const [appSearching, setAppSearching] = useState(false);
 
   useEffect(() => {
     if (!clearAllArmed) {
@@ -5001,6 +5004,36 @@ function AssistantPanel() {
       window.removeEventListener(SHORTCUT_AUTO_DETECT_EVENT, syncAuto);
     };
   }, []);
+
+  useEffect(() => {
+    const query = appQuery.trim();
+    if (!query) {
+      setAppResults([]);
+      setAppSearching(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setAppSearching(true);
+      void invoke<Array<{ label: string; path: string; kind: string; category: string }>>(
+        "discover_installed_apps",
+        { query },
+      )
+        .then((results) => {
+          if (!cancelled) setAppResults(results);
+        })
+        .catch(() => {
+          if (!cancelled) setAppResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setAppSearching(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [appQuery]);
   // 读取快捷方式图标（.lnk / exe / 脚本）
   useEffect(() => {
     if (!isTauri()) {
@@ -5094,6 +5127,23 @@ function AssistantPanel() {
     setNotice("已添加快捷方式");
   };
 
+  const addSystemApp = (app: { label: string; path: string }) => {
+    if (customShortcuts.some((shortcut) => shortcut.path === app.path)) {
+      setNotice(`${app.label} 已经在快捷入口里`);
+      return;
+    }
+    if (discoveredShortcuts.some((shortcut) => shortcutPathKey(shortcut.path) === shortcutPathKey(app.path))) {
+      persistHiddenShortcuts([...hiddenShortcuts, app.path]);
+    }
+    persistCustomShortcuts([
+      ...customShortcuts,
+      { label: app.label, path: app.path },
+    ].slice(0, 60));
+    setAppQuery("");
+    setAppResults([]);
+    setNotice(`已添加 ${app.label}`);
+  };
+
   const applyScanDir = () => {
     const next = saveShortcutScanDir(scanDraft);
     setScanDraft(next);
@@ -5154,8 +5204,7 @@ function AssistantPanel() {
   const hiddenActionSet = new Set(hiddenShortcutActions);
   const visibleActions = actions.filter((action) => !hiddenActionSet.has(action.id));
   const discoveredActions = discoveredShortcuts
-    .filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path)))
-    .slice(0, 100);
+    .filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path)));
   const removableShortcutCount =
     visibleActions.length +
     discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path))).length +
@@ -5353,8 +5402,39 @@ function AssistantPanel() {
         <small className={scanError ? "assistant-panel__scan-error" : undefined}>
           {!autoDetectShortcuts
             ? "自动识别已关闭；只保留自定义快捷方式。"
-            : scanError || (scanDir ? `只扫描：${scanDir}` : "只扫描当前用户桌面，不再扫描开始菜单/Program Files。")}
+            : scanError || (scanDir ? `只扫描：${scanDir}` : "读取桌面和系统开始菜单，不扫描 Program Files。")}
         </small>
+      </div>
+      <div className="assistant-panel__app-search">
+        <span className="assistant-panel__label">搜索应用名称添加</span>
+        <input
+          value={appQuery}
+          onChange={(event) => setAppQuery(event.currentTarget.value)}
+          placeholder="输入应用名，例如 微信 / 网易云 / VS Code"
+          spellCheck={false}
+        />
+        {appQuery.trim() && (
+          <div className="assistant-panel__app-results">
+            {appSearching ? (
+              <small>正在搜索系统应用…</small>
+            ) : appResults.length > 0 ? (
+              appResults.slice(0, 12).map((app) => (
+                <button
+                  key={app.path}
+                  type="button"
+                  onClick={() => addSystemApp(app)}
+                  title={app.path}
+                >
+                  <span>{app.label}</span>
+                  <small>{app.kind === "lnk" ? "开始菜单" : `.${app.kind}`}</small>
+                  <strong>＋</strong>
+                </button>
+              ))
+            ) : (
+              <small>没有找到匹配的系统应用</small>
+            )}
+          </div>
+        )}
       </div>
       <div className="assistant-panel__grid">
         {visibleActions.map((action) => (

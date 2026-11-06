@@ -173,6 +173,11 @@ try {
       !nativeSource.includes("fn discover_shortcuts(scan_dir")) {
     fail("Rust 快捷方式发现没有限定扫描目录");
   }
+  if (!nativeSource.includes("fn discover_installed_apps") ||
+      !appSource.includes("discover_installed_apps") ||
+      !appSource.includes("搜索应用名称添加")) {
+    fail("快捷面板没有接入系统应用搜索/添加");
+  }
   const pluginSource = fs.readFileSync(path.join(root, "src/PluginsPanel.tsx"), "utf8");
   if (!pluginSource.includes("plugin-help-window") || !pluginSource.includes("createPortal")) {
     fail("插件使用说明没有独立的 hover 浮窗");

@@ -1,0 +1,15 @@
+{
+  "version": "1.2.9",
+  "notes": "# Maltese v1.2.9\n\n## 快捷方式\n\n- **自动识别改为参考系统应用**：默认读取桌面和 Windows 开始菜单（当前用户 + 公共），不再扫描 Program Files 或整块磁盘。\n- **搜索应用名称添加**：快捷面板新增应用搜索框，输入应用名即可从系统开始菜单/桌面结果中直接添加。\n- **手动路径添加保留**：仍可在「＋ 新增快捷方式」里填写程序或脚本的绝对路径。\n- 开始菜单里的「卸载 / Uninstall」入口会自动过滤，不会被当成应用。\n- 搜索结果和自动发现项都可单独移除；自动识别开关、扫描目录设置继续保留。\n\n## 修复\n\n- 保留 v1.2.8 的右键首帧遮罩，避免窗口放大时左上角小狗重影。\n- 固定快捷入口、自动发现入口都可以删除；自动发现列表不再被 100 条上限重新填满。\n- 自动识别可以关闭，关闭后只保留自定义快捷方式。\n\n## 验证\n\n- `pnpm build`（含 `tsc --noEmit`）通过。\n- `node scripts/verify-build.mjs`：全部检查通过。\n- `node --test tests/*.test.mjs`：34 项全部通过。\n- `cargo test`：74 项通过，9 项忽略。\n- 实机验证：搜索“微信”能从开始菜单找到并添加；卸载入口被过滤；手动路径添加和自动识别开关正常。",
+  "pub_date": "2026-11-06T03:30:25Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0NKWTc1bWt3aWMwKzZwTmNUL1JSWXI4NnFac1E4cGwvbHhNbmlJclRWRUVabi8rM0VYNTJvMjFTWHA1OUNkWWVRNVNRbEpEOS8xVDBDZ2hqU2dmbWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTM1ODI1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjlfeDY0LXNldHVwLmV4ZQpDc2ljVlhDc3BwUU9SNll4TUFZVklaV3k1S2pHc2NPMEVvdmpXZVJUSk9laktWTDhHRFBmUDZ6UjUwY0diYTdYampmNVUxeUcvb3BaT0RsQ3hOZE9BUT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.9/Maltese-1.2.9-x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0NKWTc1bWt3aWMwKzZwTmNUL1JSWXI4NnFac1E4cGwvbHhNbmlJclRWRUVabi8rM0VYNTJvMjFTWHA1OUNkWWVRNVNRbEpEOS8xVDBDZ2hqU2dmbWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTM1ODI1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjlfeDY0LXNldHVwLmV4ZQpDc2ljVlhDc3BwUU9SNll4TUFZVklaV3k1S2pHc2NPMEVvdmpXZVJUSk9laktWTDhHRFBmUDZ6UjUwY0diYTdYampmNVUxeUcvb3BaT0RsQ3hOZE9BUT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.9/Maltese-1.2.9-x64-setup.exe"
+    }
+  }
+}

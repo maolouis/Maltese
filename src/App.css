@@ -5048,6 +5048,85 @@ html.maltese-page-opening .island__collapsed {
   color: #ffad98;
 }
 
+.assistant-panel__app-search {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.assistant-panel__app-search > input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(255, 255, 255, 0.86);
+  font: inherit;
+  font-size: 9.5px;
+}
+
+.assistant-panel__app-search > input:focus-visible {
+  outline: 2px solid rgba(240, 160, 75, 0.55);
+  outline-offset: 1px;
+}
+
+.assistant-panel__app-results {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.assistant-panel__app-results > small {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 9px;
+  padding: 3px 4px;
+}
+
+.assistant-panel__app-results button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.assistant-panel__app-results button:hover {
+  background: rgba(255, 216, 170, 0.12);
+}
+
+.assistant-panel__app-results button span {
+  overflow: hidden;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-panel__app-results button small {
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 8px;
+}
+
+.assistant-panel__app-results button strong {
+  color: #f0b77b;
+  font-size: 12px;
+}
+
 .assistant-panel__hotkey-button {
   min-width: 116px;
   padding: 5px 10px;
@@ -5832,6 +5911,37 @@ html.maltese-page-opening .island__collapsed {
 
 .island__expanded .assistant-panel__scan-dir small.assistant-panel__scan-error {
   color: #c45c2e;
+}
+
+.island__expanded .assistant-panel__app-search > input {
+  border-color: #e1e4eb;
+  background: #f7f8fb;
+  color: #3f4652;
+}
+
+.island__expanded .assistant-panel__app-results {
+  border-color: #e8ebf1;
+  background: #f7f8fb;
+}
+
+.island__expanded .assistant-panel__app-results > small {
+  color: #8a909c;
+}
+
+.island__expanded .assistant-panel__app-results button {
+  color: #4c5360;
+}
+
+.island__expanded .assistant-panel__app-results button:hover {
+  background: #fff3e5;
+}
+
+.island__expanded .assistant-panel__app-results button small {
+  color: #9aa0ad;
+}
+
+.island__expanded .assistant-panel__app-results button strong {
+  color: #b06b28;
 }
 
 .island__expanded .assistant-panel__hotkey-button {

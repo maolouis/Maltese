@@ -1084,18 +1084,32 @@ struct DiscoveredShortcut {
     category: String,
 }
 
-fn shortcut_scan_roots(scan_dir: Option<&str>) -> Vec<PathBuf> {
+fn system_app_roots() -> Vec<PathBuf> {
     let user_profile = env::var("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Administrator"));
+    let app_data = env::var("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| user_profile.join("AppData\\Roaming"));
+    let program_data = env::var("PROGRAMDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("C:\\ProgramData"));
+    vec![
+        user_profile.join("Desktop"),
+        app_data.join("Microsoft\\Windows\\Start Menu\\Programs"),
+        program_data.join("Microsoft\\Windows\\Start Menu\\Programs"),
+    ]
+}
+
+fn shortcut_scan_roots(scan_dir: Option<&str>) -> Vec<PathBuf> {
     if let Some(scan_dir) = scan_dir.map(str::trim).filter(|value| !value.is_empty()) {
         // 用户指定目录后只扫描这个目录，不再遍历开始菜单、Program Files
         // 等系统目录；这样既快，也不会把整台电脑的启动项都混进来。
         return vec![PathBuf::from(scan_dir)];
     }
-    // 默认只扫描当前用户桌面。以前还会递归扫描开始菜单和 Program Files，
-    // 目录很大时既慢又容易发现一堆无关入口。
-    vec![user_profile.join("Desktop")]
+    // 默认读取桌面 + 开始菜单：这些是 Windows 自己识别并展示给用户的
+    // 软件入口，不递归 Program Files，也不扫整块磁盘。
+    system_app_roots()
 }
 
 fn classify_shortcut(label: &str) -> &'static str {
@@ -1119,24 +1133,30 @@ fn classify_shortcut(label: &str) -> &'static str {
     }
 }
 
-#[tauri::command]
-fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
-    let roots = shortcut_scan_roots(scan_dir.as_deref());
-    if roots.is_empty() || roots.iter().any(|root| !root.is_dir()) {
+fn scan_shortcuts(
+    roots: Vec<PathBuf>,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<DiscoveredShortcut>, String> {
+    if roots.is_empty() {
+        return Err("快捷方式扫描目录不可用。".to_string());
+    }
+    let missing = roots
+        .iter()
+        .find(|root| !root.is_dir())
+        .map(|root| root.to_string_lossy().to_string());
+    let roots = roots.into_iter().filter(|root| root.is_dir()).collect::<Vec<_>>();
+    if roots.is_empty() {
         return Err(format!(
             "快捷方式扫描目录不存在：{}",
-            roots
-                .first()
-                .map(|root| root.to_string_lossy().to_string())
-                .unwrap_or_default()
+            missing.unwrap_or_default()
         ));
     }
-    let mut queue: VecDeque<(PathBuf, u8)> = roots
-        .into_iter()
-        .map(|root| (root, 0))
-        .collect();
+    let needle = query.map(|value| value.trim().to_lowercase()).filter(|value| !value.is_empty());
+    let mut queue: VecDeque<(PathBuf, u8)> = roots.into_iter().map(|root| (root, 0)).collect();
     let mut discovered = Vec::new();
     let mut visited = std::collections::HashSet::new();
+    let mut seen_paths = std::collections::HashSet::new();
     while let Some((directory, depth)) = queue.pop_front() {
         let canonical = directory.canonicalize().unwrap_or(directory.clone());
         if !visited.insert(canonical.clone()) {
@@ -1162,23 +1182,50 @@ fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut
                 continue;
             }
             let extension = path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
-            if !matches!(extension.as_str(), "lnk" | "exe" | "bat" | "cmd" | "ps1" | "py") {
+            if !matches!(extension.as_str(), "lnk" | "url" | "exe" | "bat" | "cmd" | "ps1" | "py") {
                 continue;
             }
             let label = path.file_stem().and_then(|value| value.to_str()).unwrap_or("应用").to_string();
+            let lower_label = label.to_lowercase();
+            // 开始菜单里常有“卸载 / Uninstall”入口，不能当成应用加入快捷入口。
+            if label.contains("卸载") || lower_label.contains("uninstall") {
+                continue;
+            }
+            if let Some(needle) = needle.as_deref() {
+                if !label.to_lowercase().contains(needle) {
+                    continue;
+                }
+            }
+            let path_text = path.to_string_lossy().to_string();
+            if !seen_paths.insert(path_text.to_lowercase()) {
+                continue;
+            }
             discovered.push(DiscoveredShortcut {
                 category: classify_shortcut(&label).to_string(),
                 label,
-                path: path.to_string_lossy().to_string(),
+                path: path_text,
                 kind: extension,
             });
-            if discovered.len() >= 240 {
+            if discovered.len() >= limit {
+                discovered.sort_by(|left, right| left.label.to_lowercase().cmp(&right.label.to_lowercase()));
                 return Ok(discovered);
             }
         }
     }
     discovered.sort_by(|left, right| left.label.to_lowercase().cmp(&right.label.to_lowercase()));
     Ok(discovered)
+}
+
+#[tauri::command]
+fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
+    scan_shortcuts(shortcut_scan_roots(scan_dir.as_deref()), None, 240)
+}
+
+#[tauri::command]
+fn discover_installed_apps(query: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
+    // 系统开始菜单/桌面里的入口就是 Windows 识别并展示的应用；
+    // 搜索只在这个范围内进行，不扫描磁盘。
+    scan_shortcuts(system_app_roots(), query.as_deref(), 200)
 }
 
 fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
@@ -3283,6 +3330,7 @@ pub fn run() {
             open_local_path,
             launch_tool,
             discover_shortcuts,
+            discover_installed_apps,
             launch_discovered_shortcut,
             launch_custom_shortcut,
             list_common_scripts,
