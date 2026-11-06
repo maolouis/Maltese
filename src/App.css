@@ -5246,10 +5246,10 @@ html.maltese-page-opening .island__collapsed {
   object-fit: contain;
   object-position: center;
   filter: none;
-  /* GIF 自带大块透明留白：下移一点，让脚 / 趴卧线条正好落在窗口底边，
-     看起来就是趴在桌面边缘。position 不影响 Q 弹动画的 transform。 */
+  /* GIF 自带大块透明留白：下移一点点，让脚 / 趴卧线条贴近窗口底边。
+     之前是 23px，会把不同素材的下半身裁掉；收到 8px 后整只狗都能露出来。 */
   position: relative;
-  top: calc(23px * var(--pet-scale, 1));
+  top: calc(8px * var(--pet-scale, 1));
 }
 
 /* 设置页：气泡颜色选择器 / 说明文字 */

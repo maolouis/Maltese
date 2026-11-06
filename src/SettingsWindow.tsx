@@ -33,6 +33,7 @@ type PetSettings = {
   bongoOpacity: number;
   bongoMirror: boolean;
   bongoClickThrough: boolean;
+  bongoPosition: "bottomCenter" | "bottomLeft" | "bottomRight" | "topCenter";
   followMouse: boolean;
   cursorPetSize: number;
   collapsedScale: number;
@@ -68,6 +69,7 @@ const DEFAULTS: PetSettings = {
   bongoOpacity: 100,
   bongoMirror: true,
   bongoClickThrough: false,
+  bongoPosition: "bottomCenter",
   followMouse: false,
   cursorPetSize: 75,
   collapsedScale: 0.89,
@@ -338,6 +340,17 @@ export default function SettingsWindow() {
             <Slider label="Bongo 不透明度" value={settings.bongoOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("bongoOpacity", value)} />
             <Switch label="水平镜像" checked={settings.bongoMirror} onChange={(value) => update("bongoMirror", value)} />
             <Switch label="鼠标穿透 Bongo" checked={settings.bongoClickThrough} onChange={(value) => update("bongoClickThrough", value)} />
+            <Segments
+              label="Bongo 默认位置"
+              value={settings.bongoPosition}
+              items={[
+                ["bottomCenter", "底部居中"],
+                ["bottomLeft", "左下"],
+                ["bottomRight", "右下"],
+                ["topCenter", "顶部居中"],
+              ]}
+              onChange={(value) => update("bongoPosition", value)}
+            />
           </>
         )}
         <Switch label="跟随鼠标" hint="在光标旁显示一只小尺寸小狗" checked={settings.followMouse} onChange={(value) => update("followMouse", value)} />

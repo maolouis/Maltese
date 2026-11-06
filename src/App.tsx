@@ -282,6 +282,8 @@ type IslandPosition = {
   y: number;
 };
 
+type BongoPosition = "bottomCenter" | "bottomLeft" | "bottomRight" | "topCenter";
+
 type IslandSettings = {
   topEdgeLayoutVersion: 1;
   appearanceMode: AppearanceMode;
@@ -295,6 +297,7 @@ type IslandSettings = {
   bongoOpacity: number;
   bongoMirror: boolean;
   bongoClickThrough: boolean;
+  bongoPosition: BongoPosition;
   followMouse: boolean;
   cursorPetSize: number;
   collapsedScale: number;
@@ -520,6 +523,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   bongoOpacity: 100,
   bongoMirror: true,
   bongoClickThrough: false,
+  bongoPosition: "bottomCenter",
   followMouse: false,
   cursorPetSize: 75,
   collapsedScale: 0.89,
@@ -681,6 +685,12 @@ function normalizeClipboardSettings(
   };
 }
 
+function normalizeBongoPosition(value: unknown): BongoPosition {
+  return value === "bottomLeft" || value === "bottomRight" || value === "topCenter"
+    ? value
+    : "bottomCenter";
+}
+
 function normalizeSettings(
   settings: LegacyIslandSettings | null | undefined,
 ): IslandSettings {
@@ -734,6 +744,7 @@ function normalizeSettings(
     ),
     bongoMirror: settings?.bongoMirror !== false,
     bongoClickThrough: settings?.bongoClickThrough === true,
+    bongoPosition: normalizeBongoPosition(settings?.bongoPosition),
     followMouse: settings?.followMouse === true,
     cursorPetSize: clamp(
       Math.round(Number(settings?.cursorPetSize ?? DEFAULT_SETTINGS.cursorPetSize)),
@@ -2615,6 +2626,27 @@ function LayoutEditor({
               checked={settings.bongoClickThrough}
               onChange={(bongoClickThrough) => onSettingsChange({ ...settings, bongoClickThrough })}
             />
+            <div className="appearance-mode-control">
+              <span>Bongo 默认位置</span>
+              <div className="appearance-mode-control__segments" role="group" aria-label="Bongo 默认位置">
+                {([
+                  ["bottomCenter", "底部居中"],
+                  ["bottomLeft", "左下"],
+                  ["bottomRight", "右下"],
+                  ["topCenter", "顶部居中"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={settings.bongoPosition === value}
+                    className={settings.bongoPosition === value ? "appearance-mode-control--active" : ""}
+                    onClick={() => onSettingsChange({ ...settings, bongoPosition: value })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </>
         )}
         <ToggleControl
@@ -6670,6 +6702,7 @@ function IslandApp({
         bongoOpacity: settings.bongoOpacity,
         bongoMirror: settings.bongoMirror,
         bongoClickThrough: settings.bongoClickThrough,
+        bongoPosition: settings.bongoPosition,
         followMouse: settings.followMouse,
         cursorPetSize: settings.cursorPetSize,
       },
@@ -6679,6 +6712,7 @@ function IslandApp({
     settings.bongoEnabled,
     settings.bongoMirror,
     settings.bongoOpacity,
+    settings.bongoPosition,
     settings.bongoSize,
     settings.cursorPetSize,
     settings.followMouse,

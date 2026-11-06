@@ -89,4 +89,5 @@ node scripts/build-windows.mjs   # 一键打包（优先 pnpm，兜底 npm）
 
 - 沿用项目现有命名与组件结构，品牌色为浅绿 / 浅橙色。
 - 用户使用简体中文交流，UI 文案走 i18n（zh-CN / en），新增字符串要在 locales 和 types 里同步。
+- **每次提交都同步更新文档**：行为有变化就改 README，细节和实现取舍写进 `docs/`（形象相关写 `docs/pet-characters.md`，聊天写 `docs/pet-chat.md`），发版前补 `docs/releases/vX.Y.Z.md`。
 - 提交前验证 tsc 和 cargo check 通过。

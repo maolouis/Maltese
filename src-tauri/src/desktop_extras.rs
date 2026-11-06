@@ -26,7 +26,7 @@ static CURSOR_ENABLED: AtomicBool = AtomicBool::new(false);
 static CURSOR_SIZE: AtomicU32 = AtomicU32::new(75);
 static CURSOR_LOOP: Once = Once::new();
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopExtrasConfig {
     pub pet_count: u32,
@@ -37,6 +37,9 @@ pub struct DesktopExtrasConfig {
     pub bongo_click_through: bool,
     pub follow_mouse: bool,
     pub cursor_pet_size: u32,
+    /// Bongo 的默认落点；旧配置里没有这个字段时按底部居中处理。
+    #[serde(default)]
+    pub bongo_position: String,
 }
 
 fn work_area(app: &AppHandle) -> (i32, i32, i32, i32, f64) {
@@ -78,9 +81,10 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn sync_bongo(app: &AppHandle, config: DesktopExtrasConfig) -> Result<(), String> {
+fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
     let Some(window) = app.get_webview_window(BONGO_LABEL) else {
-        return Ok(());
+        // 启动早期窗口可能还没注册完，交给调用方稍后重试。
+        return Err("Bongo 窗口还没准备好".to_string());
     };
     let width = config.bongo_size.clamp(220, 700) as f64;
     let height = (width * BONGO_RATIO).round();
@@ -90,9 +94,19 @@ fn sync_bongo(app: &AppHandle, config: DesktopExtrasConfig) -> Result<(), String
         let (left, top, screen_w, screen_h, scale) = work_area(app);
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;
-        let x = left + ((screen_w - phys_w) / 2).max(0);
-        let y = top + (screen_h - phys_h).max(0);
-        let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+        let margin = (24.0 * scale).round() as i32;
+        let max_x = (left + screen_w - phys_w).max(left);
+        let max_y = (top + screen_h - phys_h).max(top);
+        let (x, y) = match config.bongo_position.as_str() {
+            "bottomLeft" => (left + margin, max_y),
+            "bottomRight" => (max_x - margin, max_y),
+            "topCenter" => (left + ((screen_w - phys_w) / 2).max(0), top + margin),
+            _ => (left + ((screen_w - phys_w) / 2).max(0), max_y),
+        };
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(
+            x.clamp(left, max_x),
+            y.clamp(top, max_y),
+        )));
         let _ = window.show();
     } else {
         let _ = window.hide();
@@ -100,7 +114,7 @@ fn sync_bongo(app: &AppHandle, config: DesktopExtrasConfig) -> Result<(), String
     Ok(())
 }
 
-fn sync_cursor(app: &AppHandle, config: DesktopExtrasConfig) -> Result<(), String> {
+fn sync_cursor(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
     CURSOR_ENABLED.store(config.follow_mouse, Ordering::SeqCst);
     CURSOR_SIZE.store(config.cursor_pet_size.clamp(30, 180), Ordering::SeqCst);
     if let Some(window) = app.get_webview_window(CURSOR_LABEL) {
@@ -176,8 +190,24 @@ pub async fn sync_desktop_extras(
         }
         // 三项互不阻断：多宠物失败时，Bongo 和鼠标跟随仍然要生效。
         let _ = sync_companions(&app, config.pet_count);
-        let _ = sync_bongo(&app, config);
-        let _ = sync_cursor(&app, config);
+        let _ = sync_bongo(&app, &config);
+        let _ = sync_cursor(&app, &config);
+
+        // 启动时 Bongo 窗口注册得比主窗口晚，或者 show 被系统窗口状态吞掉，
+        // 都会表现为“开了 Bongo 但开机没出现”。这里补几轮，直到它真的可见。
+        if config.bongo_enabled {
+            for _ in 0..16 {
+                let visible = app
+                    .get_webview_window(BONGO_LABEL)
+                    .and_then(|window| window.is_visible().ok())
+                    .unwrap_or(false);
+                if visible {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = sync_bongo(&app, &config);
+            }
+        }
     })
     .await
     .map_err(|error| error.to_string())
