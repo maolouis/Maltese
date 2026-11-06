@@ -83,8 +83,11 @@ import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./Onboard
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import {
+  loadShortcutAutoDetect,
   loadShortcutScanDir,
+  saveShortcutAutoDetect,
   saveShortcutScanDir,
+  SHORTCUT_AUTO_DETECT_EVENT,
   SHORTCUT_SCAN_DIR_EVENT,
 } from "./shortcutScanDir";
 import {
@@ -4771,6 +4774,14 @@ type CustomShortcut = { label: string; path: string };
 
 const CUSTOM_SHORTCUTS_KEY = "maltese-custom-shortcuts";
 const HIDDEN_SHORTCUTS_KEY = "maltese-hidden-shortcuts";
+const HIDDEN_SHORTCUT_ACTIONS_KEY = "maltese-hidden-shortcut-actions";
+
+function shortcutPathKey(path: string): string {
+  return path
+    .replace(/\//g, "\\")
+    .replace(/^\\\\\?\\/, "")
+    .toLowerCase();
+}
 
 function loadHiddenShortcuts(): string[] {
   try {
@@ -4780,7 +4791,21 @@ function loadHiddenShortcuts(): string[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((item): item is string => typeof item === "string" && item.length > 0)
+      .map(shortcutPathKey)
       .slice(0, 200);
+  } catch {
+    return [];
+  }
+}
+
+function loadHiddenShortcutActions(): string[] {
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_SHORTCUT_ACTIONS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
   } catch {
     return [];
   }
@@ -4905,6 +4930,8 @@ function AssistantPanel() {
   const [discoveredShortcuts, setDiscoveredShortcuts] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [customShortcuts, setCustomShortcuts] = useState<CustomShortcut[]>(loadCustomShortcuts);
   const [hiddenShortcuts, setHiddenShortcuts] = useState<string[]>(loadHiddenShortcuts);
+  const [hiddenShortcutActions, setHiddenShortcutActions] = useState<string[]>(loadHiddenShortcutActions);
+  const [autoDetectShortcuts, setAutoDetectShortcuts] = useState(loadShortcutAutoDetect);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const [draftLabel, setDraftLabel] = useState("");
@@ -4942,6 +4969,10 @@ function AssistantPanel() {
   // 快捷方式列表默认只扫描桌面；设置扫描目录后只扫描该目录。
   useEffect(() => {
     setScanError("");
+    if (!autoDetectShortcuts) {
+      setDiscoveredShortcuts([]);
+      return;
+    }
     void invoke<Array<{ label: string; path: string; kind: string; category: string }>>(
       "discover_shortcuts",
       { scanDir: scanDir || null },
@@ -4951,19 +4982,23 @@ function AssistantPanel() {
         setDiscoveredShortcuts([]);
         setScanError(String(error));
       });
-  }, [scanDir]);
+  }, [autoDetectShortcuts, scanDir]);
 
   useEffect(() => {
     const sync = () => {
       const next = loadShortcutScanDir();
       setScanDir(next);
       setScanDraft(next);
+      setAutoDetectShortcuts(loadShortcutAutoDetect());
     };
+    const syncAuto = () => setAutoDetectShortcuts(loadShortcutAutoDetect());
     window.addEventListener("storage", sync);
     window.addEventListener(SHORTCUT_SCAN_DIR_EVENT, sync);
+    window.addEventListener(SHORTCUT_AUTO_DETECT_EVENT, syncAuto);
     return () => {
       window.removeEventListener("storage", sync);
       window.removeEventListener(SHORTCUT_SCAN_DIR_EVENT, sync);
+      window.removeEventListener(SHORTCUT_AUTO_DETECT_EVENT, syncAuto);
     };
   }, []);
   // 读取快捷方式图标（.lnk / exe / 脚本）
@@ -5010,10 +5045,20 @@ function AssistantPanel() {
   };
 
   const persistHiddenShortcuts = (next: string[]) => {
-    const unique = [...new Set(next)].slice(0, 200);
+    const unique = [...new Set(next.map(shortcutPathKey))].slice(0, 200);
     setHiddenShortcuts(unique);
     try {
       window.localStorage.setItem(HIDDEN_SHORTCUTS_KEY, JSON.stringify(unique));
+    } catch {
+      // 忽略写入失败
+    }
+  };
+
+  const persistHiddenShortcutActions = (next: string[]) => {
+    const unique = [...new Set(next)].slice(0, 100);
+    setHiddenShortcutActions(unique);
+    try {
+      window.localStorage.setItem(HIDDEN_SHORTCUT_ACTIONS_KEY, JSON.stringify(unique));
     } catch {
       // 忽略写入失败
     }
@@ -5024,8 +5069,14 @@ function AssistantPanel() {
     setNotice(`${label} 已从列表移除（不会删除桌面文件）`);
   };
 
+  const hideShortcutAction = (id: string, label: string) => {
+    persistHiddenShortcutActions([...hiddenShortcutActions, id]);
+    setNotice(`${label} 已从快捷入口移除`);
+  };
+
   const restoreHiddenShortcuts = () => {
     persistHiddenShortcuts([]);
+    persistHiddenShortcutActions([]);
     setNotice("已恢复被隐藏的快捷方式");
   };
 
@@ -5100,11 +5151,14 @@ function AssistantPanel() {
     { id: "scripts", label: "常用脚本", detail: "打开脚本目录", tool: "scripts" },
   ];
   const hiddenShortcutSet = new Set(hiddenShortcuts);
+  const hiddenActionSet = new Set(hiddenShortcutActions);
+  const visibleActions = actions.filter((action) => !hiddenActionSet.has(action.id));
   const discoveredActions = discoveredShortcuts
-    .filter((shortcut) => !hiddenShortcutSet.has(shortcut.path))
-    .slice(0, 24);
+    .filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path)))
+    .slice(0, 100);
   const removableShortcutCount =
-    discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcut.path)).length +
+    visibleActions.length +
+    discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path))).length +
     customShortcuts.length;
 
   useEffect(() => {
@@ -5161,6 +5215,10 @@ function AssistantPanel() {
     persistHiddenShortcuts([
       ...hiddenShortcuts,
       ...discoveredShortcuts.map((shortcut) => shortcut.path),
+    ]);
+    persistHiddenShortcutActions([
+      ...hiddenShortcutActions,
+      ...actions.map((action) => action.id),
     ]);
     persistCustomShortcuts([]);
     setClearAllArmed(false);
@@ -5220,13 +5278,13 @@ function AssistantPanel() {
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
         <div className="assistant-panel__section-meta">
-          {hiddenShortcuts.length > 0 && (
+          {hiddenShortcuts.length + hiddenShortcutActions.length > 0 && (
             <button
               type="button"
               className="assistant-panel__restore"
               onClick={restoreHiddenShortcuts}
             >
-              恢复隐藏（{hiddenShortcuts.length}）
+              恢复隐藏（{hiddenShortcuts.length + hiddenShortcutActions.length}）
             </button>
           )}
           {removableShortcutCount > 0 && (
@@ -5266,10 +5324,23 @@ function AssistantPanel() {
         </small>
       </div>
       <div className="assistant-panel__scan-dir">
+        <label className="assistant-panel__scan-toggle">
+          <input
+            type="checkbox"
+            checked={autoDetectShortcuts}
+            onChange={(event) => {
+              const next = event.currentTarget.checked;
+              setAutoDetectShortcuts(next);
+              saveShortcutAutoDetect(next);
+            }}
+          />
+          <span>自动识别快捷方式</span>
+        </label>
         <span className="assistant-panel__label">自动扫描目录</span>
         <div className="assistant-panel__scan-row">
           <input
             value={scanDraft}
+            disabled={!autoDetectShortcuts}
             onChange={(event) => setScanDraft(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") applyScanDir();
@@ -5277,27 +5348,39 @@ function AssistantPanel() {
             placeholder="留空只扫描桌面，或填一个快捷方式目录"
             spellCheck={false}
           />
-          <button type="button" onClick={applyScanDir}>扫描</button>
+          <button type="button" disabled={!autoDetectShortcuts} onClick={applyScanDir}>扫描</button>
         </div>
         <small className={scanError ? "assistant-panel__scan-error" : undefined}>
-          {scanError || (scanDir ? `只扫描：${scanDir}` : "只扫描当前用户桌面，不再扫描开始菜单/Program Files。")}
+          {!autoDetectShortcuts
+            ? "自动识别已关闭；只保留自定义快捷方式。"
+            : scanError || (scanDir ? `只扫描：${scanDir}` : "只扫描当前用户桌面，不再扫描开始菜单/Program Files。")}
         </small>
       </div>
       <div className="assistant-panel__grid">
-        {actions.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            className="assistant-card"
-            data-window-drag="false"
-            onClick={() => void handleAction(action.tool)}
-          >
-            <span className="assistant-card__copy">
-              <strong>{action.label}</strong>
-              <small>{action.detail}</small>
-            </span>
-            <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-          </button>
+        {visibleActions.map((action) => (
+          <div key={action.id} className="assistant-card assistant-card--custom">
+            <button
+              type="button"
+              className="assistant-card__launch"
+              data-window-drag="false"
+              onClick={() => void handleAction(action.tool)}
+            >
+              <span className="assistant-card__copy">
+                <strong>{action.label}</strong>
+                <small>{action.detail}</small>
+              </span>
+              <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="assistant-card__remove"
+              title="从快捷入口移除"
+              aria-label={`从快捷入口移除 ${action.label}`}
+              onClick={() => hideShortcutAction(action.id, action.label)}
+            >
+              ×
+            </button>
+          </div>
         ))}
         {discoveredActions.map((shortcut) => (
           <div key={shortcut.path} className="assistant-card assistant-card--custom">
@@ -6020,6 +6103,7 @@ function IslandApp({
   const overlayGenerationRef = useRef(Date.now());
   const overlayHoveredRef = useRef(false);
   const overlayHideTimerRef = useRef<number | null>(null);
+  const pageOpenMaskRef = useRef<number | null>(null);
   const updateState = useSyncExternalStore(subscribeToUpdate, getUpdateState);
   const shownUpdateVersionRef = useRef("");
 
@@ -6525,10 +6609,22 @@ function IslandApp({
 
   const openIslandPage = useCallback((nextPage: IslandPage) => {
     clearPetOverlayForPage();
+    if (mode !== "expanded") {
+      // 窗口从收起尺寸放大时，WebView 会短暂保留旧画面，狗看起来在左上角
+      // 有一层重影。放大期间先隐藏收起态小狗，等新面板完成首帧再显示。
+      document.documentElement.classList.add("maltese-page-opening");
+      if (pageOpenMaskRef.current !== null) {
+        window.clearTimeout(pageOpenMaskRef.current);
+      }
+      pageOpenMaskRef.current = window.setTimeout(() => {
+        pageOpenMaskRef.current = null;
+        document.documentElement.classList.remove("maltese-page-opening");
+      }, 320);
+    }
     setPage(nextPage);
     setMode("expanded");
     setIsTucked(false);
-  }, [clearPetOverlayForPage]);
+  }, [clearPetOverlayForPage, mode]);
 
   // 快捷面板只有一个系统级热键：打开整个快捷方式面板，而不是逐个启动应用。
   useEffect(() => {

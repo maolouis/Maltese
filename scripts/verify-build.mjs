@@ -76,9 +76,10 @@ try {
   const rotationSource = fs.readFileSync(path.join(root, "src/petGifRotation.ts"), "utf8");
   if (
     !rotationSource.includes("maltese-pet-gif-rotation") ||
+    !rotationSource.includes("maltese-pet-gif-rotation-states") ||
     !rotationSource.includes("convertFileSrc")
   ) {
-    fail("GIF 轮播顺序/自定义素材模块不完整");
+    fail("GIF 轮播顺序/多状态范围/自定义素材模块不完整");
   }
   const settingsSource = fs.readFileSync(path.join(root, "src/SettingsWindow.tsx"), "utf8");
   if (!settingsSource.includes("PetGifRotationSettings")) {
@@ -154,6 +155,31 @@ try {
   console.log("[verify] ✓ 快捷面板热键为面板级单热键");
 } catch (error) {
   fail(`快捷面板热键检查失败：${error}`);
+}
+
+// 5.6 快捷方式目录/自动识别与插件 hover 说明。
+try {
+  const scanSource = fs.readFileSync(path.join(root, "src/shortcutScanDir.ts"), "utf8");
+  const appSource = fs.readFileSync(path.join(root, "src/App.tsx"), "utf8");
+  const nativeSource = fs.readFileSync(path.join(root, "src-tauri/src/lib.rs"), "utf8");
+  if (!scanSource.includes("SHORTCUT_AUTO_DETECT_KEY") || !scanSource.includes("loadShortcutAutoDetect")) {
+    fail("快捷方式自动识别开关没有接入存储");
+  }
+  if (!appSource.includes('invoke<Array<{ label: string; path: string; kind: string; category: string }>>') ||
+      !appSource.includes("scanDir: scanDir || null")) {
+    fail("快捷面板没有把扫描目录传给 discover_shortcuts");
+  }
+  if (!nativeSource.includes("fn shortcut_scan_roots(scan_dir") ||
+      !nativeSource.includes("fn discover_shortcuts(scan_dir")) {
+    fail("Rust 快捷方式发现没有限定扫描目录");
+  }
+  const pluginSource = fs.readFileSync(path.join(root, "src/PluginsPanel.tsx"), "utf8");
+  if (!pluginSource.includes("plugin-help-window") || !pluginSource.includes("createPortal")) {
+    fail("插件使用说明没有独立的 hover 浮窗");
+  }
+  console.log("[verify] ✓ 快捷方式自动识别开关/扫描目录与插件 hover 浮窗正常");
+} catch (error) {
+  fail(`快捷方式目录/插件说明检查失败：${error}`);
 }
 
 // 6. 版本号一致性

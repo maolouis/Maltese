@@ -1,5 +1,25 @@
 export const SHORTCUT_SCAN_DIR_KEY = "maltese-shortcut-scan-dir";
 export const SHORTCUT_SCAN_DIR_EVENT = "maltese-shortcut-scan-dir-updated";
+export const SHORTCUT_AUTO_DETECT_KEY = "maltese-shortcut-auto-detect";
+export const SHORTCUT_AUTO_DETECT_EVENT = "maltese-shortcut-auto-detect-updated";
+
+export function loadShortcutAutoDetect(): boolean {
+  try {
+    return window.localStorage.getItem(SHORTCUT_AUTO_DETECT_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function saveShortcutAutoDetect(enabled: boolean): boolean {
+  try {
+    window.localStorage.setItem(SHORTCUT_AUTO_DETECT_KEY, enabled ? "true" : "false");
+  } catch {
+    // 存储失败时当前会话仍使用传入值。
+  }
+  window.dispatchEvent(new CustomEvent(SHORTCUT_AUTO_DETECT_EVENT, { detail: enabled }));
+  return enabled;
+}
 
 export function loadShortcutScanDir(): string {
   try {

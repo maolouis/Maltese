@@ -425,6 +425,13 @@ input,
   transition-delay: 0s;
 }
 
+/* 右键/点击气泡展开面板时，旧收起画面在窗口放大首帧会留下小狗重影。 */
+html.maltese-page-opening .island__collapsed {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  transition: none !important;
+}
+
 .island__open-button {
   display: flex;
   align-items: center;
@@ -4973,9 +4980,32 @@ input,
   margin: 2px 0 6px;
 }
 
+.assistant-panel__scan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.assistant-panel__scan-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #f0a04b;
+}
+
 .assistant-panel__scan-row {
   display: flex;
   gap: 6px;
+}
+
+.assistant-panel__scan-row input:disabled,
+.assistant-panel__scan-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .assistant-panel__scan-row input {
@@ -5778,6 +5808,10 @@ input,
 
 .island__expanded .assistant-panel__panel-hotkey small[role="alert"] {
   color: #c45c2e;
+}
+
+.island__expanded .assistant-panel__scan-toggle {
+  color: #5f6672;
 }
 
 .island__expanded .assistant-panel__scan-row input {
