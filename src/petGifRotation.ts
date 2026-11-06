@@ -4,6 +4,8 @@ import { PET_GIF_VARIANTS, type PetVisualState } from "./petAssets";
 
 export const PET_GIF_ROTATION_STORAGE_KEY = "maltese-pet-gif-rotation";
 export const PET_GIF_ROTATION_UPDATED_EVENT = "maltese-pet-gif-rotation-updated";
+export const PET_GIF_ROTATION_STATES_KEY = "maltese-pet-gif-rotation-states";
+export const PET_GIF_ROTATION_STATES_EVENT = "maltese-pet-gif-rotation-states-updated";
 
 export type PetGifRotationItem = {
   id: string;
@@ -117,6 +119,57 @@ export function savePetGifRotationConfig(config: PetGifRotationConfig) {
   }
 }
 
+export function loadPetGifRotationStates(): string[] {
+  const valid = Object.keys(PET_GIF_VARIANTS);
+  try {
+    const raw = window.localStorage.getItem(PET_GIF_ROTATION_STATES_KEY);
+    if (!raw) return ["idle"];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return ["idle"];
+    const states = [...new Set(parsed.filter((value): value is string =>
+      typeof value === "string" && valid.includes(value),
+    ))];
+    return states.length > 0 ? states : ["idle"];
+  } catch {
+    return ["idle"];
+  }
+}
+
+export function savePetGifRotationStates(states: string[]) {
+  const valid = new Set(Object.keys(PET_GIF_VARIANTS));
+  const normalized = [...new Set(states.filter((state) => valid.has(state)))];
+  const next = normalized.length > 0 ? normalized : ["idle"];
+  try {
+    window.localStorage.setItem(PET_GIF_ROTATION_STATES_KEY, JSON.stringify(next));
+    window.dispatchEvent(new Event(PET_GIF_ROTATION_STATES_EVENT));
+  } catch {
+    // localStorage 不可用时仍让当前会话继续运行。
+  }
+  return next;
+}
+
+/** 设置窗口保存后，主窗口/陪玩狗/跟随狗通过 storage 事件同步。 */
+export function usePetGifRotationStates(): string[] {
+  const [states, setStates] = useState<string[]>(loadPetGifRotationStates);
+
+  useEffect(() => {
+    const update = () => setStates(loadPetGifRotationStates());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === PET_GIF_ROTATION_STATES_KEY || event.key === null) {
+        update();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(PET_GIF_ROTATION_STATES_EVENT, update);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(PET_GIF_ROTATION_STATES_EVENT, update);
+    };
+  }, []);
+
+  return states;
+}
+
 export function petGifItemSrc(item: PetGifRotationItem): string {
   if (item.path) {
     try {
@@ -131,14 +184,25 @@ export function petGifItemSrc(item: PetGifRotationItem): string {
 export function rotationFramesForState(
   config: PetGifRotationConfig,
   state: string,
+  rotationStates?: string[],
 ): string[] {
-  const configured = (config[state] ?? [])
-    .map(petGifItemSrc)
-    .filter((src) => Boolean(src));
-  // 用户把某一类表情删空时，不要显示破图，退回内置默认顺序。
-  return configured.length > 0
-    ? configured
-    : (PET_GIF_VARIANTS[state as PetVisualState] ?? []);
+  const framesFor = (target: string): string[] => {
+    const configured = (config[target] ?? [])
+      .map(petGifItemSrc)
+      .filter((src) => Boolean(src));
+    // 用户把某一类表情删空时，不要显示破图，退回内置默认顺序。
+    return configured.length > 0
+      ? configured
+      : (PET_GIF_VARIANTS[target as PetVisualState] ?? []);
+  };
+
+  // 动作/情绪表情仍优先显示自己的 GIF；只有待机轮播会合并用户勾选的状态。
+  if (state !== "idle" || !rotationStates || rotationStates.length === 0) {
+    return framesFor(state);
+  }
+
+  const merged = rotationStates.flatMap((target) => framesFor(target));
+  return [...new Set(merged)];
 }
 
 /** 设置窗口保存后，主窗口/陪玩狗/跟随狗通过 storage 事件同步。 */

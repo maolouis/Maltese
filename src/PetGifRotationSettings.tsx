@@ -6,7 +6,9 @@ import {
   defaultPetGifItems,
   petGifItemSrc,
   savePetGifRotationConfig,
+  savePetGifRotationStates,
   usePetGifRotationConfig,
+  usePetGifRotationStates,
   type PetGifRotationItem,
 } from "./petGifRotation";
 import "./PetGifRotationSettings.css";
@@ -22,6 +24,7 @@ const MAX_GIF_BYTES = 8 * 1024 * 1024;
 export function PetGifRotationSettings() {
   const t = useTranslation();
   const config = usePetGifRotationConfig();
+  const rotationStates = usePetGifRotationStates();
   const [state, setState] = useState("idle");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,6 +43,13 @@ export function PetGifRotationSettings() {
   const selectAll = () => {
     if (missingItems.length === 0) return;
     saveItems([...items, ...missingItems]);
+  };
+
+  const toggleRotationState = (key: string) => {
+    const next = rotationStates.includes(key)
+      ? rotationStates.filter((value) => value !== key)
+      : [...rotationStates, key];
+    savePetGifRotationStates(next);
   };
 
   const move = (index: number, offset: number) => {
@@ -148,6 +158,43 @@ export function PetGifRotationSettings() {
           <RotateCcw size={13} />
           {t.petGifs.reset}
         </button>
+      </div>
+
+      <div className="pet-gif-settings__scope">
+        <div className="pet-gif-settings__scope-head">
+          <span>{t.petGifs.rotationScope}</span>
+          <small>{t.petGifs.scopeCount(rotationStates.length, states.length)}</small>
+        </div>
+        <p className="pet-gif-settings__scope-hint">{t.petGifs.rotationScopeHint}</p>
+        <div className="pet-gif-settings__scope-chips">
+          {states.map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={rotationStates.includes(key) ? "is-active" : ""}
+              aria-pressed={rotationStates.includes(key)}
+              onClick={() => toggleRotationState(key)}
+            >
+              {t.petGifs.states[key] ?? key}
+            </button>
+          ))}
+        </div>
+        <div className="pet-gif-settings__scope-actions">
+          <button
+            type="button"
+            className="sw-secondary"
+            onClick={() => savePetGifRotationStates(states)}
+          >
+            {t.petGifs.selectAllStates}
+          </button>
+          <button
+            type="button"
+            className="sw-secondary"
+            onClick={() => savePetGifRotationStates([state])}
+          >
+            {t.petGifs.currentStateOnly}
+          </button>
+        </div>
       </div>
 
       {error && <p className="pet-gif-settings__error">{error}</p>}

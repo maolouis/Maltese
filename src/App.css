@@ -4966,6 +4966,58 @@ input,
   color: #ffad98;
 }
 
+.assistant-panel__scan-dir {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 2px 0 6px;
+}
+
+.assistant-panel__scan-row {
+  display: flex;
+  gap: 6px;
+}
+
+.assistant-panel__scan-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(255, 255, 255, 0.86);
+  font: inherit;
+  font-size: 9.5px;
+}
+
+.assistant-panel__scan-row input:focus-visible {
+  outline: 2px solid rgba(240, 160, 75, 0.55);
+  outline-offset: 1px;
+}
+
+.assistant-panel__scan-row button {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 216, 170, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 216, 170, 0.1);
+  color: rgba(255, 235, 214, 0.9);
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.assistant-panel__scan-dir small {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 9px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.assistant-panel__scan-dir small.assistant-panel__scan-error {
+  color: #ffad98;
+}
+
 .assistant-panel__hotkey-button {
   min-width: 116px;
   padding: 5px 10px;
@@ -5725,6 +5777,26 @@ input,
 }
 
 .island__expanded .assistant-panel__panel-hotkey small[role="alert"] {
+  color: #c45c2e;
+}
+
+.island__expanded .assistant-panel__scan-row input {
+  border-color: #e1e4eb;
+  background: #f7f8fb;
+  color: #3f4652;
+}
+
+.island__expanded .assistant-panel__scan-row button {
+  border-color: #e6c49f;
+  background: #fff8ef;
+  color: #a65f1d;
+}
+
+.island__expanded .assistant-panel__scan-dir small {
+  color: #8a909c;
+}
+
+.island__expanded .assistant-panel__scan-dir small.assistant-panel__scan-error {
   color: #c45c2e;
 }
 

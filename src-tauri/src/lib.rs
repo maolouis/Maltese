@@ -1084,27 +1084,18 @@ struct DiscoveredShortcut {
     category: String,
 }
 
-fn shortcut_search_roots() -> Vec<PathBuf> {
+fn shortcut_scan_roots(scan_dir: Option<&str>) -> Vec<PathBuf> {
     let user_profile = env::var("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("C:\\Users\\Administrator"));
-    let app_data = env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| user_profile.join("AppData\\Roaming"));
-    let program_data = env::var("PROGRAMDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:\\ProgramData"));
-    let local_app_data = env::var("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| user_profile.join("AppData\\Local"));
-    vec![
-        user_profile.join("Desktop"),
-        app_data.join("Microsoft\\Windows\\Start Menu\\Programs"),
-        program_data.join("Microsoft\\Windows\\Start Menu\\Programs"),
-        local_app_data.join("Programs"),
-        PathBuf::from("C:\\Program Files"),
-        PathBuf::from("C:\\Program Files (x86)"),
-    ]
+    if let Some(scan_dir) = scan_dir.map(str::trim).filter(|value| !value.is_empty()) {
+        // 用户指定目录后只扫描这个目录，不再遍历开始菜单、Program Files
+        // 等系统目录；这样既快，也不会把整台电脑的启动项都混进来。
+        return vec![PathBuf::from(scan_dir)];
+    }
+    // 默认只扫描当前用户桌面。以前还会递归扫描开始菜单和 Program Files，
+    // 目录很大时既慢又容易发现一堆无关入口。
+    vec![user_profile.join("Desktop")]
 }
 
 fn classify_shortcut(label: &str) -> &'static str {
@@ -1129,10 +1120,19 @@ fn classify_shortcut(label: &str) -> &'static str {
 }
 
 #[tauri::command]
-fn discover_shortcuts() -> Result<Vec<DiscoveredShortcut>, String> {
-    let mut queue: VecDeque<(PathBuf, u8)> = shortcut_search_roots()
+fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
+    let roots = shortcut_scan_roots(scan_dir.as_deref());
+    if roots.is_empty() || roots.iter().any(|root| !root.is_dir()) {
+        return Err(format!(
+            "快捷方式扫描目录不存在：{}",
+            roots
+                .first()
+                .map(|root| root.to_string_lossy().to_string())
+                .unwrap_or_default()
+        ));
+    }
+    let mut queue: VecDeque<(PathBuf, u8)> = roots
         .into_iter()
-        .filter(|root| root.exists())
         .map(|root| (root, 0))
         .collect();
     let mut discovered = Vec::new();
@@ -1219,10 +1219,16 @@ pub(crate) fn launch_shortcut_path(path: PathBuf) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn launch_discovered_shortcut(path: String) -> Result<(), String> {
+fn launch_discovered_shortcut(
+    path: String,
+    scan_dir: Option<String>,
+) -> Result<(), String> {
     let requested = PathBuf::from(path.trim());
     let canonical_path = requested.canonicalize().map_err(|error| format!("无法读取快捷入口：{error}"))?;
-    let allowed = shortcut_search_roots().into_iter().filter_map(|root| root.canonicalize().ok()).any(|root| canonical_path.starts_with(root));
+    let allowed = shortcut_scan_roots(scan_dir.as_deref())
+        .into_iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| canonical_path.starts_with(root));
     if !allowed {
         return Err("只能打开自动发现目录中的入口。".to_string());
     }

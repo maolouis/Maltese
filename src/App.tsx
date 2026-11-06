@@ -64,7 +64,11 @@ import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
 import { resolvePetGif } from "./petAssets";
-import { rotationFramesForState, usePetGifRotationConfig } from "./petGifRotation";
+import {
+  rotationFramesForState,
+  usePetGifRotationConfig,
+  usePetGifRotationStates,
+} from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { UpdatePanel } from "./UpdatePanel";
 import { UpdateBanner } from "./UpdateBanner";
@@ -78,6 +82,11 @@ import { PluginsPanel } from "./PluginsPanel";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
+import {
+  loadShortcutScanDir,
+  saveShortcutScanDir,
+  SHORTCUT_SCAN_DIR_EVENT,
+} from "./shortcutScanDir";
 import {
   formatShortcutFromEvent,
   loadShortcutPanelHotkey,
@@ -1275,6 +1284,7 @@ export function IslandShell({
   const petSlotWidth = Math.max(148, 152 * collapsedScale + 16);
   const petSlotHeight = Math.max(124, 128 * collapsedScale + 16);
   const gifRotationConfig = usePetGifRotationConfig();
+  const gifRotationStates = usePetGifRotationStates();
   const [petSquash, setPetSquash] = useState(false);
   // 参考 LineDogPet：只有整个系统闲置一段时间才睡觉，用户一动键鼠立刻醒。
   const [systemIdleSeconds, setSystemIdleSeconds] = useState(0);
@@ -1313,7 +1323,7 @@ export function IslandShell({
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
   // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
-  const carouselFrames = rotationFramesForState(gifRotationConfig, petState);
+  const carouselFrames = rotationFramesForState(gifRotationConfig, petState, gifRotationStates);
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: 10_000,
     enabled: !(petState === "idle" && (restingAsleep || isTucked)),
@@ -1638,7 +1648,6 @@ export function IslandShell({
               event.preventDefault();
               event.stopPropagation();
               if (mouseInteractions) {
-                onOverlayClose();
                 onOpenPage("chat");
               }
             }}
@@ -1704,13 +1713,13 @@ export function IslandShell({
                     )}
                   </div>
                   <div className="pet-bubble-panel__links" aria-label="快捷操作">
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("todo"); }}>待办</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("music"); }}>音乐</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("clipboard"); }}>剪贴板</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("chat"); }}>聊天</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("video"); }}>看视频</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("qq"); }}>消息</button>
-                    <button type="button" onClick={() => { onOverlayClose(); onOpenPage("assistant"); }}>快捷</button>
+                    <button type="button" onClick={() => onOpenPage("todo")}>待办</button>
+                    <button type="button" onClick={() => onOpenPage("music")}>音乐</button>
+                    <button type="button" onClick={() => onOpenPage("clipboard")}>剪贴板</button>
+                    <button type="button" onClick={() => onOpenPage("chat")}>聊天</button>
+                    <button type="button" onClick={() => onOpenPage("video")}>看视频</button>
+                    <button type="button" onClick={() => onOpenPage("qq")}>消息</button>
+                    <button type="button" onClick={() => onOpenPage("assistant")}>快捷</button>
                   </div>
                   <button
                     type="button"
@@ -4904,6 +4913,9 @@ function AssistantPanel() {
   const [panelHotkey, setPanelHotkey] = useState(loadShortcutPanelHotkey);
   const [recordingPanelHotkey, setRecordingPanelHotkey] = useState(false);
   const [panelHotkeyError, setPanelHotkeyError] = useState("");
+  const [scanDir, setScanDir] = useState(loadShortcutScanDir);
+  const [scanDraft, setScanDraft] = useState(loadShortcutScanDir);
+  const [scanError, setScanError] = useState("");
 
   useEffect(() => {
     if (!clearAllArmed) {
@@ -4927,12 +4939,32 @@ function AssistantPanel() {
       .then(setCommonScripts)
       .catch(() => setCommonScripts([]));
   }, []);
-  // 快捷方式列表完全来自当前用户的桌面/开始菜单和本机 localStorage，
-// 不写死任何人的固定入口；“看视频”是独立内置功能，不依赖这些快捷方式。
+  // 快捷方式列表默认只扫描桌面；设置扫描目录后只扫描该目录。
   useEffect(() => {
-    void invoke<Array<{ label: string; path: string; kind: string; category: string }>>("discover_shortcuts")
+    setScanError("");
+    void invoke<Array<{ label: string; path: string; kind: string; category: string }>>(
+      "discover_shortcuts",
+      { scanDir: scanDir || null },
+    )
       .then(setDiscoveredShortcuts)
-      .catch(() => setDiscoveredShortcuts([]));
+      .catch((error) => {
+        setDiscoveredShortcuts([]);
+        setScanError(String(error));
+      });
+  }, [scanDir]);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = loadShortcutScanDir();
+      setScanDir(next);
+      setScanDraft(next);
+    };
+    window.addEventListener("storage", sync);
+    window.addEventListener(SHORTCUT_SCAN_DIR_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(SHORTCUT_SCAN_DIR_EVENT, sync);
+    };
   }, []);
   // 读取快捷方式图标（.lnk / exe / 脚本）
   useEffect(() => {
@@ -5011,11 +5043,16 @@ function AssistantPanel() {
     setNotice("已添加快捷方式");
   };
 
+  const applyScanDir = () => {
+    const next = saveShortcutScanDir(scanDraft);
+    setScanDraft(next);
+    setScanDir(next);
+  };
+
   const launchPath = (label: string, path: string) => {
-    const command = customShortcuts.some((shortcut) => shortcut.path === path)
-      ? "launch_custom_shortcut"
-      : "launch_discovered_shortcut";
-    void invoke(command, { path })
+    const isCustom = customShortcuts.some((shortcut) => shortcut.path === path);
+    const command = isCustom ? "launch_custom_shortcut" : "launch_discovered_shortcut";
+    void invoke(command, isCustom ? { path } : { path, scanDir: scanDir || null })
       .then(() => setNotice(label + " 已打开"))
       .catch((error) => setNotice(label + " 打开失败：" + String(error)));
   };
@@ -5226,6 +5263,24 @@ function AssistantPanel() {
         </button>
         <small role={panelHotkeyError ? "alert" : undefined}>
           {panelHotkeyError || t.assistant.panelHotkeyHint}
+        </small>
+      </div>
+      <div className="assistant-panel__scan-dir">
+        <span className="assistant-panel__label">自动扫描目录</span>
+        <div className="assistant-panel__scan-row">
+          <input
+            value={scanDraft}
+            onChange={(event) => setScanDraft(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") applyScanDir();
+            }}
+            placeholder="留空只扫描桌面，或填一个快捷方式目录"
+            spellCheck={false}
+          />
+          <button type="button" onClick={applyScanDir}>扫描</button>
+        </div>
+        <small className={scanError ? "assistant-panel__scan-error" : undefined}>
+          {scanError || (scanDir ? `只扫描：${scanDir}` : "只扫描当前用户桌面，不再扫描开始菜单/Program Files。")}
         </small>
       </div>
       <div className="assistant-panel__grid">
@@ -6009,10 +6064,29 @@ function IslandApp({
     });
   }, []);
 
+  // 从气泡直接切到展开页时，不再先发一次原生 close 再展开。
+  // 两次窗口尺寸变化会在右键/点气泡入口时产生频闪；这里只清 UI，
+  // 由 set_island_interaction 的展开几何接管窗口。
+  const clearPetOverlayForPage = useCallback(() => {
+    if (overlayHideTimerRef.current !== null) {
+      window.clearTimeout(overlayHideTimerRef.current);
+      overlayHideTimerRef.current = null;
+    }
+    overlayGenerationRef.current = Math.max(Date.now(), overlayGenerationRef.current + 1);
+    petOverlayRef.current = null;
+    setPetOverlay(null);
+    setOverlayOpen(false);
+  }, []);
+
   const hidePetOverlay = useCallback(() => {
     if (overlayHideTimerRef.current !== null) {
       window.clearTimeout(overlayHideTimerRef.current);
       overlayHideTimerRef.current = null;
+    }
+    // 没有气泡时不要再发一次原生 close：右键打开聊天时这次多余的
+    // “缩回再展开”会让窗口频闪。关闭请求只在确实有浮层时发。
+    if (!petOverlayRef.current) {
+      return;
     }
     applyPetOverlay(null);
   }, [applyPetOverlay]);
@@ -6450,11 +6524,11 @@ function IslandApp({
   }, []);
 
   const openIslandPage = useCallback((nextPage: IslandPage) => {
-    hidePetOverlay();
+    clearPetOverlayForPage();
     setPage(nextPage);
     setMode("expanded");
     setIsTucked(false);
-  }, [hidePetOverlay]);
+  }, [clearPetOverlayForPage]);
 
   // 快捷面板只有一个系统级热键：打开整个快捷方式面板，而不是逐个启动应用。
   useEffect(() => {

@@ -4,6 +4,7 @@ import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { LocalChatSettings } from "./LocalChatSettings";
+import { loadShortcutScanDir, saveShortcutScanDir } from "./shortcutScanDir";
 import { UpdatePanel } from "./UpdatePanel";
 import "./SettingsWindow.css";
 
@@ -199,6 +200,7 @@ export default function SettingsWindow() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const [shortcut, setShortcut] = useState(loadWakeShortcut);
   const [shortcutError, setShortcutError] = useState("");
+  const [shortcutScanDir, setShortcutScanDir] = useState(loadShortcutScanDir);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const saveTimer = useRef<number | null>(null);
 
@@ -405,6 +407,23 @@ export default function SettingsWindow() {
       <section className="sw-card">
         <h2>其他</h2>
         <Switch label="随机闲逛" hint="空闲时小狗在桌面慢慢挪一小步" checked={settings.roam} onChange={(value) => update("roam", value)} />
+        <div className="sw-row sw-row--stack">
+          <span className="sw-copy">
+            <span className="sw-label">快捷方式扫描目录</span>
+            <span className="sw-hint">留空只扫描桌面；填目录后只识别该目录，不再扫描开始菜单/Program Files</span>
+          </span>
+          <input
+            className="sw-input sw-input--wide"
+            value={shortcutScanDir}
+            placeholder="例如 D:\\我的快捷方式"
+            spellCheck={false}
+            onChange={(event) => {
+              const next = event.currentTarget.value;
+              setShortcutScanDir(next);
+              saveShortcutScanDir(next);
+            }}
+          />
+        </div>
       </section>
 
       <section className="sw-card">

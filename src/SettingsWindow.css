@@ -196,6 +196,18 @@ body,
   text-align: center;
 }
 
+.sw-row--stack {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sw-input--wide {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+}
+
 .sw-color {
   width: 52px;
   height: 26px;

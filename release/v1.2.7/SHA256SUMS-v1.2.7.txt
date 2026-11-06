@@ -1,0 +1,4 @@
+c55ed06b1eeaf594c1e4473e0ed2a8cde1f8469e0a40ef0a1a3caee86eb0a3ff  Maltese-assistant.exe
+4a22b566e7b3d2d7f43400b50c6114bde10a1609d8ba5453fa7bec053a96565f  maltese-assistant-v1.2.7-win64.zip
+c86774834a666bd3e7dd86d377cfd0abe8ea900c74b96ed5235f5f2e2a64eec6  Maltese-1.2.7-x64-setup.exe
+704690e62acadf7a674b21e8abeddd0f7a5b73087ec15f62f9afa597326049e9  latest.json

@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
-import { rotationFramesForState, usePetGifRotationConfig } from "./petGifRotation";
+import {
+  rotationFramesForState,
+  usePetGifRotationConfig,
+  usePetGifRotationStates,
+} from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import "./DesktopExtras.css";
 
@@ -32,8 +36,9 @@ function readLook(): PetLook {
 export default function CompanionPet() {
   const [look, setLook] = useState<PetLook>(readLook);
   const gifRotationConfig = usePetGifRotationConfig();
+  const gifRotationStates = usePetGifRotationStates();
   const gifSrc = usePetGifRotation(
-    rotationFramesForState(gifRotationConfig, "idle"),
+    rotationFramesForState(gifRotationConfig, "idle", gifRotationStates),
     { intervalMs: 11_000 },
   );
   const [squash, setSquash] = useState(false);

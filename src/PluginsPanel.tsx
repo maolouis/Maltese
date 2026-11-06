@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { CircleHelp } from "lucide-react";
 import { useTranslation } from "./i18n";
 import "./PluginsPanel.css";
 
@@ -65,6 +67,7 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
   const [removeArmed, setRemoveArmed] = useState("");
   const [disabled, setDisabled] = useState<string[]>(loadDisabledPlugins);
   const [notice, setNotice] = useState("");
+  const [help, setHelp] = useState<{ plugin: PluginInfo; left: number; top: number } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -202,6 +205,14 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
             <article
               className={`plugin-card${plugin.builtin ? " plugin-card--builtin" : ""}${isDisabled ? " plugin-card--disabled" : ""}`}
               key={plugin.id}
+              onMouseEnter={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const width = 282;
+                const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+                const top = Math.min(rect.bottom + 7, window.innerHeight - 250);
+                setHelp({ plugin, left, top });
+              }}
+              onMouseLeave={() => setHelp(null)}
             >
               <div className="plugin-card__head">
                 <div className="plugin-card__title">
@@ -232,11 +243,6 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
                   )}
                 </div>
               </div>
-              <p className="plugin-card__description">{plugin.description || t.plugins.noActions}</p>
-              <div className="plugin-card__meta">
-                {plugin.author && <span>{t.plugins.by} {plugin.author}</span>}
-                {plugin.path && <span title={plugin.path}>{plugin.path}</span>}
-              </div>
               {plugin.actions.length > 0 ? (
                 <div className="plugin-card__actions" aria-label={t.plugins.actions}>
                   {plugin.actions.map((action) => (
@@ -252,8 +258,12 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
                   ))}
                 </div>
               ) : (
-                !plugin.builtin && <p className="plugin-card__hint">{t.plugins.noActions}</p>
+                !plugin.builtin && <span className="plugin-card__hint">{t.plugins.noActions}</span>
               )}
+              <span className="plugin-card__help-hint">
+                <CircleHelp size={11} aria-hidden="true" />
+                {t.plugins.helpHover}
+              </span>
             </article>
           );
         })}
@@ -265,6 +275,37 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
         )}
       </div>
       <p className="plugins-panel__security">⚠ {t.plugins.security}</p>
+      {help && createPortal(
+        <aside
+          className="plugin-help-window"
+          style={{ left: help.left, top: help.top }}
+          role="tooltip"
+        >
+          <header className="plugin-help-window__head">
+            <strong>{help.plugin.name}</strong>
+            <span>{help.plugin.builtin ? t.plugins.builtin : `v${help.plugin.version || "0.0.0"}`}</span>
+          </header>
+          <p className="plugin-help-window__description">
+            {help.plugin.description || t.plugins.noActions}
+          </p>
+          {help.plugin.actions.length > 0 && (
+            <div className="plugin-help-window__actions">
+              {help.plugin.actions.map((action) => (
+                <div key={action.id}>
+                  <strong>{action.label}</strong>
+                  {action.description && <p>{action.description}</p>}
+                  {action.command && <code>{action.command}</code>}
+                </div>
+              ))}
+            </div>
+          )}
+          <footer className="plugin-help-window__meta">
+            {help.plugin.author && <span>{t.plugins.by} {help.plugin.author}</span>}
+            {help.plugin.path && <span title={help.plugin.path}>{help.plugin.path}</span>}
+          </footer>
+        </aside>,
+        document.body,
+      )}
     </section>
   );
 }

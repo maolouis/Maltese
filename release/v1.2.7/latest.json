@@ -1,0 +1,15 @@
+{
+  "version": "1.2.7",
+  "notes": "# Maltese v1.2.7\n\n## 修复\n\n- **右键气泡不再频闪**\n  - 没有气泡时不再额外发送一次原生收起请求，避免右键打开聊天时窗口先缩回再展开。\n  - 从气泡直接进入聊天/待办等展开页时，只清理气泡 UI，由展开页几何一次接管窗口，不再连续 resize。\n  - 移除气泡入口里重复的关闭调用。\n\n## GIF 轮播\n\n- **支持多选/全选状态**：设置里的「轮播范围」可以勾选多个表情状态，待机时把选中状态的 GIF 合并轮播；动作/情绪状态仍优先显示自己的动画。\n- 提供「全选所有状态」和「仅当前状态」快捷按钮，并显示已选状态数量。\n- 主狗、陪玩狗和鼠标跟随狗都使用同一轮播范围。\n\n## 快捷方式\n\n- **只扫描指定目录**：快捷面板新增「自动扫描目录」设置，留空时只扫描桌面；填写目录后只扫描该目录，不再遍历开始菜单、Program Files 等系统目录。\n- 设置窗口也可以修改扫描目录；修改后快捷面板自动刷新。\n- 启动自动发现入口时只允许打开当前扫描目录内的文件，保持原有安全边界。\n\n## 插件\n\n- 插件卡片精简为名称、版本、动作按钮和一枚「悬停查看说明」提示，不再把作者、路径和长说明堆在卡片里。\n- **使用说明改为独立 hover 浮窗**：鼠标停在插件卡片上时，在卡片旁显示描述、动作说明、命令和作者/路径，移开即收起。\n- 内置视频插件卡片不再显示无意义的「没有可执行动作」提示。\n\n## 验证\n\n- `pnpm build`（含 `tsc --noEmit`）通过。\n- `node --test tests/*.test.mjs`：34 项全部通过。\n- `cargo test`：74 项通过，9 项忽略。\n- 实机验证：右键打开聊天不再缩回再展开；将轮播范围设为 sleeping 后待机 GIF 切换到睡觉帧；自定义扫描目录只返回目录内入口；插件 hover 浮窗正常显示。",
+  "pub_date": "2026-11-06T02:38:31Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM053eXVYcFJJUDhGeE1KMU0yaE1OTVFWcVNCanB4a3FiNVFlRDhCaVR6M25LYkdMd215Mlg4VElNT1RSOTVqdGc2MTdYOThPM3FnbzBwTVhuSXQxakFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTMyNzExCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjdfeDY0LXNldHVwLmV4ZQp5cE5qTUlWRFMyT0Mzbm5MNWVQWlRuMHpuT2lJSHhLazVPdURNaE9yblBuMENUbksvYzNnb3Zpakp4NlJyVG9jblhOQU1GQVVZRHp0UWJqRUJPMitDQT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.7/Maltese-1.2.7-x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM053eXVYcFJJUDhGeE1KMU0yaE1OTVFWcVNCanB4a3FiNVFlRDhCaVR6M25LYkdMd215Mlg4VElNT1RSOTVqdGc2MTdYOThPM3FnbzBwTVhuSXQxakFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTMyNzExCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4yLjdfeDY0LXNldHVwLmV4ZQp5cE5qTUlWRFMyT0Mzbm5MNWVQWlRuMHpuT2lJSHhLazVPdURNaE9yblBuMENUbksvYzNnb3Zpakp4NlJyVG9jblhOQU1GQVVZRHp0UWJqRUJPMitDQT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.2.7/Maltese-1.2.7-x64-setup.exe"
+    }
+  }
+}

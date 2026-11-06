@@ -309,6 +309,11 @@ export type Translations = {
     tooLarge: string;
     deleteFailed: string;
     order: (index: number) => string;
+    rotationScope: string;
+    rotationScopeHint: string;
+    selectAllStates: string;
+    currentStateOnly: string;
+    scopeCount: (count: number, total: number) => string;
     states: Record<string, string>;
   };
 
@@ -340,6 +345,7 @@ export type Translations = {
     emptyHint: string;
     actions: string;
     noActions: string;
+    helpHover: string;
     run: string;
     running: string;
     remove: string;
