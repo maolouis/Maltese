@@ -1,15 +1,15 @@
 {
-  "version": "1.3.4",
-  "notes": "# Maltese v1.3.4\n\n## 趴下睡觉的 GIF 可以换\n\n- 「多久没动静就趴下睡」到点之后、缩到屏幕边缘、手动点「让小狗睡觉」，现在统一用同一张「趴睡」GIF，并且可以在设置里换。\n- 设置入口挪到了「多久没动静就趴下睡」旁边（名称就是「趴下睡觉的 GIF」），岛内设置和独立设置窗口都在同一位置，不用再去形象卡片里找。\n- 默认仍然跟随当前形象；点「选择 GIF」换成自己的图，点「恢复默认」回到跟随形象。\n\n## 验证\n\n- `tsc --noEmit`、`vite build` 通过。",
-  "pub_date": "2026-11-06T06:49:37Z",
+  "version": "1.3.5",
+  "notes": "# Maltese v1.3.5\n\n## 交付前检查\n\n- 新增 `scripts/verify-release-artifacts.ps1`：每次发版前检查每件产物的大小、SHA-256、Authenticode 签名状态，并调用本机 Windows Defender 扫描；**检出威胁或扫描没完成时退出码为 1**，发布流程直接中止。\n- 检查清单写进 [docs/release-checklist.md](../release-checklist.md)，`scripts/release.mjs` 也会在打包后自动跑一遍。\n- 本次对安装包、便携 exe、zip 三个产物各跑了一遍：本机 Defender 全部「未发现威胁」，但三个文件都是 **NotSigned**（没有代码签名证书）。\n\n## 关于被识别成病毒\n\n发布用的 exe 和安装包目前没有代码签名。未签名 + 每次构建都是新哈希 + 自带更新器，很容易被 Defender、SmartScreen 或第三方杀软按启发式判成风险——你遇到的就是这种情况。本机复核结果：1.3.4 的安装包 `a8760fdd…e883` 和便携 exe `6c8444c4…e725` 扫描均无威胁，说明是误报而不是真被感染。\n\n可以先这样处理：\n\n1. 用 **zip 便携版**（`maltese-assistant-v1.3.5-win64.zip`）解压运行，不经过安装器，拦截概率通常更低。\n2. 把安装包哈希提交到 <https://www.microsoft.com/en-us/wdsi/filesubmission> 申请误报复核，通常几天内会更新特征库。\n3. 长期方案是买代码签名证书（OV/EV）签 exe 和安装包；签好之后发布流程会自动带上签名，不用改代码。\n\n本轮安装包 SHA-256：`a3fd65cc0c18593f2799e2083d7c4b1e4f731008a4617e08ee551b1d2360c12c`\n\n> MSI 安装包这轮没带上：构建机下载 WiX 工具链时卡住，为不阻塞发布先只发 NSIS 和 zip，下一版补。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前检查脚本对三个产物均通过。",
+  "pub_date": "2026-11-06T07:24:42Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM094aExRV29iTlNGb3MrbXJndmJZUzZNQWM0RkJSM0lFS3V3aDgrb2swbUY2Ujg5SitvdnJLQk13QXEraTh1MDJva1VrZXpqbXIzK3lzTkdQSVpaNkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ3NzczCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjRfeDY0LXNldHVwLmV4ZQoyN0FZY1MvcHY1N3o2M0puN09ER2gyNEtZT3BsMFJ3TTlUZnFibEpxUHEyTmxFV2FjUVlNTm9XRVNXZHliRlNaN3ZkSERPMUt3WlVNcURqSnFaUUdDdz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.4/Maltese-1.3.4-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0V6VFBRZ0ZEL21LL1JnWjlQS2Y1dGlqOHlVSDE4N1dtRjFYNUw1U2U2NG1FSi94NXN4eFZVZjlOOGdlSXVldFRoUjV0RS9vNWE5TXhITlI3eWRDdGdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ5ODU5CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjVfeDY0LXNldHVwLmV4ZQpuYnJrNDVGdnRMUG5WUkhSVjdzQXNmcDRhUVFmM1paMDg5RHI3ZXlxRm9XdmhvRFFjZEVmd0ttZ1p5ZjlXN2RVUit5N0NvdGQ2RkRzeVFJTVBxdTRBZz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.5/Maltese-1.3.5-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM094aExRV29iTlNGb3MrbXJndmJZUzZNQWM0RkJSM0lFS3V3aDgrb2swbUY2Ujg5SitvdnJLQk13QXEraTh1MDJva1VrZXpqbXIzK3lzTkdQSVpaNkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ3NzczCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjRfeDY0LXNldHVwLmV4ZQoyN0FZY1MvcHY1N3o2M0puN09ER2gyNEtZT3BsMFJ3TTlUZnFibEpxUHEyTmxFV2FjUVlNTm9XRVNXZHliRlNaN3ZkSERPMUt3WlVNcURqSnFaUUdDdz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.4/Maltese-1.3.4-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0V6VFBRZ0ZEL21LL1JnWjlQS2Y1dGlqOHlVSDE4N1dtRjFYNUw1U2U2NG1FSi94NXN4eFZVZjlOOGdlSXVldFRoUjV0RS9vNWE5TXhITlI3eWRDdGdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ5ODU5CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjVfeDY0LXNldHVwLmV4ZQpuYnJrNDVGdnRMUG5WUkhSVjdzQXNmcDRhUVFmM1paMDg5RHI3ZXlxRm9XdmhvRFFjZEVmd0ttZ1p5ZjlXN2RVUit5N0NvdGQ2RkRzeVFJTVBxdTRBZz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.5/Maltese-1.3.5-x64-setup.exe"
     }
   }
 }

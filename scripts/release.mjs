@@ -114,6 +114,16 @@ writeFileSync(checksumPath, installers.map((path) =>
   `${createHash("sha256").update(readFileSync(path)).digest("hex")}  ${path.split("/").pop()}`,
 ).join("\n") + "\n");
 
+// 交付前检查：签名状态 + Defender 扫描 + 哈希，检出威胁时脚本退出码为 1。
+run("powershell", [
+  "-NoProfile",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  "scripts/verify-release-artifacts.ps1",
+  ...installers,
+], {});
+
 if (!upload) {
   console.log(`\n✓ Built v${version}. NSIS: ${BUNDLE_DIR}; MSI: ${MSI_DIR} (--no-upload).`);
   process.exit(0);
