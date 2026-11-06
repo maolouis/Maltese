@@ -64,10 +64,13 @@ export function TuckGifControl() {
     <div className="tuck-gif">
       <img className="tuck-gif__preview" src={preview} alt="" draggable={false} />
       <div className="tuck-gif__copy">
-        <strong>缩边 / 睡觉动画</strong>
+        <strong>趴下睡觉的 GIF</strong>
         <span>
           {tuckPath ? "自定义 GIF" : `跟随当前形象（${PET_CHARACTER_LABELS[character]}）`}
         </span>
+        <small className="tuck-gif__hint">
+          多久没动静自动趴下、缩到屏幕边缘、点「让小狗睡觉」都会用这张。
+        </small>
       </div>
       <div className="tuck-gif__actions">
         <button type="button" disabled={busy} onClick={() => inputRef.current?.click()}>

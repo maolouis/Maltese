@@ -331,7 +331,6 @@ export default function SettingsWindow() {
         <p className="sw-hint sw-hint--block">
           小白和小鸡毛各自有一套动作素材；选「小白和小鸡毛」时只播两只同框的动画。
         </p>
-        <TuckGifControl />
         <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
         <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
         {settings.bongoEnabled && (
@@ -416,6 +415,7 @@ export default function SettingsWindow() {
         <Switch label="夜间陪伴" hint="23 点后提醒早点休息" checked={settings.nightCompanion} onChange={(value) => update("nightCompanion", value)} />
         <Switch label="听歌互动" hint="切歌时说一句正在听的歌" checked={settings.musicChat} onChange={(value) => update("musicChat", value)} />
         <Slider label="多久没动静就趴下睡" value={settings.sleepAfterSeconds} min={30} max={900} step={15} suffix="s" onChange={(value) => update("sleepAfterSeconds", value)} />
+        <TuckGifControl />
         <Slider label="缩边睡觉时露出高度" value={settings.tuckedVisibleHeight} min={24} max={140} step={1} suffix="px" onChange={(value) => update("tuckedVisibleHeight", value)} />
       </section>
 

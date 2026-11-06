@@ -1385,7 +1385,9 @@ export function IslandShell({
     characterFramesForState(petCharacter, "sleeping")[0] ?? SLEEPING_FRAME,
   );
   const showingTuckedGif = petState === "idle" && (restingAsleep || isTucked);
-  const displayedPetGifSrc = showingTuckedGif ? tuckedGifSrc : petCarouselSrc;
+  // 「趴下睡」的姿势统一用这张图：闲置自动趴下、缩边、手动点「让小狗睡觉」都走它。
+  const showingSleepPose = showingTuckedGif || petState === "sleeping";
+  const displayedPetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
   // 睡眠缩边与全屏避让共用 isTucked，必须记住“这次是谁缩的边”。
   // 否则全屏避让缩边后会被睡眠逻辑立刻展开，反之亦然，表现为边缘频闪。
   const sleepTuckedRef = useRef(false);
@@ -1710,7 +1712,7 @@ export function IslandShell({
               src={displayedPetGifSrc}
               alt=""
               draggable={false}
-              className={showingTuckedGif ? "maltese-pet__rest" : ""}
+              className={showingSleepPose ? "maltese-pet__rest" : ""}
               onError={(event) => {
                 // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
                 event.currentTarget.src =
@@ -2581,7 +2583,6 @@ function LayoutEditor({
         <p className="settings-section__hint">
           陪玩狗、Bongo 模式和鼠标跟随宠会使用独立的透明小窗口，不会挡住桌面点击。
         </p>
-        <TuckGifControl />
         <SliderControl
           label="小狗数量（含主狗）"
           value={settings.petCount}
@@ -2700,6 +2701,16 @@ function LayoutEditor({
           checked={settings.musicChat}
           onChange={(musicChat) => onSettingsChange({ ...settings, musicChat })}
         />
+        <SliderControl
+          label="多久没动静就趴下睡"
+          value={settings.sleepAfterSeconds}
+          min={30}
+          max={900}
+          step={15}
+          suffix="s"
+          onChange={(sleepAfterSeconds) => onSettingsChange({ ...settings, sleepAfterSeconds })}
+        />
+        <TuckGifControl />
       </section>
 
       <section className="settings-section settings-section--todo">
