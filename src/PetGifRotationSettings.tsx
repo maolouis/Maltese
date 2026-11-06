@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, CheckCheck, Plus, RotateCcw, Trash2 } from "lucide-
 import { useTranslation } from "./i18n";
 import {
   defaultPetGifItems,
+  petGifFileName,
   petGifItemSrc,
   savePetGifRotationConfig,
   savePetGifRotationStates,
@@ -11,6 +12,7 @@ import {
   usePetGifRotationStates,
   type PetGifRotationItem,
 } from "./petGifRotation";
+import { characterAllFrames, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
 import "./PetGifRotationSettings.css";
 
 type CustomPetGif = {
@@ -23,7 +25,8 @@ const MAX_GIF_BYTES = 8 * 1024 * 1024;
 
 export function PetGifRotationSettings() {
   const t = useTranslation();
-  const config = usePetGifRotationConfig();
+  const character = usePetCharacter();
+  const config = usePetGifRotationConfig(character);
   const rotationStates = usePetGifRotationStates();
   const [state, setState] = useState("idle");
   const [error, setError] = useState("");
@@ -32,12 +35,17 @@ export function PetGifRotationSettings() {
 
   const items = config[state] ?? [];
   const states = Object.keys(t.petGifs.states);
-  const availableItems = defaultPetGifItems(state);
+  const availableItems: PetGifRotationItem[] = characterAllFrames(character, state).map((src) => ({
+    id: src,
+    src,
+    name: petGifFileName(src),
+    custom: false,
+  }));
   const selectedKeys = new Set(items.map((item) => item.path ?? item.src).filter(Boolean));
   const missingItems = availableItems.filter((item) => !selectedKeys.has(item.src));
 
   const saveItems = (nextItems: PetGifRotationItem[]) => {
-    savePetGifRotationConfig({ ...config, [state]: nextItems });
+    savePetGifRotationConfig({ ...config, [state]: nextItems }, character);
   };
 
   const selectAll = () => {
@@ -123,7 +131,9 @@ export function PetGifRotationSettings() {
       <div className="pet-gif-settings__head">
         <div>
           <h2>{t.petGifs.title}</h2>
-          <p className="pet-gif-settings__subtitle">{t.petGifs.subtitle}</p>
+          <p className="pet-gif-settings__subtitle">
+            {t.petGifs.subtitle} · 当前形象：{PET_CHARACTER_LABELS[character]}
+          </p>
         </div>
         <label className="pet-gif-settings__expression">
           <span>{t.petGifs.expression}</span>
@@ -153,7 +163,7 @@ export function PetGifRotationSettings() {
         <button
           type="button"
           className="sw-secondary"
-          onClick={() => saveItems(defaultPetGifItems(state))}
+          onClick={() => saveItems(defaultPetGifItems(state, character))}
         >
           <RotateCcw size={13} />
           {t.petGifs.reset}

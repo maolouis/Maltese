@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { PET_GIF_VARIANTS, type PetVisualState } from "./petAssets";
+import { PET_GIF_VARIANTS } from "./petAssets";
+import {
+  characterFramesForState,
+  loadPetCharacter,
+  type PetCharacterId,
+} from "./petCharacters";
 
-export const PET_GIF_ROTATION_STORAGE_KEY = "maltese-pet-gif-rotation";
+/** 旧版按状态存的配置键，读取时迁移到小白。 */
+const LEGACY_STORAGE_KEY = "maltese-pet-gif-rotation";
+export const PET_GIF_ROTATION_STORAGE_PREFIX = "maltese-pet-gif-rotation:";
 export const PET_GIF_ROTATION_UPDATED_EVENT = "maltese-pet-gif-rotation-updated";
 export const PET_GIF_ROTATION_STATES_KEY = "maltese-pet-gif-rotation-states";
 export const PET_GIF_ROTATION_STATES_EVENT = "maltese-pet-gif-rotation-states-updated";
@@ -18,6 +25,10 @@ export type PetGifRotationItem = {
 };
 
 export type PetGifRotationConfig = Record<string, PetGifRotationItem[]>;
+
+export function petGifRotationKey(character: PetCharacterId): string {
+  return `${PET_GIF_ROTATION_STORAGE_PREFIX}${character}`;
+}
 
 export const PET_STATE_LABELS: Record<string, string> = {
   idle: "待机",
@@ -41,25 +52,35 @@ export const PET_STATE_LABELS: Record<string, string> = {
   peek: "偷看",
 };
 
-function fileNameOf(path: string) {
+export function petGifFileName(path: string) {
   const normalized = path.replace(/\\/g, "/");
-  return normalized.slice(normalized.lastIndexOf("/") + 1) || path;
+  const tail = normalized.slice(normalized.lastIndexOf("/") + 1) || path;
+  try {
+    return decodeURIComponent(tail);
+  } catch {
+    return tail;
+  }
 }
 
-export function defaultPetGifItems(state: string): PetGifRotationItem[] {
-  const frames = PET_GIF_VARIANTS[state as PetVisualState] ?? [];
+export function defaultPetGifItems(
+  state: string,
+  character: PetCharacterId = "xiaobai",
+): PetGifRotationItem[] {
+  const frames = characterFramesForState(character, state);
   return frames.map((src) => ({
     id: src,
     src,
-    name: fileNameOf(src),
+    name: petGifFileName(src),
     custom: false,
   }));
 }
 
-export function defaultPetGifRotationConfig(): PetGifRotationConfig {
+export function defaultPetGifRotationConfig(
+  character: PetCharacterId = "xiaobai",
+): PetGifRotationConfig {
   const config: PetGifRotationConfig = {};
   for (const state of Object.keys(PET_GIF_VARIANTS)) {
-    config[state] = defaultPetGifItems(state);
+    config[state] = defaultPetGifItems(state, character);
   }
   return config;
 }
@@ -80,39 +101,47 @@ function normalizeItem(value: unknown): PetGifRotationItem | null {
     name:
       typeof item.name === "string" && item.name
         ? item.name
-        : fileNameOf(path ?? src ?? "GIF"),
+        : petGifFileName(path ?? src ?? "GIF"),
     custom: item.custom === true || Boolean(path),
   };
 }
 
-export function loadPetGifRotationConfig(): PetGifRotationConfig {
-  const defaults = defaultPetGifRotationConfig();
+function readConfig(key: string): unknown {
   try {
-    const raw = window.localStorage.getItem(PET_GIF_ROTATION_STORAGE_KEY);
-    if (!raw) return defaults;
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return defaults;
-    const saved = parsed as Record<string, unknown>;
-    for (const state of Object.keys(defaults)) {
-      const list = saved[state];
-      if (!Array.isArray(list)) continue;
-      // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
-      defaults[state] = list
-        .map(normalizeItem)
-        .filter((item): item is PetGifRotationItem => item !== null);
-    }
-    return defaults;
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as unknown) : null;
   } catch {
-    return defaults;
+    return null;
   }
 }
 
-export function savePetGifRotationConfig(config: PetGifRotationConfig) {
+export function loadPetGifRotationConfig(
+  character: PetCharacterId = loadPetCharacter(),
+): PetGifRotationConfig {
+  const defaults = defaultPetGifRotationConfig(character);
+  // 小白沿用旧版按状态保存的配置；其他形象第一次使用时直接用素材默认值。
+  const saved =
+    readConfig(petGifRotationKey(character)) ??
+    (character === "xiaobai" ? readConfig(LEGACY_STORAGE_KEY) : null);
+  if (typeof saved !== "object" || saved === null) return defaults;
+  const table = saved as Record<string, unknown>;
+  for (const state of Object.keys(defaults)) {
+    const list = table[state];
+    if (!Array.isArray(list)) continue;
+    // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
+    defaults[state] = list
+      .map(normalizeItem)
+      .filter((item): item is PetGifRotationItem => item !== null);
+  }
+  return defaults;
+}
+
+export function savePetGifRotationConfig(
+  config: PetGifRotationConfig,
+  character: PetCharacterId = loadPetCharacter(),
+) {
   try {
-    window.localStorage.setItem(
-      PET_GIF_ROTATION_STORAGE_KEY,
-      JSON.stringify(config),
-    );
+    window.localStorage.setItem(petGifRotationKey(character), JSON.stringify(config));
     window.dispatchEvent(new Event(PET_GIF_ROTATION_UPDATED_EVENT));
   } catch {
     // localStorage 不可用时仍让当前会话继续运行。
@@ -143,7 +172,7 @@ export function savePetGifRotationStates(states: string[]) {
     window.localStorage.setItem(PET_GIF_ROTATION_STATES_KEY, JSON.stringify(next));
     window.dispatchEvent(new Event(PET_GIF_ROTATION_STATES_EVENT));
   } catch {
-    // localStorage 不可用时仍让当前会话继续运行。
+    // localStorage 不可用时保持当前会话行为。
   }
   return next;
 }
@@ -185,15 +214,16 @@ export function rotationFramesForState(
   config: PetGifRotationConfig,
   state: string,
   rotationStates?: string[],
+  character: PetCharacterId = loadPetCharacter(),
 ): string[] {
   const framesFor = (target: string): string[] => {
     const configured = (config[target] ?? [])
       .map(petGifItemSrc)
       .filter((src) => Boolean(src));
-    // 用户把某一类表情删空时，不要显示破图，退回内置默认顺序。
+    // 用户把某一类表情删空时，不要显示破图，退回该形象的内置素材。
     return configured.length > 0
       ? configured
-      : (PET_GIF_VARIANTS[target as PetVisualState] ?? []);
+      : characterFramesForState(character, target);
   };
 
   // 动作/情绪表情仍优先显示自己的 GIF；只有待机轮播会合并用户勾选的状态。
@@ -206,13 +236,22 @@ export function rotationFramesForState(
 }
 
 /** 设置窗口保存后，主窗口/陪玩狗/跟随狗通过 storage 事件同步。 */
-export function usePetGifRotationConfig(): PetGifRotationConfig {
-  const [config, setConfig] = useState<PetGifRotationConfig>(loadPetGifRotationConfig);
+export function usePetGifRotationConfig(
+  character: PetCharacterId = loadPetCharacter(),
+): PetGifRotationConfig {
+  const [config, setConfig] = useState<PetGifRotationConfig>(() =>
+    loadPetGifRotationConfig(character),
+  );
 
   useEffect(() => {
-    const update = () => setConfig(loadPetGifRotationConfig());
+    setConfig(loadPetGifRotationConfig(character));
+    const update = () => setConfig(loadPetGifRotationConfig(character));
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === PET_GIF_ROTATION_STORAGE_KEY || event.key === null) {
+      if (
+        event.key === petGifRotationKey(character) ||
+        event.key === LEGACY_STORAGE_KEY ||
+        event.key === null
+      ) {
         update();
       }
     };
@@ -222,7 +261,7 @@ export function usePetGifRotationConfig(): PetGifRotationConfig {
       window.removeEventListener("storage", handleStorage);
       window.removeEventListener(PET_GIF_ROTATION_UPDATED_EVENT, update);
     };
-  }, []);
+  }, [character]);
 
   return config;
 }

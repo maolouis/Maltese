@@ -26,6 +26,12 @@ const CREDENTIAL_PATCH: &str = "\
   disabled: false
 - id: deepseek-account
   disabled: false
+# 默认路由 deepseek-official 需要 DEEPSEEK_API_KEY，没配过的机器会直接
+# MISSING_CREDENTIAL，聊天就完全用不了；这里改用桌面端登录后的账号路由。
+- id: agent-default-model
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
 ";
 
 #[derive(Clone, Debug, Serialize)]

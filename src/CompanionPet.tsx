@@ -8,6 +8,7 @@ import {
   usePetGifRotationStates,
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
+import { usePetCharacter } from "./petCharacters";
 import "./DesktopExtras.css";
 
 type PetLook = {
@@ -24,7 +25,7 @@ function readLook(): PetLook {
     const scale = Number(parsed.collapsedScale);
     const opacity = Number(parsed.petOpacity);
     return {
-      scale: Number.isFinite(scale) ? Math.min(1.4, Math.max(0.75, scale)) : 0.89,
+      scale: Number.isFinite(scale) ? Math.min(1.8, Math.max(0.5, scale)) : 0.89,
       opacity: Number.isFinite(opacity) ? Math.min(100, Math.max(30, opacity)) / 100 : 1,
     };
   } catch {
@@ -35,10 +36,11 @@ function readLook(): PetLook {
 // 陪玩狗：独立透明窗口里的一只小狗，可拖动、可摸头。
 export default function CompanionPet() {
   const [look, setLook] = useState<PetLook>(readLook);
-  const gifRotationConfig = usePetGifRotationConfig();
+  const character = usePetCharacter();
+  const gifRotationConfig = usePetGifRotationConfig(character);
   const gifRotationStates = usePetGifRotationStates();
   const gifSrc = usePetGifRotation(
-    rotationFramesForState(gifRotationConfig, "idle", gifRotationStates),
+    rotationFramesForState(gifRotationConfig, "idle", gifRotationStates, character),
     { intervalMs: 11_000 },
   );
   const [squash, setSquash] = useState(false);

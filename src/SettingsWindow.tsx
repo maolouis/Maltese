@@ -11,7 +11,12 @@ import {
   saveShortcutScanDir,
 } from "./shortcutScanDir";
 import { UpdatePanel } from "./UpdatePanel";
+import { PET_CHARACTERS, savePetCharacter, usePetCharacter, type PetCharacterId } from "./petCharacters";
 import "./SettingsWindow.css";
+
+const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
+  (character) => [character.id, character.zh] as const,
+);
 
 const STORAGE_KEY = "focusd-island-settings";
 
@@ -207,14 +212,28 @@ export default function SettingsWindow() {
   const [shortcutError, setShortcutError] = useState("");
   const [shortcutScanDir, setShortcutScanDir] = useState(loadShortcutScanDir);
   const [shortcutAutoDetect, setShortcutAutoDetect] = useState(loadShortcutAutoDetect);
+  const petCharacter = usePetCharacter();
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [desktopIconsVisible, setDesktopIconsVisible] = useState<boolean | null>(null);
   const saveTimer = useRef<number | null>(null);
 
   useEffect(() => {
     void invoke<boolean>("get_launch_at_startup")
       .then(setLaunchAtStartup)
       .catch(() => undefined);
+    void invoke<boolean>("get_desktop_icons_visible")
+      .then(setDesktopIconsVisible)
+      .catch(() => setDesktopIconsVisible(null));
   }, []);
+
+  const toggleDesktopIcons = async (visible: boolean) => {
+    try {
+      const next = await invoke<boolean>("set_desktop_icons_visible", { visible });
+      setDesktopIconsVisible(next);
+    } catch {
+      setDesktopIconsVisible(null);
+    }
+  };
 
   // 改动即时写回 localStorage，并通知主窗口重新加载设置。
   const update = useCallback(<K extends keyof PetSettings>(key: K, value: PetSettings[K]) => {
@@ -288,7 +307,7 @@ export default function SettingsWindow() {
       <section className="sw-card">
         <h2>显示</h2>
         <Slider label="小狗不透明度" value={settings.petOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("petOpacity", value)} />
-        <Slider label="收起大小" value={settings.collapsedScale} min={0.75} max={1.4} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
+        <Slider label="收起大小" value={settings.collapsedScale} min={0.5} max={1.8} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
         <Segments
           label="动画流畅度"
           value={settings.fpsMode}
@@ -300,6 +319,15 @@ export default function SettingsWindow() {
 
       <section className="sw-card">
         <h2>桌宠形态</h2>
+        <Segments
+          label="小狗形象"
+          value={petCharacter}
+          items={CHARACTER_ITEMS}
+          onChange={(value) => savePetCharacter(value)}
+        />
+        <p className="sw-hint sw-hint--block">
+          小白和小鸡毛各自有一套动作素材；选「小白和小鸡毛」时只播两只同框的动画。
+        </p>
         <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
         <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
         {settings.bongoEnabled && (
@@ -412,6 +440,12 @@ export default function SettingsWindow() {
 
       <section className="sw-card">
         <h2>其他</h2>
+        <Switch
+          label="显示桌面图标"
+          hint={desktopIconsVisible === null ? "当前系统状态读取失败，点一下即可切换" : "一键隐藏 / 恢复桌面上的图标"}
+          checked={desktopIconsVisible ?? true}
+          onChange={(value) => void toggleDesktopIcons(value)}
+        />
         <Switch label="随机闲逛" hint="空闲时小狗在桌面慢慢挪一小步" checked={settings.roam} onChange={(value) => update("roam", value)} />
         <Switch
           label="自动识别快捷方式"

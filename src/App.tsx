@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -70,6 +69,7 @@ import {
   usePetGifRotationStates,
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
+import { usePetCharacter, characterFramesForState } from "./petCharacters";
 import { UpdatePanel } from "./UpdatePanel";
 import { UpdateBanner } from "./UpdateBanner";
 import {
@@ -739,13 +739,13 @@ function normalizeSettings(
     ),
     collapsedScale: clamp(
       Number(collapsedScale),
-      0.75,
-      1.4,
+      0.5,
+      1.8,
     ),
     expandedScale: clamp(
       Number(expandedScale),
-      0.75,
-      1.4,
+      0.5,
+      1.8,
     ),
     marginY: clamp(
       Number(hasPreviousDefaultMargin ? DEFAULT_SETTINGS.marginY : marginY),
@@ -1261,6 +1261,35 @@ export function IslandShell({
     startY: number;
   } | null>(null);
   const isExpanded = mode === "expanded";
+
+  // 方向键切换顶部标签：上下左右都按顺序前后翻一页（输入框里不拦截）。
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+    const order: IslandPage[] = ["todo", "music", "clipboard", "assistant", "chat", "video"];
+    const handler = (event: KeyboardEvent) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+        return;
+      }
+      if (event.ctrlKey || event.altKey || event.metaKey) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest("input, textarea, select, [contenteditable='true']")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const index = order.indexOf(page);
+      const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+      const from = index === -1 ? 0 : index;
+      onPageChange(order[(from + step + order.length) % order.length]);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isExpanded, onPageChange, page]);
   const [isPreparing, setIsPreparing] = useState(isTauri);
   const qqPreview = qqNotifications.preview;
   const qqNotificationCount = qqNotifications.snapshot.items.length;
@@ -1286,7 +1315,8 @@ export function IslandShell({
   const isLiquidGlass = appearanceMode === "liquidGlass";
   const petSlotWidth = Math.max(148, 152 * collapsedScale + 16);
   const petSlotHeight = Math.max(124, 128 * collapsedScale + 16);
-  const gifRotationConfig = usePetGifRotationConfig();
+  const petCharacter = usePetCharacter();
+  const gifRotationConfig = usePetGifRotationConfig(petCharacter);
   const gifRotationStates = usePetGifRotationStates();
   const [petSquash, setPetSquash] = useState(false);
   // 参考 LineDogPet：只有整个系统闲置一段时间才睡觉，用户一动键鼠立刻醒。
@@ -1326,7 +1356,12 @@ export function IslandShell({
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
   // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
-  const carouselFrames = rotationFramesForState(gifRotationConfig, petState, gifRotationStates);
+  const carouselFrames = rotationFramesForState(
+    gifRotationConfig,
+    petState,
+    gifRotationStates,
+    petCharacter,
+  );
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: 10_000,
     enabled: !(petState === "idle" && (restingAsleep || isTucked)),
@@ -1662,7 +1697,8 @@ export function IslandShell({
               className={displayedPetGifSrc === SLEEPING_FRAME ? "maltese-pet__rest" : ""}
               onError={(event) => {
                 // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
-                event.currentTarget.src = resolvePetGif(petState);
+                event.currentTarget.src =
+                  characterFramesForState(petCharacter, petState)[0] ?? resolvePetGif(petState);
               }}
             />
           </span>
@@ -2292,8 +2328,8 @@ function LayoutEditor({
         <SliderControl
           label={t.settings.layout.collapsedScale}
           value={settings.collapsedScale}
-          min={0.75}
-          max={1.4}
+          min={0.5}
+          max={1.8}
           step={0.01}
           suffix="x"
           onChange={(collapsedScale) => onSettingsChange({ ...settings, collapsedScale })}
@@ -2301,8 +2337,8 @@ function LayoutEditor({
         <SliderControl
           label={t.settings.layout.expandedScale}
           value={settings.expandedScale}
-          min={0.75}
-          max={1.4}
+          min={0.5}
+          max={1.8}
           step={0.01}
           suffix="x"
           onChange={(expandedScale) => onSettingsChange({ ...settings, expandedScale })}
@@ -4924,9 +4960,6 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
 function AssistantPanel() {
   const t = useTranslation();
   const [notice, setNotice] = useState("选择一个入口，线条小狗会陪你完成下一步");
-  const [wakeShortcut, setWakeShortcut] = useState(loadWakeShortcut);
-  const [wakeShortcutError, setWakeShortcutError] = useState("");
-  const [commonScripts, setCommonScripts] = useState<Array<{ name: string; path: string; kind: string }>>([]);
   const [discoveredShortcuts, setDiscoveredShortcuts] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [customShortcuts, setCustomShortcuts] = useState<CustomShortcut[]>(loadCustomShortcuts);
   const [hiddenShortcuts, setHiddenShortcuts] = useState<string[]>(loadHiddenShortcuts);
@@ -4956,18 +4989,9 @@ function AssistantPanel() {
   }, [clearAllArmed]);
 
   useEffect(() => {
-    void invoke<string>("set_wake_shortcut", { shortcut: wakeShortcut })
-      .then((registered) => {
-        setWakeShortcut(registered);
-        saveWakeShortcut(registered);
-        setWakeShortcutError("");
-      })
-      .catch((error) => setWakeShortcutError(String(error)));
-  }, []);
-  useEffect(() => {
-    void invoke<Array<{ name: string; path: string; kind: string }>>("list_common_scripts")
-      .then(setCommonScripts)
-      .catch(() => setCommonScripts([]));
+    void invoke<string>("set_wake_shortcut", { shortcut: loadWakeShortcut() })
+      .then((registered) => saveWakeShortcut(registered))
+      .catch(() => undefined);
   }, []);
   // 快捷方式列表默认只扫描桌面；设置扫描目录后只扫描该目录。
   useEffect(() => {
@@ -5015,15 +5039,31 @@ function AssistantPanel() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setAppSearching(true);
-      void invoke<Array<{ label: string; path: string; kind: string; category: string }>>(
-        "discover_installed_apps",
-        { query },
-      )
+      void (async () => {
+        // 文件型快捷方式（桌面/开始菜单的 .lnk、.exe）+ Windows 登记的应用（含商店应用）。
+        const [fileResults, startApps] = await Promise.all([
+          invoke<Array<{ label: string; path: string; kind: string; category: string }>>(
+            "discover_installed_apps",
+            { query },
+          ).catch(() => []),
+          invoke<Array<{ label: string; appId: string }>>("discover_start_apps", {
+            query,
+          }).catch(() => []),
+        ]);
+        const known = new Set(fileResults.map((item) => item.label.toLowerCase()));
+        const storeResults = startApps
+          .filter((app) => !known.has(app.label.toLowerCase()))
+          .map((app) => ({
+            label: app.label,
+            // shell:AppsFolder 的启动方式需要单独命令，这里用前缀标记。
+            path: `app:${app.appId}`,
+            kind: "appx",
+            category: "store",
+          }));
+        return [...fileResults, ...storeResults];
+      })()
         .then((results) => {
           if (!cancelled) setAppResults(results);
-        })
-        .catch(() => {
-          if (!cancelled) setAppResults([]);
         })
         .finally(() => {
           if (!cancelled) setAppSearching(false);
@@ -5043,7 +5083,7 @@ function AssistantPanel() {
     const paths = [...new Set([
       ...discoveredShortcuts.map((shortcut) => shortcut.path),
       ...customShortcuts.map((shortcut) => shortcut.path),
-    ])].slice(0, 30);
+    ])].filter((path) => !path.startsWith("app:")).slice(0, 30);
     void Promise.all(paths.map(async (path) => {
       try {
         const icon = await invoke<string | null>("get_shortcut_icon", { path });
@@ -5151,37 +5191,18 @@ function AssistantPanel() {
   };
 
   const launchPath = (label: string, path: string) => {
+    if (path.startsWith("app:")) {
+      // 商店应用：交给 shell:AppsFolder 启动。
+      void invoke("launch_start_app", { appId: path.slice(4) })
+        .then(() => setNotice(label + " 已打开"))
+        .catch((error) => setNotice(label + " 打开失败：" + String(error)));
+      return;
+    }
     const isCustom = customShortcuts.some((shortcut) => shortcut.path === path);
     const command = isCustom ? "launch_custom_shortcut" : "launch_discovered_shortcut";
     void invoke(command, isCustom ? { path } : { path, scanDir: scanDir || null })
       .then(() => setNotice(label + " 已打开"))
       .catch((error) => setNotice(label + " 打开失败：" + String(error)));
-  };
-
-  const recordWakeShortcut = async (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    event.preventDefault();
-    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
-    const modifiers = [
-      event.ctrlKey && "Ctrl",
-      event.altKey && "Alt",
-      event.shiftKey && "Shift",
-      event.metaKey && "Win",
-    ].filter(Boolean) as string[];
-    if (!modifiers.length) {
-      setWakeShortcutError("请至少按住 Ctrl、Alt、Shift 或 Win 之一。");
-      return;
-    }
-    const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
-    const nextShortcut = [...modifiers, key].join("+");
-    try {
-      const registered = await invoke<string>("set_wake_shortcut", { shortcut: nextShortcut });
-      setWakeShortcut(registered);
-      saveWakeShortcut(registered);
-      setWakeShortcutError("");
-      setNotice(`显示 / 隐藏快捷键已设为 ${registered}`);
-    } catch (error) {
-      setWakeShortcutError(String(error));
-    }
   };
 
   const launch = useCallback(async (tool: string) => {
@@ -5198,7 +5219,6 @@ function AssistantPanel() {
     { id: "doubao", label: "豆包", detail: "打开本机豆包客户端", tool: "doubao" },
     { id: "youdaodict", label: "有道词典", detail: "打开本地词典客户端", tool: "youdaodict" },
     { id: "calculator", label: "计算器", detail: "快速算一笔", tool: "calculator" },
-    { id: "scripts", label: "常用脚本", detail: "打开脚本目录", tool: "scripts" },
   ];
   const hiddenShortcutSet = new Set(hiddenShortcuts);
   const hiddenActionSet = new Set(hiddenShortcutActions);
@@ -5426,7 +5446,13 @@ function AssistantPanel() {
                   title={app.path}
                 >
                   <span>{app.label}</span>
-                  <small>{app.kind === "lnk" ? "开始菜单" : `.${app.kind}`}</small>
+                  <small>
+                    {app.kind === "lnk"
+                      ? "开始菜单"
+                      : app.kind === "appx"
+                        ? "商店应用"
+                        : `.${app.kind}`}
+                  </small>
                   <strong>＋</strong>
                 </button>
               ))
@@ -5515,40 +5541,6 @@ function AssistantPanel() {
           </div>
         ))}
       </div>
-      {commonScripts.length > 0 && (
-        <div className="assistant-panel__scripts">
-          <span className="assistant-panel__label">常用脚本</span>
-          <div className="assistant-panel__script-list">
-            {commonScripts.map((script) => (
-              <button
-                key={script.path}
-                type="button"
-                title={script.path}
-                onClick={() => {
-                  void invoke("run_common_script", { path: script.path })
-                    .then(() => setNotice(`${script.name} 已启动`))
-                    .catch((error) => setNotice(`${script.name} 启动失败：${String(error)}`));
-                }}
-              >
-                {script.name}
-                <small>.{script.kind}</small>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="assistant-panel__shortcut">
-        <span className="assistant-panel__label">显示 / 隐藏桌宠</span>
-        <input
-          value={wakeShortcut}
-          readOnly
-          onKeyDown={(event) => void recordWakeShortcut(event)}
-          aria-label="显示或隐藏桌宠的快捷键"
-          title="点击后按下新的组合键"
-        />
-        {wakeShortcutError && <small role="alert">{wakeShortcutError}</small>}
-      </div>
-      <p className="assistant-panel__hint">按一次隐藏桌宠，再按一次让它回来。点击输入框后可直接录入新的组合键。</p>
     </section>
   );
 }

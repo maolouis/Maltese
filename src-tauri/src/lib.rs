@@ -44,11 +44,15 @@ use tauri::{
     Position, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use windows::Win32::{
-    Foundation::{POINT, RECT},
+    Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::SetWindowRgn,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
-    UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect},
+    UI::WindowsAndMessaging::{
+        FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect, IsWindowVisible, ShowWindow,
+        SW_HIDE, SW_SHOW,
+    },
 };
+use windows::core::w;
 
 const WINDOW_LABEL: &str = "main";
 const DEFAULT_MARGIN_Y: f64 = 0.0;
@@ -287,7 +291,7 @@ fn get_system_idle_seconds() -> u64 {
 fn set_island_layout(app: AppHandle, layout: IslandLayout) -> Result<(), String> {
     let window = main_window(&app)?;
     let state = mutate_window_state(|state| {
-        state.collapsed_scale = layout.collapsed_scale.clamp(0.75, 1.4);
+        state.collapsed_scale = layout.collapsed_scale.clamp(0.5, 1.8);
         state.expanded_scale = layout.expanded_scale.clamp(0.75, 1.4);
         state.margin_y = layout.margin_y.clamp(0.0, 160.0);
         state.tucked_visible_height = layout
@@ -336,7 +340,7 @@ fn set_island_interaction(
     let state = mutate_window_state(|state| {
         state.mode = mode;
         state.is_tucked = is_tucked.unwrap_or(false);
-        state.collapsed_scale = collapsed_scale.clamp(0.75, 1.4);
+        state.collapsed_scale = collapsed_scale.clamp(0.5, 1.8);
         state.expanded_scale = expanded_scale.clamp(0.75, 1.4);
         if let Some(margin_y) = margin_y {
             state.margin_y = margin_y.clamp(0.0, 160.0);
@@ -1226,6 +1230,144 @@ fn discover_installed_apps(query: Option<String>) -> Result<Vec<DiscoveredShortc
     // 系统开始菜单/桌面里的入口就是 Windows 识别并展示的应用；
     // 搜索只在这个范围内进行，不扫描磁盘。
     scan_shortcuts(system_app_roots(), query.as_deref(), 200)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartApp {
+    label: String,
+    app_id: String,
+}
+
+/// 读取 Windows 登记的“开始菜单应用”清单（含 Microsoft Store / MSIX 应用）。
+///
+/// 商店应用不会在开始菜单目录里生成 .lnk，文件扫描永远找不到，
+/// 例如 ChatGPT 只有 `WindowsApps\chatgpt-desktop.exe` 这个执行别名，
+/// 所以这里走 Get-StartApps 拿到 Name + AppID，启动时用 shell:AppsFolder。
+#[tauri::command]
+fn discover_start_apps(query: Option<String>) -> Result<Vec<StartApp>, String> {
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+             Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress",
+        ])
+        .creation_flags(CREATE_NO_WINDOW);
+    let output = command
+        .output()
+        .map_err(|error| format!("无法读取开始菜单应用：{error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: Value = serde_json::from_str(trimmed)
+        .map_err(|error| format!("开始菜单应用清单解析失败：{error}"))?;
+    let rows = match value {
+        Value::Array(items) => items,
+        other => vec![other],
+    };
+    let needle = query
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty());
+    let mut apps = Vec::new();
+    for row in rows {
+        let label = row
+            .get("Name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let app_id = row
+            .get("AppID")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if label.is_empty() || app_id.is_empty() {
+            continue;
+        }
+        if let Some(needle) = needle.as_deref() {
+            if !label.to_lowercase().contains(needle) {
+                continue;
+            }
+        }
+        apps.push(StartApp { label, app_id });
+        if apps.len() >= 60 {
+            break;
+        }
+    }
+    Ok(apps)
+}
+
+/// 启动 shell:AppsFolder 里的应用（Store / MSIX 应用都走这里）。
+#[tauri::command]
+fn launch_start_app(app_id: String) -> Result<(), String> {
+    let app_id = app_id.trim();
+    if app_id.is_empty() || app_id.contains('"') {
+        return Err("应用标识无效。".to_string());
+    }
+    let mut command = Command::new("explorer.exe");
+    command.arg(format!("shell:AppsFolder\\{app_id}"));
+    spawn_detached(command)
+}
+
+/// 找到桌面图标所在的 SysListView32。
+///
+/// Win10/11 有两种挂载方式：直接挂在 Progman 下，或者挂在某个 WorkerW 下，
+/// 两种都要试一遍，否则切换桌面图标会“成功”但没有任何变化。
+fn desktop_icon_view() -> Option<HWND> {
+    unsafe {
+        let mut view = HWND::default();
+        if let Ok(progman) = FindWindowW(w!("Progman"), None) {
+            view = FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None)
+                .unwrap_or_default();
+        }
+        if view.0.is_null() {
+            let mut worker = HWND::default();
+            loop {
+                worker = match FindWindowExW(None, Some(worker), w!("WorkerW"), None) {
+                    Ok(next) if !next.0.is_null() => next,
+                    _ => break,
+                };
+                view = FindWindowExW(Some(worker), None, w!("SHELLDLL_DefView"), None)
+                    .unwrap_or_default();
+                if !view.0.is_null() {
+                    break;
+                }
+            }
+        }
+        if view.0.is_null() {
+            return None;
+        }
+        let list = FindWindowExW(Some(view), None, w!("SysListView32"), None).ok()?;
+        (!list.0.is_null()).then_some(list)
+    }
+}
+
+#[tauri::command]
+fn get_desktop_icons_visible() -> Result<bool, String> {
+    match desktop_icon_view() {
+        Some(list) => Ok(unsafe { IsWindowVisible(list).as_bool() }),
+        None => Err("找不到桌面图标视图。".to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_desktop_icons_visible(visible: bool) -> Result<bool, String> {
+    let list = desktop_icon_view().ok_or("找不到桌面图标视图。")?;
+    unsafe {
+        let _ = ShowWindow(list, if visible { SW_SHOW } else { SW_HIDE });
+        Ok(IsWindowVisible(list).as_bool())
+    }
 }
 
 fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
@@ -3331,6 +3473,10 @@ pub fn run() {
             launch_tool,
             discover_shortcuts,
             discover_installed_apps,
+            discover_start_apps,
+            launch_start_app,
+            get_desktop_icons_visible,
+            set_desktop_icons_visible,
             launch_discovered_shortcut,
             launch_custom_shortcut,
             list_common_scripts,
