@@ -1,15 +1,15 @@
 {
-  "version": "1.3.0",
-  "notes": "# Maltese v1.3.0\n\n## 桌宠形象\n\n- 还原 LineDogPet 的两套形象：小白、小鸡毛，外加「两只同框」共享素材，共 495 张 GIF。\n- 设置页「桌宠形态」可选择 **小白 / 小鸡毛 / 小白和小鸡毛**：前两者播自己的素材，并按每 3 张插 1 张的比例混播双狗同框图；选「小白和小鸡毛」时只播同框素材。\n- 抱起、转圈、追逐固定用共享池里的招牌图，和 LineDogPet 手感一致；动作缺素材时按回退链找近似动作，最后兜底小白待机。\n- 表情轮播按形象分开保存，旧的按状态配置会自动迁移到小白。\n- 每个状态最多轮播 30 张，避免一次预加载上百张 GIF 吃内存；设置页「全选」仍可取到完整素材池。\n\n## 快捷入口\n\n- 支持 Microsoft Store / MSIX 应用：新增 `Get-StartApps` 读取与 `shell:AppsFolder` 启动，ChatGPT 这类没有 `.lnk` 的应用现在能搜到、添加并打开。\n- 移除「常用脚本」和「显示 / 隐藏桌宠」两块，面板只保留快捷方式；快捷键仍在设置页「互动」里配置。\n- 商店应用暂不显示图标，其余快捷方式图标逻辑不变。\n\n## 设置与交互\n\n- 新增「显示桌面图标」一键开关，读取当前状态后可直接隐藏 / 恢复。\n- 收起与展开的缩放范围从 0.75–1.4 放宽到 **0.5–1.8**，原生窗口尺寸同步调整。\n- 面板展开后可用 ↑ ↓ ← → 在 待办 / 音乐 / 剪贴板 / 快捷入口 / 聊天 / 插件 之间切换，焦点在输入框时不拦截。\n- 修复「关于与更新」在浅色设置窗口里白字白底看不清的问题，配色按设置窗口覆盖并放大字号。\n\n## 桌宠聊天\n\n- 修复 DSH 聊天报 `MISSING_CREDENTIAL` 的问题：headless 默认路由 `deepseek-official` 需要 `DEEPSEEK_API_KEY`，现在 patch 会把默认模型指到桌面端登录的账号路由（`deepseek-account` + `deepseek-flash`），无需额外配置密钥。\n\n## 验证\n\n- `tsc --noEmit` 与 `vite build` 通过。\n- `cargo check` 通过（仅有既有告警）。\n- DSH headless 实测返回 `OK`，会话 id 正常返回。\n- ChatGPT 在 Windows 应用清单中确认为 `OpenAI.Codex_2p2nqsd0c76g0!App`，可通过新命令启动。",
-  "pub_date": "2026-11-06T05:20:08Z",
+  "version": "1.3.1",
+  "notes": "# Maltese v1.3.1\n\n## 快捷入口改版\n\n- 快捷方式卡片移到面板最上方，打开快捷入口第一眼就是可点的按钮。\n- 新增快捷方式、面板热键、自动识别 / 扫描目录、按名称搜索应用这些「添加与设置」项统一收进底部「添加与设置」区块，用一条分隔线和按钮区分开。\n- 删除入口、恢复隐藏、清空这些管理操作仍留在快捷方式标题行，不跟着往下挪。\n\n## 形象选择\n\n- 岛内设置页的「桌宠形态」新增「小狗形象」三选一（小白 / 小鸡毛 / 小白和小鸡毛），和独立设置窗口里的选项同步，切换后主狗、陪玩狗、跟随狗一起换形象。\n\n## 验证\n\n- `tsc --noEmit` 与 `vite build` 通过。",
+  "pub_date": "2026-11-06T05:31:44Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09SS2YyWDk3MlRuVkFCTko2SG9lZ0ZZT2E4ZUF3R01mL3NTZzF0dlNzSms3VEp2a3ZpV2xLU2w0S2t6dWp2WkpBdEN4QXRCb1F0S21pZ2dZM1k4RXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQyNDA0CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjBfeDY0LXNldHVwLmV4ZQo2REwzTXZlL09XMWZ2dWIyNWlvZ3o1NUZZSUkzVTd2Q0R1NnF3dkJKWDAzcXY5SVRSWGwxM1JWRVNXR0RHTEIzM09ReGlneWVrK1pjRzAzWGJuUFNDdz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.0/Maltese-1.3.0-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VUUzVlekUzcys0TjZ5akVlWEloakFxQXoydjFwcHdLNU9naW9NZld4Y09CeG5CY3VkVVJsVU5uY1FHVVpaUXV2WHZkV1djK2ZOUUxSNnUwNkRSNWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQzMTAwCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjFfeDY0LXNldHVwLmV4ZQpCTy9BYisvaFlOTFk4d0VxcHJTNXFtUjc5aEpLQmpXZUpBTkdULzZnZnI0RGVpaE9wQTlsUG52REM3a2VGVTJnZkw1NXpVVEVHcTQyVnNZNGNhbDJBZz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.1/Maltese-1.3.1-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09SS2YyWDk3MlRuVkFCTko2SG9lZ0ZZT2E4ZUF3R01mL3NTZzF0dlNzSms3VEp2a3ZpV2xLU2w0S2t6dWp2WkpBdEN4QXRCb1F0S21pZ2dZM1k4RXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQyNDA0CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjBfeDY0LXNldHVwLmV4ZQo2REwzTXZlL09XMWZ2dWIyNWlvZ3o1NUZZSUkzVTd2Q0R1NnF3dkJKWDAzcXY5SVRSWGwxM1JWRVNXR0RHTEIzM09ReGlneWVrK1pjRzAzWGJuUFNDdz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.0/Maltese-1.3.0-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VUUzVlekUzcys0TjZ5akVlWEloakFxQXoydjFwcHdLNU9naW9NZld4Y09CeG5CY3VkVVJsVU5uY1FHVVpaUXV2WHZkV1djK2ZOUUxSNnUwNkRSNWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQzMTAwCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjFfeDY0LXNldHVwLmV4ZQpCTy9BYisvaFlOTFk4d0VxcHJTNXFtUjc5aEpLQmpXZUpBTkdULzZnZnI0RGVpaE9wQTlsUG52REM3a2VGVTJnZkw1NXpVVEVHcTQyVnNZNGNhbDJBZz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.1/Maltese-1.3.1-x64-setup.exe"
     }
   }
 }
