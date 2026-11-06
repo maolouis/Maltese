@@ -5320,30 +5320,8 @@ function AssistantPanel() {
           >
             设置
           </button>
-          <button
-            type="button"
-            className="assistant-panel__add"
-            onClick={() => setAdding((value) => !value)}
-          >
-            {adding ? "取消" : "＋ 新增快捷方式"}
-          </button>
         </div>
       </div>
-      {adding && (
-        <div className="assistant-panel__add-form">
-          <input
-            value={draftLabel}
-            onChange={(event) => setDraftLabel(event.currentTarget.value)}
-            placeholder="名称（可选）"
-          />
-          <input
-            value={draftPath}
-            onChange={(event) => setDraftPath(event.currentTarget.value)}
-            placeholder="程序或脚本路径，例如 C:\\Tools\\tool.exe"
-          />
-          <button type="button" onClick={addCustomShortcut}>添加</button>
-        </div>
-      )}
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
         <div className="assistant-panel__section-meta">
@@ -5367,100 +5345,6 @@ function AssistantPanel() {
             </button>
           )}
         </div>
-      </div>
-      <div className="assistant-panel__panel-hotkey">
-        <span className="assistant-panel__label">{t.assistant.panelHotkey}</span>
-        <button
-          type="button"
-          className={`assistant-panel__hotkey-button${recordingPanelHotkey ? " assistant-panel__hotkey-button--recording" : ""}${panelHotkeyError ? " assistant-panel__hotkey-button--error" : ""}`}
-          title={panelHotkeyError || t.assistant.panelHotkeyHint}
-          aria-label={t.assistant.panelHotkeyHint}
-          onClick={() => {
-            setPanelHotkeyError("");
-            setRecordingPanelHotkey(true);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            clearPanelHotkey();
-          }}
-        >
-          {recordingPanelHotkey
-            ? t.assistant.panelHotkeyRecording
-            : panelHotkey || t.assistant.panelHotkeyEmpty}
-        </button>
-        <small role={panelHotkeyError ? "alert" : undefined}>
-          {panelHotkeyError || t.assistant.panelHotkeyHint}
-        </small>
-      </div>
-      <div className="assistant-panel__scan-dir">
-        <label className="assistant-panel__scan-toggle">
-          <input
-            type="checkbox"
-            checked={autoDetectShortcuts}
-            onChange={(event) => {
-              const next = event.currentTarget.checked;
-              setAutoDetectShortcuts(next);
-              saveShortcutAutoDetect(next);
-            }}
-          />
-          <span>自动识别快捷方式</span>
-        </label>
-        <span className="assistant-panel__label">自动扫描目录</span>
-        <div className="assistant-panel__scan-row">
-          <input
-            value={scanDraft}
-            disabled={!autoDetectShortcuts}
-            onChange={(event) => setScanDraft(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") applyScanDir();
-            }}
-            placeholder="留空只扫描桌面，或填一个快捷方式目录"
-            spellCheck={false}
-          />
-          <button type="button" disabled={!autoDetectShortcuts} onClick={applyScanDir}>扫描</button>
-        </div>
-        <small className={scanError ? "assistant-panel__scan-error" : undefined}>
-          {!autoDetectShortcuts
-            ? "自动识别已关闭；只保留自定义快捷方式。"
-            : scanError || (scanDir ? `只扫描：${scanDir}` : "读取桌面和系统开始菜单，不扫描 Program Files。")}
-        </small>
-      </div>
-      <div className="assistant-panel__app-search">
-        <span className="assistant-panel__label">搜索应用名称添加</span>
-        <input
-          value={appQuery}
-          onChange={(event) => setAppQuery(event.currentTarget.value)}
-          placeholder="输入应用名，例如 微信 / 网易云 / VS Code"
-          spellCheck={false}
-        />
-        {appQuery.trim() && (
-          <div className="assistant-panel__app-results">
-            {appSearching ? (
-              <small>正在搜索系统应用…</small>
-            ) : appResults.length > 0 ? (
-              appResults.slice(0, 12).map((app) => (
-                <button
-                  key={app.path}
-                  type="button"
-                  onClick={() => addSystemApp(app)}
-                  title={app.path}
-                >
-                  <span>{app.label}</span>
-                  <small>
-                    {app.kind === "lnk"
-                      ? "开始菜单"
-                      : app.kind === "appx"
-                        ? "商店应用"
-                        : `.${app.kind}`}
-                  </small>
-                  <strong>＋</strong>
-                </button>
-              ))
-            ) : (
-              <small>没有找到匹配的系统应用</small>
-            )}
-          </div>
-        )}
       </div>
       <div className="assistant-panel__grid">
         {visibleActions.map((action) => (
@@ -5540,6 +5424,129 @@ function AssistantPanel() {
             </button>
           </div>
         ))}
+      </div>
+      <div className="assistant-panel__manage">
+        <div className="assistant-panel__section-head">
+          <span>添加与设置</span>
+          <div className="assistant-panel__section-meta">
+            <button
+              type="button"
+              className="assistant-panel__add"
+              onClick={() => setAdding((value) => !value)}
+            >
+              {adding ? "取消" : "＋ 新增快捷方式"}
+            </button>
+          </div>
+        </div>
+        {adding && (
+          <div className="assistant-panel__add-form">
+            <input
+              value={draftLabel}
+              onChange={(event) => setDraftLabel(event.currentTarget.value)}
+              placeholder="名称（可选）"
+            />
+            <input
+              value={draftPath}
+              onChange={(event) => setDraftPath(event.currentTarget.value)}
+              placeholder="程序或脚本路径，例如 C:\\Tools\\tool.exe"
+            />
+            <button type="button" onClick={addCustomShortcut}>添加</button>
+          </div>
+        )}
+        <div className="assistant-panel__panel-hotkey">
+          <span className="assistant-panel__label">{t.assistant.panelHotkey}</span>
+          <button
+            type="button"
+            className={`assistant-panel__hotkey-button${recordingPanelHotkey ? " assistant-panel__hotkey-button--recording" : ""}${panelHotkeyError ? " assistant-panel__hotkey-button--error" : ""}`}
+            title={panelHotkeyError || t.assistant.panelHotkeyHint}
+            aria-label={t.assistant.panelHotkeyHint}
+            onClick={() => {
+              setPanelHotkeyError("");
+              setRecordingPanelHotkey(true);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              clearPanelHotkey();
+            }}
+          >
+            {recordingPanelHotkey
+              ? t.assistant.panelHotkeyRecording
+              : panelHotkey || t.assistant.panelHotkeyEmpty}
+          </button>
+          <small role={panelHotkeyError ? "alert" : undefined}>
+            {panelHotkeyError || t.assistant.panelHotkeyHint}
+          </small>
+        </div>
+        <div className="assistant-panel__scan-dir">
+          <label className="assistant-panel__scan-toggle">
+            <input
+              type="checkbox"
+              checked={autoDetectShortcuts}
+              onChange={(event) => {
+                const next = event.currentTarget.checked;
+                setAutoDetectShortcuts(next);
+                saveShortcutAutoDetect(next);
+              }}
+            />
+            <span>自动识别快捷方式</span>
+          </label>
+          <span className="assistant-panel__label">自动扫描目录</span>
+          <div className="assistant-panel__scan-row">
+            <input
+              value={scanDraft}
+              disabled={!autoDetectShortcuts}
+              onChange={(event) => setScanDraft(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") applyScanDir();
+              }}
+              placeholder="留空只扫描桌面，或填一个快捷方式目录"
+              spellCheck={false}
+            />
+            <button type="button" disabled={!autoDetectShortcuts} onClick={applyScanDir}>扫描</button>
+          </div>
+          <small className={scanError ? "assistant-panel__scan-error" : undefined}>
+            {!autoDetectShortcuts
+              ? "自动识别已关闭；只保留自定义快捷方式。"
+              : scanError || (scanDir ? `只扫描：${scanDir}` : "读取桌面和系统开始菜单，不扫描 Program Files。")}
+          </small>
+        </div>
+        <div className="assistant-panel__app-search">
+          <span className="assistant-panel__label">搜索应用名称添加</span>
+          <input
+            value={appQuery}
+            onChange={(event) => setAppQuery(event.currentTarget.value)}
+            placeholder="输入应用名，例如 微信 / 网易云 / VS Code"
+            spellCheck={false}
+          />
+          {appQuery.trim() && (
+            <div className="assistant-panel__app-results">
+              {appSearching ? (
+                <small>正在搜索系统应用…</small>
+              ) : appResults.length > 0 ? (
+                appResults.slice(0, 12).map((app) => (
+                  <button
+                    key={app.path}
+                    type="button"
+                    onClick={() => addSystemApp(app)}
+                    title={app.path}
+                  >
+                    <span>{app.label}</span>
+                    <small>
+                      {app.kind === "lnk"
+                        ? "开始菜单"
+                        : app.kind === "appx"
+                          ? "商店应用"
+                          : `.${app.kind}`}
+                    </small>
+                    <strong>＋</strong>
+                  </button>
+                ))
+              ) : (
+                <small>没有找到匹配的系统应用</small>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

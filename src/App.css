@@ -6026,3 +6026,17 @@ html.maltese-page-opening .island__collapsed {
   outline: 2px solid #f0a04b;
   outline-offset: 2px;
 }
+
+/* 快捷入口：顶部只放快捷方式卡片，添加与设置统一收在底部 */
+.assistant-panel__manage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.assistant-panel__manage .assistant-panel__add {
+  font-size: 11px;
+}
