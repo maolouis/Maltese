@@ -28,6 +28,8 @@ Clash/Watt、PowerToys 和常用脚本等功能。
 │   ├── IslandShell.tsx → App.tsx  # 悬浮壳组件
 │   ├── OnboardingPanel.tsx   # 首次运行向导
 │   ├── petAssets.ts          # GIF 素材清单与随机选取
+│   ├── petCharacters.ts      # 小白/小鸡毛/双狗形象、动作映射与回退链
+│   ├── petCharacterAssets.generated.ts # 由 scripts/build-pet-manifest.mjs 生成
 │   ├── TranslationWindow.tsx # 翻译独立窗口
 │   ├── UpdatePanel.tsx       # 软件更新面板
 │   ├── Messages.tsx          # 消息面板
@@ -45,14 +47,22 @@ Clash/Watt、PowerToys 和常用脚本等功能。
 │   ├── src/translation.rs    # 有道智云 v3
 │   ├── src/dsh_api.rs        # DSH 本机 API
 │   └── src/video_automation.rs  # B 站/抖音自动翻页
-├── public/assets/pets/       # 线条小狗 GIF 素材（13 类 60+ 变体）
+├── public/assets/pets/       # 线条小狗 GIF 素材（chars/ 下分 xiaobai、xiaojimao、shared）
 ├── scripts/
 │   ├── build-windows.mjs     # 一键打包脚本（Node 侧逻辑）
+│   ├── build-pet-manifest.mjs # 扫描角色素材，生成 petCharacterAssets.generated.ts
+│   ├── recover-chat-history.mjs # 把 Codex 会话日志还原成 Markdown
 │   ├── release*.mjs          # 发布流水线
 │   ├── focusd-agent-*        # AI Agent 状态钩子脚本
 │   └── ...
-└── docs/                     # 开发文档与发布说明
+└── docs/                     # 开发文档与发布说明（chat-history/ 存还原的旧对话）
 ```
+
+素材与形象约定：
+
+- `public/assets/pets/chars/xiaobai|xiaojimao|shared/<动作>/*.gif`，`shared` 是两只同框的共享池，不是角色。
+- 新增或替换素材后跑 `node scripts/build-pet-manifest.mjs`，清单是生成文件，不要手改。
+- 界面状态到动作目录的映射、动作回退链在 `src/petCharacters.ts`；抱起/转圈/追逐固定用 shared 里的招牌图。
 
 ## 常用命令
 

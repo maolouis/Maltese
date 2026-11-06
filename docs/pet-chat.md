@@ -39,7 +39,8 @@
 
   `--patch` 必须放在 profile 名之前，否则会被 headless 当成未知 app 参数。命令用 `CREATE_NO_WINDOW`，不弹终端，120 秒超时。
 
-- 默认 headless profile 关闭了 `credentials`、`authorization`、`deepseek-account` 模块。首次调用时在应用数据目录写入一个只包含三行 `disabled: false` 的 patch 文件，让 headless 读到 DSH 已保存的凭据；不复制、不打印、不上传密钥。
+- 默认 headless profile 关闭了 `credentials`、`authorization`、`deepseek-account` 模块。首次调用时在应用数据目录写入 patch 文件，让 headless 读到 DSH 已保存的凭据；不复制、不打印、不上传密钥。
+- patch 里还会把默认模型指到 `provider: deepseek-account` + `model: deepseek-flash`。headless 默认的 `deepseek-official` 路由需要 `DEEPSEEK_API_KEY`，没配过的机器会直接报 `MISSING_CREDENTIAL`，聊天完全用不了；改用桌面端登录后的账号路由即可正常对话。
 - 解析 NDJSON：`session` 取 `sessionId`，`final` 取最终文本；没有 `final` 时回退到最后一个 `text`。空回复会报错，由界面显示。
 - `sessionId` 让 DSH 复用同一会话；CLI 返回新 id 时前端自动更新。会话不存在等错误由后端清空 id 后重试一次。
 
