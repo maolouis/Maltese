@@ -5,7 +5,7 @@
 - **DSH**：通过本机 DSH CLI 的 `headless` profile 对话，复用已保存的会话。
 - **本地模型**：连接 Ollama / LM Studio / llama.cpp 等服务的 OpenAI Chat Completions 接口。
 
-聊天记录保存在浏览器 `localStorage`（`focusd-island-pet-chat-messages`），DSH 会话 id 保存在 `focusd-island-pet-chat-session`；点右上角垃圾桶会清空这两项。模型后端配置保存在 `maltese-local-chat-settings`，两种后端共用同一份聊天记录。
+聊天记录保存在浏览器 `localStorage`（`focusd-island-pet-chat-messages`），DSH 会话 id 保存在 `focusd-island-pet-chat-session`；点右上角垃圾桶会清空这两项。模型后端配置保存在 `maltese-local-chat-settings`，两种后端共用同一份聊天记录。每次请求还会带上当前桌宠形象（小白 / 小鸡毛 / 两只一起），所以切换形象后，新回复会使用对应的性格。
 
 ## 切换本地模型
 
@@ -22,15 +22,15 @@
 
 ## 本地模型工作方式
 
-- 前端 `src/PetChat.tsx` 调用原生命令 `local_chat`，传入当前文本、最近 16 条消息、接口地址、模型名和可选 API Key。
+- 前端 `src/PetChat.tsx` 调用原生命令 `local_chat`，传入当前文本、最近 16 条消息、接口地址、模型名、当前形象和可选 API Key。
 - Rust `src-tauri/src/local_chat.rs` 向 `POST <base>/v1/chat/completions` 发送非流式请求，超时 180 秒；连接超时为 25 秒。
-- 每次请求会带一条固定桌宠 system prompt，并要求用简体中文、1 到 3 句话回答。
+- 每次请求会带当前形象的桌宠 system prompt，并要求用简体中文、1 到 3 句话回答。小白的设定是安静温柔、细心、略胆小；小鸡毛的设定是活泼、贪吃、爱撒娇；选择两只一起时，模型必须分别用「小白：」和「小鸡毛：」各说一句。
 - 「测试连接」调用 `local_chat_models`，读取 `<base>/v1/models`；只用于展示模型列表，不会保存服务返回的其他内容。
 - 接口只接受 `http` / `https`。请求从本机直接发到配置的地址，不经过 DSH 或 Maltese 的服务器。
 
 ## DSH 工作方式
 
-- 前端 `src/PetChat.tsx` 调用原生命令 `dsh_chat`，只传用户文本和可选 `sessionId`。
+- 前端 `src/PetChat.tsx` 调用原生命令 `dsh_chat`，传入用户文本、当前形象和可选 `sessionId`。
 - Rust `src-tauri/src/dsh_chat.rs` 启动：
 
   ```text
@@ -43,6 +43,11 @@
 - patch 里还会把默认模型指到 `provider: deepseek-account` + `model: deepseek-flash`。headless 默认的 `deepseek-official` 路由需要 `DEEPSEEK_API_KEY`，没配过的机器会直接报 `MISSING_CREDENTIAL`，聊天完全用不了；改用桌面端登录后的账号路由即可正常对话。
 - 解析 NDJSON：`session` 取 `sessionId`，`final` 取最终文本；没有 `final` 时回退到最后一个 `text`。空回复会报错，由界面显示。
 - `sessionId` 让 DSH 复用同一会话；CLI 返回新 id 时前端自动更新。会话不存在等错误由后端清空 id 后重试一次。
+
+## 形象与聊天提示词
+
+- `src/petCharacters.ts` 是前端唯一的形象来源，`usePetCharacter()` 将当前选择同步到聊天组件。
+- `src-tauri/src/dsh_chat.rs` 和 `src-tauri/src/local_chat.rs` 各自根据 `character` 生成 system prompt；未知值回退到小白，避免旧客户端或异常调用导致聊天不可用。
 
 ## 配置覆盖
 

@@ -1378,7 +1378,8 @@ fn set_desktop_icons_visible(visible: bool) -> Result<bool, String> {
 /// 而且会闪一下黑框。ShellExecute 本身就是资源管理器双击的入口，快得多。
 fn shell_execute(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = path
+    let normalized_path = normalize_shell_execute_path(path);
+    let wide: Vec<u16> = normalized_path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
@@ -1398,6 +1399,22 @@ fn shell_execute(path: &Path) -> Result<(), String> {
         return Err(format!("无法打开：{}", path.display()));
     }
     Ok(())
+}
+
+/// ShellExecuteW 对 Win32 扩展路径前缀（`\\?\`）兼容性很差：
+/// canonicalize() 在 Windows 上经常返回这种前缀，资源管理器却要求普通路径。
+/// UNC 路径要保留双反斜杠，盘符路径则直接去掉前缀。
+fn normalize_shell_execute_path(path: &Path) -> PathBuf {
+    let Some(value) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
 }
 
 fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
@@ -3009,6 +3026,22 @@ fn point_in_notch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_execute_path_drops_extended_prefixes() {
+        assert_eq!(
+            normalize_shell_execute_path(Path::new(r"\\?\C:\tools\start.cmd")),
+            PathBuf::from(r"C:\tools\start.cmd")
+        );
+        assert_eq!(
+            normalize_shell_execute_path(Path::new(r"\\?\UNC\server\share\start.cmd")),
+            PathBuf::from(r"\\server\share\start.cmd")
+        );
+        assert_eq!(
+            normalize_shell_execute_path(Path::new(r"C:\tools\start.cmd")),
+            PathBuf::from(r"C:\tools\start.cmd")
+        );
+    }
 
     #[test]
     fn preview_updater_config_is_valid_without_a_release_key() {

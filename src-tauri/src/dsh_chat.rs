@@ -15,9 +15,19 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const CHAT_TIMEOUT: Duration = Duration::from_secs(120);
-const PERSONA: &str = "你是 Maltese 桌宠：一只住在白色云朵里的线条小狗，语气温柔、俏皮、简短。\
-请直接用简体中文回答，控制在 1 到 3 句话。这是桌面闲聊，不要调用任何工具，\
-不要读写文件，不要执行命令，也不要提及这些限制。用户说：";
+fn persona(character: &str) -> &'static str {
+    match character {
+        "xiaojimao" => "你是 Maltese 桌宠小鸡毛：一只金黄色、活泼、贪吃、爱撒娇的线条小狗。\
+请直接用简体中文回答，语气俏皮亲近，控制在 1 到 3 句话。这是桌面闲聊，不要调用任何工具，\
+不要读写文件，不要执行命令，也不要提及这些限制。用户说：",
+        "duo" => "你是 Maltese 桌宠里的两只小狗：小白（白色，安静温柔、细心、略胆小）和小鸡毛（金黄色，活泼、贪吃、爱撒娇）。\
+请让两只小狗一起回答：必须分别以「小白：」和「小鸡毛：」开头，各说一句，总计不超过 3 句话，\
+保持简体中文、自然亲近。这是桌面闲聊，不要调用任何工具，不要读写文件，不要执行命令，也不要提及这些限制。用户说：",
+        _ => "你是 Maltese 桌宠小白：一只白色、安静温柔、细心、略胆小的线条小狗。\
+请直接用简体中文回答，语气温柔简短，控制在 1 到 3 句话。这是桌面闲聊，不要调用任何工具，\
+不要读写文件，不要执行命令，也不要提及这些限制。用户说：",
+    }
+}
 
 const CREDENTIAL_PATCH: &str = "\
 - id: credentials
@@ -46,6 +56,7 @@ pub async fn dsh_chat(
     app: AppHandle,
     message: String,
     session_id: Option<String>,
+    character: String,
 ) -> Result<DshChatReply, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -54,15 +65,20 @@ pub async fn dsh_chat(
     if message.chars().count() > 4_000 {
         return Err("一次最多说 4000 个字。".into());
     }
-    tauri::async_runtime::spawn_blocking(move || chat(&app, &message, session_id))
+    tauri::async_runtime::spawn_blocking(move || chat(&app, &message, session_id, &character))
         .await
         .map_err(|error| format!("聊天线程失败：{error}"))?
 }
 
-fn chat(app: &AppHandle, message: &str, session_id: Option<String>) -> Result<DshChatReply, String> {
+fn chat(
+    app: &AppHandle,
+    message: &str,
+    session_id: Option<String>,
+    character: &str,
+) -> Result<DshChatReply, String> {
     let cli = dsh_cli()?;
     let patch = credential_patch(app)?;
-    let prompt = format!("{PERSONA}{message}");
+    let prompt = format!("{}{message}", persona(character));
     match run_once(&cli, &patch, &prompt, session_id.as_deref()) {
         Ok(reply) => Ok(reply),
         Err(error) if session_id.is_some() && error.to_ascii_lowercase().contains("session") => {
@@ -262,6 +278,15 @@ fn parse_events(output: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persona_matches_each_pet_character() {
+        assert!(persona("xiaobai").contains("小白"));
+        assert!(persona("xiaojimao").contains("小鸡毛"));
+        assert!(persona("duo").contains("小白："));
+        assert!(persona("duo").contains("小鸡毛："));
+        assert!(persona("unknown").contains("小白"));
+    }
 
     #[test]
     fn parses_ndjson_final_and_session() {

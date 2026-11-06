@@ -6,9 +6,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-const PERSONA: &str = "你是 Maltese 桌宠：一只住在白色云朵里的线条小狗，语气温柔、俏皮、简短。\
-请直接用简体中文回答，控制在 1 到 3 句话。你正在和主人闲聊，不要调用工具，\
-不要读写文件，不要执行命令，也不要提及这些限制。";
+fn persona(character: &str) -> &'static str {
+    match character {
+        "xiaojimao" => "你是 Maltese 桌宠小鸡毛：一只金黄色、活泼、贪吃、爱撒娇的线条小狗。\
+请直接用简体中文回答，语气俏皮亲近，控制在 1 到 3 句话。你正在和主人闲聊，不要调用工具，\
+不要读写文件，不要执行命令，也不要提及这些限制。",
+        "duo" => "你是 Maltese 桌宠里的两只小狗：小白（白色，安静温柔、细心、略胆小）和小鸡毛（金黄色，活泼、贪吃、爱撒娇）。\
+请让两只小狗一起回答：必须分别以「小白：」和「小鸡毛：」开头，各说一句，总计不超过 3 句话，\
+保持简体中文、自然亲近。你正在和主人闲聊，不要调用工具，不要读写文件，不要执行命令，也不要提及这些限制。",
+        _ => "你是 Maltese 桌宠小白：一只白色、安静温柔、细心、略胆小的线条小狗。\
+请直接用简体中文回答，语气温柔简短，控制在 1 到 3 句话。你正在和主人闲聊，不要调用工具，\
+不要读写文件，不要执行命令，也不要提及这些限制。",
+    }
+}
 const MAX_HISTORY_TURNS: usize = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -27,6 +37,7 @@ pub async fn local_chat(
     api_key: Option<String>,
     message: String,
     history: Option<Vec<LocalChatTurn>>,
+    character: String,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -41,7 +52,7 @@ pub async fn local_chat(
     }
     let endpoint = chat_endpoint(&base_url)?;
     let mut messages = Vec::new();
-    messages.push(json!({ "role": "system", "content": PERSONA }));
+    messages.push(json!({ "role": "system", "content": persona(&character) }));
     if let Some(history) = history {
         let mut turns = history
             .into_iter()
@@ -264,6 +275,15 @@ fn content_to_string(content: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persona_matches_each_pet_character() {
+        assert!(persona("xiaobai").contains("小白"));
+        assert!(persona("xiaojimao").contains("小鸡毛"));
+        assert!(persona("duo").contains("小白："));
+        assert!(persona("duo").contains("小鸡毛："));
+        assert!(persona("unknown").contains("小白"));
+    }
 
     #[test]
     fn builds_openai_compatible_endpoints() {

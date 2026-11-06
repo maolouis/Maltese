@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { LoaderCircle, Send, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
+import { usePetCharacter } from "./petCharacters";
 import {
   loadLocalChatConfig,
   LOCAL_CHAT_UPDATED_EVENT,
@@ -51,6 +52,7 @@ function loadMessages(): ChatMessage[] {
 
 export function PetChat() {
   const t = useTranslation();
+  const character = usePetCharacter();
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     window.localStorage.getItem(SESSION_KEY),
@@ -124,11 +126,13 @@ export function PetChat() {
             role: message.role,
             content: message.text,
           })),
+          character,
         });
       } else {
         const reply = await invoke<DshChatReply>("dsh_chat", {
           message: text,
           sessionId,
+          character,
         });
         if (reply.sessionId) {
           setSessionId(reply.sessionId);
@@ -156,6 +160,7 @@ export function PetChat() {
     chatConfig.backend,
     chatConfig.baseUrl,
     chatConfig.model,
+    character,
     draft,
     messages,
     persist,
