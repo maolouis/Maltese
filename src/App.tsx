@@ -69,7 +69,7 @@ import {
   usePetGifRotationStates,
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
-import { usePetCharacter, characterFramesForState } from "./petCharacters";
+import { PET_CHARACTERS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
 import { UpdatePanel } from "./UpdatePanel";
 import { UpdateBanner } from "./UpdateBanner";
 import {
@@ -2230,6 +2230,7 @@ function LayoutEditor({
     return () => window.cancelAnimationFrame(frame);
   }, [highlightSavePath]);
 
+  const petCharacter = usePetCharacter();
   const agentStatusRows = AGENT_PROVIDERS.map((provider) => {
     const status = agentStatus[provider];
     return {
@@ -2543,6 +2544,23 @@ function LayoutEditor({
       <section className="settings-section settings-section--desktop-pets">
         <div className="settings-section__header">
           <span>桌宠形态</span>
+        </div>
+        <div className="appearance-mode-control">
+          <span>小狗形象</span>
+          <div className="appearance-mode-control__segments" role="group" aria-label="小狗形象">
+            {PET_CHARACTERS.map((character) => (
+              <button
+                key={character.id}
+                className={petCharacter === character.id ? "appearance-mode-control--active" : ""}
+                type="button"
+                aria-pressed={petCharacter === character.id}
+                title={character.hintZh}
+                onClick={() => savePetCharacter(character.id)}
+              >
+                {character.zh}
+              </button>
+            ))}
+          </div>
         </div>
         <p className="settings-section__hint">
           陪玩狗、Bongo 模式和鼠标跟随宠会使用独立的透明小窗口，不会挡住桌面点击。

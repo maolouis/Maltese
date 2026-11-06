@@ -34,3 +34,4 @@ src-tauri/tauri.release.conf.json
 
 # ????????
 .tmp-build/
+.tmp-bin/
