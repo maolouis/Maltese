@@ -111,11 +111,25 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 下载后双击如果出现 **「Windows 已保护你的电脑 / Microsoft Defender SmartScreen 阻止了无法识别的应用启动」**，发行者显示「发布者未知」，这不是病毒告警，而是因为发布包**没有代码签名证书**：每台机器第一次运行未签名的新文件，SmartScreen 都会拦一次。
 
-继续运行的方法：
+**最省事的方式是用脚本安装**——PowerShell 下载不会写入「来自其他计算机」标记，也就不会触发 SmartScreen：
+
+```powershell
+irm https://raw.githubusercontent.com/maolouis/Maltese/main/scripts/install-latest.ps1 | iex
+```
+
+脚本会查最新版本、下载安装包、比对 `SHA256SUMS` 里的哈希、结束正在运行的旧实例，然后静默安装并启动。只想下载校验不安装可以加 `-CheckOnly`，想装便携版可以加 `-Portable`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-latest.ps1 -CheckOnly
+```
+
+如果仍然手动下载，按下面的方式放行：
 
 1. 点提示框里的 **「更多信息」**，再点 **「仍要运行」**。
 2. 如果文件是从浏览器下载后被标记为「来自其他计算机」，也可以先右键文件 → **属性** → 勾选最下面的 **「解除锁定」** → 确定，再双击；命令行等价写法是 `Unblock-File .\Maltese-assistant.exe`。
 3. 用 zip 便携版时同理：解压后若仍被拦，对解压出来的 `Maltese-assistant.exe` 做一次「解除锁定」。
+
+> **点了「仍要运行」却没反应？** 多半是已经有一个旧版 Maltese 在托盘里运行。它是单实例程序，新进程会把焦点交给旧实例然后自己退出，看起来就像没启动。先在托盘图标右键「退出」（或者 `Stop-Process -Name Maltese-assistant -Force`），再运行新版本；用上面的安装脚本则会自动处理。
 
 想先确认文件没被篡改，可以核对哈希（和 Release 页 `SHA256SUMS-vX.Y.Z.txt` 对比）：
 
@@ -123,7 +137,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 Get-FileHash .\Maltese-assistant.exe -Algorithm SHA256
 ```
 
-> 长期解决办法是给 exe 和安装包买代码签名证书（OV/EV）签名，签过之后发行者会显示你的名字，SmartScreen 也不会再对每个新版本弹「未知发布者」。有证书后本项目可以直接把签名接进发布流程。
+> 长期解决办法是给 exe 和安装包买代码签名证书（OV/EV）签名，签过之后发行者会显示你的名字，SmartScreen 也不会再对每个新版本弹「未知发布者」。自签名证书（openssl 生成的那种）不行：Windows 不信任它，只会更糟。有正式证书后本项目可以直接把签名接进发布流程。
 
 ### 从源码构建
 

@@ -30,7 +30,8 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 `
 按启发式判成风险。遇到拦截时先分清是哪一类：
 
 - **「Windows 已保护你的电脑」/「发布者未知」**：SmartScreen 对未签名新文件的提醒，不是病毒。
-  点「更多信息 → 仍要运行」即可；根本解决办法是代码签名。
+  点「更多信息 → 仍要运行」即可；或者用 `scripts/install-latest.ps1`（PowerShell 下载不带
+  Mark of the Web，不会触发提示，也会先结束旧实例再安装）。根本解决办法是代码签名。
 - **Defender 弹出具体威胁名（如 Trojan:Win32/Wacatac）**：走误报流程，先本机复核。
 
 处理步骤：
@@ -39,5 +40,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 `
 2. 把文件哈希、下载地址、项目说明提交到
    <https://www.microsoft.com/en-us/wdsi/filesubmission> 申请误报复核（开发者可以同时提交
    文件申请 SmartScreen 信誉）。
-3. 同时提供 zip 便携版作为替代下载方式。
-4. 根本解决办法是购买代码签名证书（OV/EV），长期能显著降低拦截率。
+3. 同时提供 zip 便携版和 `install-latest.ps1` 作为替代下载方式。
+4. 根本解决办法是购买代码签名证书（OV/EV），长期能显著降低拦截率；**自签名证书无效**，
+   Windows 不信任，SmartScreen 照样拦。
+5. 可选渠道：提交 winget（`winget-pkgs`）或维护 Scoop bucket，包管理器下载同样不带标记。
