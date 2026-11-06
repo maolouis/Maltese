@@ -107,6 +107,24 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 发布产物默认在 `release/<版本>/`。仓库不提交历史构建产物，避免仓库体积过大。
 
+### 第一次运行：SmartScreen 提示怎么办
+
+下载后双击如果出现 **「Windows 已保护你的电脑 / Microsoft Defender SmartScreen 阻止了无法识别的应用启动」**，发行者显示「发布者未知」，这不是病毒告警，而是因为发布包**没有代码签名证书**：每台机器第一次运行未签名的新文件，SmartScreen 都会拦一次。
+
+继续运行的方法：
+
+1. 点提示框里的 **「更多信息」**，再点 **「仍要运行」**。
+2. 如果文件是从浏览器下载后被标记为「来自其他计算机」，也可以先右键文件 → **属性** → 勾选最下面的 **「解除锁定」** → 确定，再双击；命令行等价写法是 `Unblock-File .\Maltese-assistant.exe`。
+3. 用 zip 便携版时同理：解压后若仍被拦，对解压出来的 `Maltese-assistant.exe` 做一次「解除锁定」。
+
+想先确认文件没被篡改，可以核对哈希（和 Release 页 `SHA256SUMS-vX.Y.Z.txt` 对比）：
+
+```powershell
+Get-FileHash .\Maltese-assistant.exe -Algorithm SHA256
+```
+
+> 长期解决办法是给 exe 和安装包买代码签名证书（OV/EV）签名，签过之后发行者会显示你的名字，SmartScreen 也不会再对每个新版本弹「未知发布者」。有证书后本项目可以直接把签名接进发布流程。
+
 ### 从源码构建
 
 ```bash
