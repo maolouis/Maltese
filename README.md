@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.3.0-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.3.2-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -34,6 +34,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **任务栏托盘菜单**：右键任务栏小图标可选择 **显示小狗 / 配置桌宠 / 隐藏到托盘 / 退出 Maltese**。
 - **桌宠右键**：直接打开聊天页；配置和隐藏统一收进托盘菜单，避免多层菜单误触。
 - **睡眠缩边高度**：设置中可在 **24–140 px** 之间调整睡觉时露出的屏幕高度。
+- **缩边 / 睡觉动画**：默认跟随当前形象（小白睡着就是小白，小鸡毛就是小鸡毛），也可以在设置里换成自己的 GIF（≤ 8 MB），随时「恢复默认」。
 - **全屏避让**：检测到游戏或视频全屏时自动缩边，退出后恢复；睡眠 / 全屏 / 手动缩边使用独立原因栈，不会互相抢状态。
 - **显示 / 隐藏桌宠**：只保留一个全局快捷键，默认 `Ctrl+Alt+Shift+M`；按一次隐藏，再按一次显示，在设置页「互动」里可自行录入；支持开机自启。剪贴板不再单独占用快捷键。
 - **桌面图标开关**：设置页「其他」里可一键隐藏 / 恢复桌面图标（当前桌面图标为隐藏状态时也能直接点回来）。
@@ -46,6 +47,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **快捷方式按用户生成**：默认只读取桌面，或只扫描你在快捷面板/设置里指定的一个目录；不再遍历开始菜单和 Program Files。自定义快捷方式保存在本机 `localStorage`，不会写进代码或分发。
 - **商店应用也能搜到**：除桌面 / 开始菜单的 `.lnk`、`.exe` 外，还会读取 Windows 登记的应用清单（`Get-StartApps`），ChatGPT 这类只有执行别名、没有快捷方式的 Microsoft Store 应用现在能搜索、添加并启动。
 - **快捷方式卡片**：只有拿到真实程序图标时才显示图标，不再用“哔 / 抖 / 链”这类单字大图标占位置；商店应用暂不显示图标。
+- **点击反馈与启动速度**：快捷方式直接走 Windows ShellExecute（和资源管理器双击同一条路径），不再经过 `cmd.exe /C start`，少一次控制台进程启动、不闪黑框；点击后卡片立刻显示「正在启动…」和转圈，成功后提示里给出从点击到系统接受启动的耗时（毫秒）。
 - **可调复位位置**：设置里可选底部居中 / 左上 / 右上 / 左下 / 右下，点「复位」回到设定位置。
 - **豆包 / 网易云音乐 / 有道词典**：一键启动本机已安装的客户端。
 - **计算器 / PowerToys / Geek Uninstaller / Clash / Watt**：常用系统与网络工具入口。

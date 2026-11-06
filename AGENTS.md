@@ -30,6 +30,8 @@ Clash/Watt、PowerToys 和常用脚本等功能。
 │   ├── petAssets.ts          # GIF 素材清单与随机选取
 │   ├── petCharacters.ts      # 小白/小鸡毛/双狗形象、动作映射与回退链
 │   ├── petCharacterAssets.generated.ts # 由 scripts/build-pet-manifest.mjs 生成
+│   ├── tuckGif.ts            # 缩边/睡觉 GIF 的存储与读取
+│   ├── TuckGifControl.tsx    # 设置里的缩边动画选择控件
 │   ├── TranslationWindow.tsx # 翻译独立窗口
 │   ├── UpdatePanel.tsx       # 软件更新面板
 │   ├── Messages.tsx          # 消息面板

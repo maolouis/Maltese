@@ -54,3 +54,14 @@ node scripts/build-pet-manifest.mjs
 
 设置页「专属形象」卡片现在按形象分开保存：`maltese-pet-gif-rotation:<角色>`。
 旧版按状态保存的配置会自动迁移到小白，其他形象第一次使用时直接用素材默认值。
+
+## 缩边 / 睡觉那张图
+
+主狗缩到屏幕边缘或者系统闲置睡着时，会单独播一张「趴睡」帧。
+
+- 默认跟随当前形象：取该角色 `sleeping` 动作的第一张（小白是小白的睡觉动画，小鸡毛是小鸡毛的）。
+  早期版本固定播 `public/assets/pets/rest.gif`，那是金黄色的小鸡毛，选小白也会变成小鸡毛，已修掉。
+- 设置页「缩边 / 睡觉动画」可以换成自己的 GIF：文件存到应用数据目录的 `pet-gifs/tuck/`，
+  路径记在 `localStorage` 的 `maltese-tuck-gif`；「恢复默认」清掉这个键即可。
+- 岛内设置和独立设置窗口共用同一个控件（`src/TuckGifControl.tsx`）。
+
