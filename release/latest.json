@@ -1,15 +1,15 @@
 {
-  "version": "1.3.1",
-  "notes": "# Maltese v1.3.1\n\n## 快捷入口改版\n\n- 快捷方式卡片移到面板最上方，打开快捷入口第一眼就是可点的按钮。\n- 新增快捷方式、面板热键、自动识别 / 扫描目录、按名称搜索应用这些「添加与设置」项统一收进底部「添加与设置」区块，用一条分隔线和按钮区分开。\n- 删除入口、恢复隐藏、清空这些管理操作仍留在快捷方式标题行，不跟着往下挪。\n\n## 形象选择\n\n- 岛内设置页的「桌宠形态」新增「小狗形象」三选一（小白 / 小鸡毛 / 小白和小鸡毛），和独立设置窗口里的选项同步，切换后主狗、陪玩狗、跟随狗一起换形象。\n\n## 验证\n\n- `tsc --noEmit` 与 `vite build` 通过。",
-  "pub_date": "2026-11-06T05:31:44Z",
+  "version": "1.3.2",
+  "notes": "# Maltese v1.3.2\n\n## 快捷入口启动更快\n\n- 快捷方式不再经过 `cmd.exe /C start` 转一手，改为直接调用 ShellExecute（和资源管理器双击同一条路径），少一次控制台进程启动，也不再闪黑框；`.ps1` / `.py` 仍走各自的解释器。\n- 点击后卡片立刻转圈并显示「正在启动…」，成功后提示里带上从点击到系统接受启动的耗时（毫秒），至少能看出有没有点进去。\n\n## 缩边 / 睡觉动画\n\n- 修复小白睡着或缩边时变成小鸡毛的问题：之前固定播 `rest.gif`（画的是金黄色小鸡毛），现在默认跟随当前形象自己的睡觉动画。\n- 新增「缩边 / 睡觉动画」设置项：可以选一张自己的 GIF（最大 8 MB），也可以「恢复默认」回到跟随形象。设置页和岛内设置的「桌宠形态」里都能改。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。",
+  "pub_date": "2026-11-06T06:31:26Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VUUzVlekUzcys0TjZ5akVlWEloakFxQXoydjFwcHdLNU9naW9NZld4Y09CeG5CY3VkVVJsVU5uY1FHVVpaUXV2WHZkV1djK2ZOUUxSNnUwNkRSNWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQzMTAwCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjFfeDY0LXNldHVwLmV4ZQpCTy9BYisvaFlOTFk4d0VxcHJTNXFtUjc5aEpLQmpXZUpBTkdULzZnZnI0RGVpaE9wQTlsUG52REM3a2VGVTJnZkw1NXpVVEVHcTQyVnNZNGNhbDJBZz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.1/Maltese-1.3.1-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0ZNcEdwNU5wbXFXWFJ4bHdMdXRmVnVHNHQ5SUFYTzJja0dDNVQ4ZC81RjZ4d3ZoUHp6MFJyQkVPbmpOTTRSRFdKZzh5UUp3UWV5VjlJVjZnb1NpRUFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ2NjgzCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjJfeDY0LXNldHVwLmV4ZQp1QWVLUTU0Y1JFQzVIUTNycDE5a28zN05CUlcvYmV1U0UxNmZldnBwWmMrYkhDUElCVjRZb3pOSnhRWkZKZmJ1RkxIL0FUTVRWYyszcldSRDlPcG9Cdz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.2/Maltese-1.3.2-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VUUzVlekUzcys0TjZ5akVlWEloakFxQXoydjFwcHdLNU9naW9NZld4Y09CeG5CY3VkVVJsVU5uY1FHVVpaUXV2WHZkV1djK2ZOUUxSNnUwNkRSNWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQzMTAwCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjFfeDY0LXNldHVwLmV4ZQpCTy9BYisvaFlOTFk4d0VxcHJTNXFtUjc5aEpLQmpXZUpBTkdULzZnZnI0RGVpaE9wQTlsUG52REM3a2VGVTJnZkw1NXpVVEVHcTQyVnNZNGNhbDJBZz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.1/Maltese-1.3.1-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0ZNcEdwNU5wbXFXWFJ4bHdMdXRmVnVHNHQ5SUFYTzJja0dDNVQ4ZC81RjZ4d3ZoUHp6MFJyQkVPbmpOTTRSRFdKZzh5UUp3UWV5VjlJVjZnb1NpRUFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzOTQ2NjgzCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjJfeDY0LXNldHVwLmV4ZQp1QWVLUTU0Y1JFQzVIUTNycDE5a28zN05CUlcvYmV1U0UxNmZldnBwWmMrYkhDUElCVjRZb3pOSnhRWkZKZmJ1RkxIL0FUTVRWYyszcldSRDlPcG9Cdz09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.2/Maltese-1.3.2-x64-setup.exe"
     }
   }
 }
