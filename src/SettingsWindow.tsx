@@ -12,6 +12,7 @@ import {
 } from "./shortcutScanDir";
 import { UpdatePanel } from "./UpdatePanel";
 import { PET_CHARACTERS, savePetCharacter, usePetCharacter, type PetCharacterId } from "./petCharacters";
+import { TuckGifControl } from "./TuckGifControl";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -328,6 +329,7 @@ export default function SettingsWindow() {
         <p className="sw-hint sw-hint--block">
           小白和小鸡毛各自有一套动作素材；选「小白和小鸡毛」时只播两只同框的动画。
         </p>
+        <TuckGifControl />
         <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
         <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
         {settings.bongoEnabled && (

@@ -6040,3 +6040,18 @@ html.maltese-page-opening .island__collapsed {
 .assistant-panel__manage .assistant-panel__add {
   font-size: 11px;
 }
+
+/* 快捷入口：点击后卡片上的等待圈 */
+.assistant-card__spin {
+  flex: 0 0 auto;
+  color: rgba(255, 226, 199, 0.9);
+  animation: assistant-card-spin 900ms linear infinite;
+}
+
+@keyframes assistant-card-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-card__spin { animation: none; }
+}

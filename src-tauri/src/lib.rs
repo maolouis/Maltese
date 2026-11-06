@@ -49,10 +49,11 @@ use windows::Win32::{
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
     UI::WindowsAndMessaging::{
         FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect, IsWindowVisible, ShowWindow,
-        SW_HIDE, SW_SHOW,
+        SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
     },
 };
-use windows::core::w;
+use windows::core::{w, PCWSTR};
+use windows::Win32::UI::Shell::ShellExecuteW;
 
 const WINDOW_LABEL: &str = "main";
 const DEFAULT_MARGIN_Y: f64 = 0.0;
@@ -1370,6 +1371,35 @@ fn set_desktop_icons_visible(visible: bool) -> Result<bool, String> {
     }
 }
 
+/// 用 ShellExecute 直接打开文件。
+///
+/// 之前走 `cmd.exe /C start`：每次点击都要先拉起一个 cmd 控制台，再转给
+/// shell 打开目标，多出来的进程启动是点击到窗口出现之间最明显的那段延迟，
+/// 而且会闪一下黑框。ShellExecute 本身就是资源管理器双击的入口，快得多。
+fn shell_execute(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW 返回值 <= 32 表示失败（这是 Win32 的约定）。
+    if result.0 as isize <= 32 {
+        return Err(format!("无法打开：{}", path.display()));
+    }
+    Ok(())
+}
+
 fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
     let extension = canonical_path
         .extension()
@@ -1389,12 +1419,9 @@ fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
             command.arg(canonical_path);
             spawn_detached(command)
         }
-        "bat" | "cmd" | "lnk" | "url" => {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/C", "start", "", canonical_path.to_string_lossy().as_ref()]);
-            spawn_detached(command)
-        }
-        _ => spawn_detached(Command::new(canonical_path)),
+        // .lnk / .url / .bat / .cmd / .exe 都交给 ShellExecute，
+        // 和资源管理器双击同一条路径，省掉 cmd 这一跳。
+        _ => shell_execute(canonical_path),
     }
 }
 

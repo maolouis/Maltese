@@ -20,6 +20,7 @@ import {
   Columns2,
   Copy,
   ExternalLink,
+  Loader2,
   GripVertical,
   ImageIcon,
   Minus,
@@ -70,6 +71,8 @@ import {
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { PET_CHARACTERS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
+import { TuckGifControl } from "./TuckGifControl";
+import { useTuckGifSource } from "./tuckGif";
 import { UpdatePanel } from "./UpdatePanel";
 import { UpdateBanner } from "./UpdateBanner";
 import {
@@ -1366,10 +1369,12 @@ export function IslandShell({
     intervalMs: 10_000,
     enabled: !(petState === "idle" && (restingAsleep || isTucked)),
   });
-  const displayedPetGifSrc =
-    petState === "idle" && (restingAsleep || isTucked)
-      ? SLEEPING_FRAME
-      : petCarouselSrc;
+  // 缩边/睡觉帧默认跟随当前形象（曾经固定用 rest.gif，结果小白睡着会变成小鸡毛）。
+  const tuckedGifSrc = useTuckGifSource(
+    characterFramesForState(petCharacter, "sleeping")[0] ?? SLEEPING_FRAME,
+  );
+  const showingTuckedGif = petState === "idle" && (restingAsleep || isTucked);
+  const displayedPetGifSrc = showingTuckedGif ? tuckedGifSrc : petCarouselSrc;
   // 睡眠缩边与全屏避让共用 isTucked，必须记住“这次是谁缩的边”。
   // 否则全屏避让缩边后会被睡眠逻辑立刻展开，反之亦然，表现为边缘频闪。
   const sleepTuckedRef = useRef(false);
@@ -1694,7 +1699,7 @@ export function IslandShell({
               src={displayedPetGifSrc}
               alt=""
               draggable={false}
-              className={displayedPetGifSrc === SLEEPING_FRAME ? "maltese-pet__rest" : ""}
+              className={showingTuckedGif ? "maltese-pet__rest" : ""}
               onError={(event) => {
                 // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
                 event.currentTarget.src =
@@ -2565,6 +2570,7 @@ function LayoutEditor({
         <p className="settings-section__hint">
           陪玩狗、Bongo 模式和鼠标跟随宠会使用独立的透明小窗口，不会挡住桌面点击。
         </p>
+        <TuckGifControl />
         <SliderControl
           label="小狗数量（含主狗）"
           value={settings.petCount}
@@ -4985,6 +4991,7 @@ function AssistantPanel() {
   const [autoDetectShortcuts, setAutoDetectShortcuts] = useState(loadShortcutAutoDetect);
   const [icons, setIcons] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
+  const [launchingKey, setLaunchingKey] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState("");
   const [draftPath, setDraftPath] = useState("");
   const [clearAllArmed, setClearAllArmed] = useState(false);
@@ -5208,29 +5215,36 @@ function AssistantPanel() {
     setScanDir(next);
   };
 
+  // 点击后立即在卡片上转圈：Rust 只负责把进程交给 shell，这里再把“从点击到
+  // 系统接受启动”的耗时写进提示，至少让用户看到反馈，而不是干等。
+  const runLaunch = (key: string, label: string, task: () => Promise<unknown>) => {
+    setLaunchingKey(key);
+    const started = performance.now();
+    void task()
+      .then(() => {
+        const elapsed = Math.round(performance.now() - started);
+        setNotice(`${label} 已打开（${elapsed} ms）`);
+      })
+      .catch((error) => setNotice(`${label} 打开失败：${String(error)}`))
+      .finally(() => {
+        const elapsed = performance.now() - started;
+        // 太快返回时也保持一小段转圈，避免只闪一下看不出反馈。
+        window.setTimeout(() => setLaunchingKey(null), Math.max(0, 450 - elapsed));
+      });
+  };
+
   const launchPath = (label: string, path: string) => {
     if (path.startsWith("app:")) {
       // 商店应用：交给 shell:AppsFolder 启动。
-      void invoke("launch_start_app", { appId: path.slice(4) })
-        .then(() => setNotice(label + " 已打开"))
-        .catch((error) => setNotice(label + " 打开失败：" + String(error)));
+      runLaunch(path, label, () => invoke("launch_start_app", { appId: path.slice(4) }));
       return;
     }
     const isCustom = customShortcuts.some((shortcut) => shortcut.path === path);
     const command = isCustom ? "launch_custom_shortcut" : "launch_discovered_shortcut";
-    void invoke(command, isCustom ? { path } : { path, scanDir: scanDir || null })
-      .then(() => setNotice(label + " 已打开"))
-      .catch((error) => setNotice(label + " 打开失败：" + String(error)));
+    runLaunch(path, label, () =>
+      invoke(command, isCustom ? { path } : { path, scanDir: scanDir || null }),
+    );
   };
-
-  const launch = useCallback(async (tool: string) => {
-    try {
-      await invoke("launch_tool", { tool });
-      setNotice(`${tool} 已打开`);
-    } catch (error) {
-      setNotice(`${tool} 暂时不可用：${String(error)}`);
-    }
-  }, []);
 
   const actions = [
     { id: "netease", label: "网易云音乐", detail: "打开本机网易云客户端", tool: "netease" },
@@ -5313,8 +5327,8 @@ function AssistantPanel() {
     setNotice(t.assistant.clearAllDone(removableShortcutCount));
   };
 
-  const handleAction = async (tool: string) => {
-    await launch(tool);
+  const handleAction = (tool: string, label: string) => {
+    runLaunch(`tool:${tool}`, label, () => invoke("launch_tool", { tool }));
   };
 
   // 只有拿到真实程序图标时才占一个图标位；没有图标就让文字铺满卡片，
@@ -5371,13 +5385,18 @@ function AssistantPanel() {
               type="button"
               className="assistant-card__launch"
               data-window-drag="false"
-              onClick={() => void handleAction(action.tool)}
+              disabled={launchingKey === `tool:${action.id}`}
+              onClick={() => handleAction(action.tool, action.label)}
             >
               <span className="assistant-card__copy">
                 <strong>{action.label}</strong>
-                <small>{action.detail}</small>
+                <small>{launchingKey === `tool:${action.id}` ? "正在启动…" : action.detail}</small>
               </span>
-              <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+              {launchingKey === `tool:${action.id}` ? (
+                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+              ) : (
+                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+              )}
             </button>
             <button
               type="button"
@@ -5396,16 +5415,25 @@ function AssistantPanel() {
               type="button"
               className="assistant-card__launch"
               data-window-drag="false"
+              disabled={launchingKey === shortcut.path}
               onClick={() => launchPath(shortcut.label, shortcut.path)}
             >
               {renderIcon(shortcut.path)}
               <span className="assistant-card__copy">
                 <strong title={shortcut.label}>{shortcut.label}</strong>
                 <small title={shortcut.path}>
-                  {shortcut.kind === "lnk" ? "桌面快捷方式" : `自动发现 · .${shortcut.kind}`}
+                  {launchingKey === shortcut.path
+                    ? "正在启动…"
+                    : shortcut.kind === "lnk"
+                      ? "桌面快捷方式"
+                      : `自动发现 · .${shortcut.kind}`}
                 </small>
               </span>
-              <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+              {launchingKey === shortcut.path ? (
+                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+              ) : (
+                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+              )}
             </button>
             <button
               type="button"
@@ -5423,13 +5451,21 @@ function AssistantPanel() {
             <button
               type="button"
               className="assistant-card__launch"
+              disabled={launchingKey === shortcut.path}
               onClick={() => launchPath(shortcut.label, shortcut.path)}
             >
               {renderIcon(shortcut.path)}
               <span className="assistant-card__copy">
                 <strong title={shortcut.label}>{shortcut.label}</strong>
-                <small title={shortcut.path}>自定义快捷方式</small>
+                <small title={shortcut.path}>
+                  {launchingKey === shortcut.path ? "正在启动…" : "自定义快捷方式"}
+                </small>
               </span>
+              {launchingKey === shortcut.path ? (
+                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+              ) : (
+                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+              )}
             </button>
             <button
               type="button"
