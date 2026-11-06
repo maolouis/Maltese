@@ -87,10 +87,25 @@ Write-Host "静默安装…"
 $installer = Start-Process -FilePath $target -ArgumentList "/S" -PassThru -Wait
 if ($installer.ExitCode -ne 0) { throw ("安装程序返回 {0}" -f $installer.ExitCode) }
 
-$installed = @(
-  (Join-Path $env:LOCALAPPDATA "Maltese\Maltese-assistant.exe"),
-  (Join-Path ${env:ProgramFiles} "Maltese\Maltese-assistant.exe")
-) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$installed = $null
+
+# 安装目录名带中文和空格，直接猜路径容易猜错；优先读注册表里的 InstallLocation。
+$installLocation = @(
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+) | ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } |
+  Where-Object { $_.DisplayName -like "*Maltese*" } |
+  Select-Object -First 1 -ExpandProperty InstallLocation
+
+$candidates = @()
+if ($installLocation) {
+  $candidates += (Join-Path ($installLocation.Trim('"')) "maltese-assistant.exe")
+}
+$candidates += (Join-Path $env:LOCALAPPDATA "Maltese 线条小狗桌面助手\maltese-assistant.exe")
+$candidates += (Join-Path $env:LOCALAPPDATA "Maltese\Maltese-assistant.exe")
+$candidates += (Join-Path $env:ProgramFiles "Maltese\Maltese-assistant.exe")
+$installed = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
 if ($installed) {
   Write-Host ("已安装：{0}" -f $installed) -ForegroundColor Green
