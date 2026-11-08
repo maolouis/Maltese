@@ -996,6 +996,49 @@ fn show_ready_island(app: AppHandle) -> Result<(), String> {
     show_island(&app)
 }
 
+/// 读取自启项里登记的命令行（只取 REG_SZ 后面的值，去掉引号）。
+fn startup_registered_command() -> Option<String> {
+    let output = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(["query", STARTUP_REGISTRY_KEY, "/v", STARTUP_REGISTRY_VALUE])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if !line.contains(STARTUP_REGISTRY_VALUE) {
+            continue;
+        }
+        let Some((_, value)) = line.split_once("REG_SZ") else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// 旧便携版可能把自启项写成 `E:\...\release\maltese-assistant.exe`，
+/// 升级到安装目录或者删掉旧文件之后，开机就会去拉起一个不存在 / 旧版本的 exe，
+/// 表现成“自启动失败”。每次启动时如果登记路径不是当前 exe，就顺手改写。
+fn sync_startup_path() {
+    let Ok(current) = std::env::current_exe() else {
+        return;
+    };
+    let Some(registered) = startup_registered_command() else {
+        return; // 没开自启，不动它
+    };
+    let current_text = current.display().to_string();
+    if registered.eq_ignore_ascii_case(&current_text) {
+        return;
+    }
+    let _ = set_launch_at_startup(true);
+}
+
 #[tauri::command]
 fn get_launch_at_startup() -> Result<bool, String> {
     let mut command = Command::new("reg");
@@ -3453,6 +3496,8 @@ pub fn run() {
         })
         .setup(|app| {
             build_tray(app)?;
+            // 升级 / 换目录后把自启项指回当前 exe，避免开机拉起旧路径。
+            sync_startup_path();
             if let Some(settings) = app.get_webview_window("settings") {
                 attach_settings_close(&settings);
             }
