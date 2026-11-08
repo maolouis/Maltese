@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -5026,6 +5027,8 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
 
 function AssistantPanel() {
   const t = useTranslation();
+  const panelRef = useRef<HTMLElement | null>(null);
+  const appSearchInputRef = useRef<HTMLInputElement | null>(null);
   const [notice, setNotice] = useState("选择一个入口，线条小狗会陪你完成下一步");
   const [discoveredShortcuts, setDiscoveredShortcuts] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [customShortcuts, setCustomShortcuts] = useState<CustomShortcut[]>(loadCustomShortcuts);
@@ -5047,6 +5050,11 @@ function AssistantPanel() {
   const [appQuery, setAppQuery] = useState("");
   const [appResults, setAppResults] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [appSearching, setAppSearching] = useState(false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => appSearchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     if (!clearAllArmed) {
@@ -5289,6 +5297,23 @@ function AssistantPanel() {
     );
   };
 
+  const handleAppSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      const first = appResults[0];
+      if (first) {
+        event.preventDefault();
+        launchPath(first.label, first.path);
+      }
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const firstResult = panelRef.current
+        ?.querySelector<HTMLButtonElement>(".assistant-panel__app-results button");
+      (firstResult ?? panelRef.current?.querySelector<HTMLButtonElement>(".assistant-card__launch"))?.focus();
+    }
+  };
+
   const actions = [
     { id: "netease", label: "网易云音乐", detail: "打开本机网易云客户端", tool: "netease" },
     { id: "doubao", label: "豆包", detail: "打开本机豆包客户端", tool: "doubao" },
@@ -5382,7 +5407,7 @@ function AssistantPanel() {
       : null;
 
   return (
-    <section className="assistant-panel" aria-label="Maltese 快捷面板">
+    <section ref={panelRef} className="assistant-panel" aria-label="Maltese 快捷面板">
       <div className="assistant-panel__head">
         <span className="assistant-panel__notice">{notice}</span>
         <div className="assistant-panel__head-actions">
@@ -5610,8 +5635,10 @@ function AssistantPanel() {
         <div className="assistant-panel__app-search">
           <span className="assistant-panel__label">搜索应用名称添加</span>
           <input
+            ref={appSearchInputRef}
             value={appQuery}
             onChange={(event) => setAppQuery(event.currentTarget.value)}
+            onKeyDown={handleAppSearchKeyDown}
             placeholder="输入应用名，例如 微信 / 网易云 / VS Code"
             spellCheck={false}
           />
@@ -5625,6 +5652,12 @@ function AssistantPanel() {
                     key={app.path}
                     type="button"
                     onClick={() => addSystemApp(app)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        launchPath(app.label, app.path);
+                      }
+                    }}
                     title={app.path}
                   >
                     <span>{app.label}</span>
