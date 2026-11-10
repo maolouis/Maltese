@@ -74,6 +74,8 @@ const STAGE_WINDOW_PADDING_Y: f64 = 24.0;
 const TUCKED_VISIBLE_EDGE_HEIGHT: f64 = 10.0;
 // 展开态（云朵面板）固定尺寸：小狗槽 + 8px 间隙 + 面板。
 const EXPANDED_PANEL_WIDTH: f64 = 460.0;
+/// 展开态面板的默认高度；实际高度由前端按页面传入（聊天框可在设置里调）。
+#[allow(dead_code)]
 const EXPANDED_PANEL_HEIGHT: f64 = 520.0;
 const EXPANDED_PANEL_GAP: f64 = 8.0;
 // 缩边睡姿默认/可调范围：露出小狗的高度（逻辑像素）。
@@ -2892,11 +2894,13 @@ fn stage_dimensions(state: IslandWindowState) -> (f64, f64) {
         ),
         IslandMode::Expanded => {
             // 云朵面板窗口：宽度 = 小狗槽 + 间隙 + 面板；高度取面板与小狗槽的较大值。
+            // 这里必须用前端传进来的 expanded_height（各页面不一样，聊天框可调），
+            // 之前写死成 520，导致设置里的聊天框高度改了也不生效。
             let slot_w = slot_width_css(state.collapsed_scale);
             let slot_h = slot_height_css(state.collapsed_scale);
             (
                 slot_w + EXPANDED_PANEL_GAP + EXPANDED_PANEL_WIDTH,
-                slot_h.max(EXPANDED_PANEL_HEIGHT),
+                slot_h.max(state.expanded_height),
             )
         }
     }
@@ -3105,6 +3109,18 @@ mod tests {
             expanded_height,
             ..IslandWindowState::default()
         }
+    }
+
+    #[test]
+    fn expanded_stage_uses_the_requested_panel_height() {
+        let expanded = state(IslandMode::Expanded, 0.89, 800.0);
+        let (_, height) = stage_dimensions(expanded);
+        assert!((height - 800.0).abs() < 0.5);
+
+        // 面板比小狗槽还矮时仍然要留出小狗的位置。
+        let small = state(IslandMode::Expanded, 0.89, 220.0);
+        let (_, small_height) = stage_dimensions(small);
+        assert!(small_height >= slot_height_css(0.89));
     }
 
     #[test]
