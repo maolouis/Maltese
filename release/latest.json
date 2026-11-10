@@ -1,15 +1,15 @@
 {
-  "version": "1.3.17",
-  "notes": "# Maltese v1.3.17\n\n## 双击闪一下：改成「先定方向，再改窗口」\n\nv1.3.16 已经做了两件事（原子 `SetWindowPos`、打开时本地预判方向），但根本顺序问题还在：**方向是原生算完再回传的，前端第一次渲染只能用上一轮的方向**。小狗贴着屏幕右侧时，气泡要往左长，窗口会整体左移；如果这时前端还按「面板在右」布局（小狗钉在窗口左边），小狗就会跟着窗口一起左移，闪一下再弹回来。\n\n现在拆成严格三步：\n\n1. 新增 `plan_island_overlay(mode)`：原生只算方向（左右 / 上下），**不动窗口**。\n2. 前端拿到方向后先提交一次渲染，把小狗钉到正确的窗口角上（此时窗口还是原尺寸，屏幕画面不变）。\n3. 再调用 `set_island_overlay`，由原生一次 `SetWindowPos` 同时改尺寸和位置。\n\n这样窗口几何只有一次变化，且变化时小狗已经锚在正确的一侧，中间不存在错位帧。方向回传仍然是权威值，预判只作为预判失败时的兜底。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T08:37:49Z",
+  "version": "1.3.18",
+  "notes": "# Maltese v1.3.18\n\n## 修 1.3.17 的回归：面板展开到反方向\n\nv1.3.17 里我在前端留了一段「本地预判方向」的兜底：用 `window.screenX` / `screen.availWidth` 自己算面板该往哪边长。它和原生算法的输入不完全一致（窗口坐标 vs 小狗槽坐标、显示器工作区 vs 屏幕宽度），算出「右」而原生决定「左」时，小狗会被钉到错误的一侧、面板就展开到了反方向——比闪一下更明显。\n\n这一版把本地预判整段删掉，方向只有一个来源：\n\n1. `plan_island_overlay(mode)` 由原生用**和真正展开完全相同**的输入（小狗槽锚点、槽尺寸、显示器工作区）算出 side / vertical，不改窗口。\n2. 前端拿到后用 `flushSync` **同步提交**：先上 `island--overlay-{side}` / `--overlay-below` 类，把小狗钉到正确角上（此时窗口还是原尺寸，画面不变）。\n3. 提交完成后再调用 `set_island_overlay`，由原生一次 `SetWindowPos` 同时改尺寸和位置。\n\n因为方向和几何都出自同一份原生计算，不会再出现「小狗钉左边、窗口往左长」或反过来的错位帧；面板方向也回到正确一侧。\n\n顺带把方向状态提升到外层，收起浮层时清空，避免下一次打开沿用上一轮的方向。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T08:55:13Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM01jY3Vtcm53eGN3c2locElIckw1L01JbjdIV1JRZVBjNjNYa09maUdiL3hJa0gwbFZaRlRDaW9pOE9Wc01VQStVWFdGaHNHcHBXMExiVVh5TCtpc1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk5ODM1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE3X3g2NC1zZXR1cC5leGUKYktvS0xXYmRZUjJ5cG1lN2Q3dytkbmNaQUNjNmMxWXB3TU4yQzdnNWtERExNbE5mZHNSZFRhVzdzTmFxaktadWt2dmlmeE5VRFVEdTJpdEpBb1JBRHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.17/Maltese-1.3.17-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM00rNUNzZytpU05PSE12eDlIZVhCRkxRTUhwbEFWNkdORmc4R2lzSFhGSHplZG1yeWI0L1ltN0pORVRGSUlhaDA3YWNzR1dTa1NGMmZLbWo4S3VRMkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAwOTA3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE4X3g2NC1zZXR1cC5leGUKOVNaUklUaU03dFdDQklpSVphU0dyWURmbnM3OU9vdEh3djJCTFlJUUNjVmF5ZUFydURVMi85ZVU4V3M2RnFHc2tYSE1XSHRucENSNGg1ZUNQbHlMQ0E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.18/Maltese-1.3.18-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM01jY3Vtcm53eGN3c2locElIckw1L01JbjdIV1JRZVBjNjNYa09maUdiL3hJa0gwbFZaRlRDaW9pOE9Wc01VQStVWFdGaHNHcHBXMExiVVh5TCtpc1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk5ODM1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE3X3g2NC1zZXR1cC5leGUKYktvS0xXYmRZUjJ5cG1lN2Q3dytkbmNaQUNjNmMxWXB3TU4yQzdnNWtERExNbE5mZHNSZFRhVzdzTmFxaktadWt2dmlmeE5VRFVEdTJpdEpBb1JBRHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.17/Maltese-1.3.17-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM00rNUNzZytpU05PSE12eDlIZVhCRkxRTUhwbEFWNkdORmc4R2lzSFhGSHplZG1yeWI0L1ltN0pORVRGSUlhaDA3YWNzR1dTa1NGMmZLbWo4S3VRMkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAwOTA3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE4X3g2NC1zZXR1cC5leGUKOVNaUklUaU03dFdDQklpSVphU0dyWURmbnM3OU9vdEh3djJCTFlJUUNjVmF5ZUFydURVMi85ZVU4V3M2RnFHc2tYSE1XSHRucENSNGg1ZUNQbHlMQ0E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.18/Maltese-1.3.18-x64-setup.exe"
     }
   }
 }

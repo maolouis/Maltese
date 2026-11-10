@@ -1,0 +1,42 @@
+﻿1496: 
+1497:   // 浮层刚打开时原生窗口还没来得及回传方向，先按小狗当前位置预判，
+1498:   // 否则首帧会用上一轮的方向摆小狗，看起来往另一侧闪一下。
+1499:   // 只在 overlayOpen 从 false 变 true 的那一帧算一次，之后以原生回传为准。
+1500:   const overlayPlacementRef = useRef<{ side: "left" | "right"; vertical: "above" | "below" } | null>(
+1501:     null,
+1502:   );
+1503:   if (!overlayOpen) {
+1504:     overlayPlacementRef.current = null;
+1505:   } else if (!overlayPlacementRef.current) {
+1506:     const computed = window.getComputedStyle(document.documentElement);
+1507:     const slotWidth = Number.parseFloat(computed.getPropertyValue("--pet-slot-w")) || 148;
+1508:     const slotHeight = Number.parseFloat(computed.getPropertyValue("--pet-slot-h")) || 128;
+1509:     const panelWidth = overlay?.mode === "hover" ? 320 : 300;
+1510:     const panelHeight = overlay?.mode === "hover" ? 540 : 400;
+1511:     const screenInfo = window.screen as Screen & { availLeft?: number; availTop?: number };
+1512:     const availLeft = screenInfo.availLeft ?? 0;
+1513:     const availTop = screenInfo.availTop ?? 0;
+1514:     const dogX = window.screenX;
+1515:     const dogY = window.screenY;
+1516:     overlayPlacementRef.current = {
+1517:       side:
+1518:         dogX + slotWidth + 8 + panelWidth <= availLeft + screenInfo.availWidth ? "right" : "left",
+1519:       vertical: dogY + slotHeight - panelHeight >= availTop ? "above" : "below",
+1520:     };
+1521:   }
+1522:   const overlaySide = overlayPlacementRef.current?.side ?? panelSide;
+1523:   const overlayVertical = overlayPlacementRef.current?.vertical ?? panelVertical;
+1524: 
+1525:   // 原生算好的浮层方向：先钉住小狗，再放大窗口。
+1526:   useEffect(() => {
+1527:     const apply = (event: Event) => {
+1528:       const detail = (event as CustomEvent<{ side?: string; vertical?: string }>).detail;
+1529:       if (!detail) return;
+1530:       setPanelSide(detail.side === "left" ? "left" : "right");
+1531:       setPanelVertical(detail.vertical === "below" ? "below" : "above");
+1532:       overlayPlacementRef.current = null;
+1533:     };
+1534:     window.addEventListener("maltese-overlay-placement", apply);
+1535:     return () => window.removeEventListener("maltese-overlay-placement", apply);
+1536:   }, []);
+1537: 

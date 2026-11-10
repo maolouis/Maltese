@@ -13,6 +13,7 @@ import {
   type ReactNode,
   type WheelEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   Bell,
   Check,
@@ -390,6 +391,8 @@ type IslandShellProps = {
   sleepAfterSeconds: number;
   overlay: PetOverlay | null;
   overlayOpen: boolean;
+  /** 原生算好的浮层方向；有值时优先于事件回传的方向。 */
+  overlayPlacement: { side: "left" | "right"; vertical: "above" | "below" } | null;
   onOverlayEnter: () => void;
   onOverlayLeave: () => void;
   onOverlayClose: () => void;
@@ -1282,6 +1285,7 @@ export function IslandShell({
   sleepAfterSeconds,
   overlay,
   overlayOpen,
+  overlayPlacement,
   onOverlayEnter,
   onOverlayLeave,
   onOverlayClose,
@@ -1491,47 +1495,11 @@ export function IslandShell({
     }
   }, [collapsedScale, overlayOpen, onOverlayClose]);
 
-  // 浮层刚打开时原生窗口还没来得及回传方向，先按小狗当前位置预判，
-  // 否则首帧会用上一轮的方向摆小狗，看起来往另一侧闪一下。
-  // 只在 overlayOpen 从 false 变 true 的那一帧算一次，之后以原生回传为准。
-  const overlayPlacementRef = useRef<{ side: "left" | "right"; vertical: "above" | "below" } | null>(
-    null,
-  );
-  if (!overlayOpen) {
-    overlayPlacementRef.current = null;
-  } else if (!overlayPlacementRef.current) {
-    const computed = window.getComputedStyle(document.documentElement);
-    const slotWidth = Number.parseFloat(computed.getPropertyValue("--pet-slot-w")) || 148;
-    const slotHeight = Number.parseFloat(computed.getPropertyValue("--pet-slot-h")) || 128;
-    const panelWidth = overlay?.mode === "hover" ? 320 : 300;
-    const panelHeight = overlay?.mode === "hover" ? 540 : 400;
-    const screenInfo = window.screen as Screen & { availLeft?: number; availTop?: number };
-    const availLeft = screenInfo.availLeft ?? 0;
-    const availTop = screenInfo.availTop ?? 0;
-    const dogX = window.screenX;
-    const dogY = window.screenY;
-    overlayPlacementRef.current = {
-      side:
-        dogX + slotWidth + 8 + panelWidth <= availLeft + screenInfo.availWidth ? "right" : "left",
-      vertical: dogY + slotHeight - panelHeight >= availTop ? "above" : "below",
-    };
-  }
-  const overlaySide = overlayPlacementRef.current?.side ?? panelSide;
-  const overlayVertical = overlayPlacementRef.current?.vertical ?? panelVertical;
-
-  // 原生算好的浮层方向：先钉住小狗，再放大窗口。
-  useEffect(() => {
-    const apply = (event: Event) => {
-      const detail = (event as CustomEvent<{ side?: string; vertical?: string }>).detail;
-      if (!detail) return;
-      setPanelSide(detail.side === "left" ? "left" : "right");
-      setPanelVertical(detail.vertical === "below" ? "below" : "above");
-      overlayPlacementRef.current = null;
-    };
-    window.addEventListener("maltese-overlay-placement", apply);
-    return () => window.removeEventListener("maltese-overlay-placement", apply);
-  }, []);
-
+  // 方向完全以原生为准（overlayPlacement 由 plan_island_overlay 在放大窗口之前给出）。
+  // 之前这里用 window.screenX / screen.availWidth 自己预判，和原生算法不一致时
+  // 会把小狗钉到错误的一侧，面板就展开到反方向去了。
+  const overlaySide = overlayPlacement?.side ?? panelSide;
+  const overlayVertical = overlayPlacement?.vertical ?? panelVertical;
   const className = [
     "island",
     `island--${mode}`,
@@ -6479,6 +6447,10 @@ function IslandApp({
   // 浮层渲染在主窗口内部，主窗口临时变宽，不再依赖额外的气泡窗口。
   const [petOverlay, setPetOverlay] = useState<PetOverlay | null>(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  // 原生算好的浮层方向（plan_island_overlay）；有值时优先于事件回传。
+  const [overlayPlacement, setOverlayPlacement] = useState<
+    { side: "left" | "right"; vertical: "above" | "below" } | null
+  >(null);
   const petOverlayRef = useRef<PetOverlay | null>(null);
   // 用时间戳做起点，保证 WebView 重载后 generation 仍大于原生侧记录的值。
   const overlayGenerationRef = useRef(Date.now());
@@ -6505,21 +6477,24 @@ function IslandApp({
       // 严格三步，避免中间帧：①让原生只算方向 → ②把小狗按该方向钉到窗口角上
       // （下一帧 React 提交，此时窗口还是原尺寸，画面不动）→ ③原生一次性改几何。
       void (async () => {
+        let plan: { side: "left" | "right"; vertical: "above" | "below" } | null = null;
         try {
-          const plan = await invoke<{ side: "left" | "right"; vertical: "above" | "below" }>(
+          plan = await invoke<{ side: "left" | "right"; vertical: "above" | "below" }>(
             "plan_island_overlay",
             { overlay: next.mode },
           );
-          window.dispatchEvent(
-            new CustomEvent("maltese-overlay-placement", { detail: plan }),
-          );
         } catch {
-          // 预判失败时退回原生事件回传的方向
+          // 拿不到方向就退回事件回传，宁可晚一帧也不要摆错方向
         }
         if (overlayGenerationRef.current !== generation) {
           return;
         }
-        setOverlayOpen(true);
+        // 必须同步提交：方向类和面板要在原生改几何之前就落到 DOM 上，
+        // 否则窗口先变大、小狗还没钉住，中间那帧就是闪一下的来源。
+        flushSync(() => {
+          setOverlayPlacement(plan);
+          setOverlayOpen(true);
+        });
         invoke("set_island_overlay", { overlay: next.mode, generation })
           .catch(() => undefined)
           .finally(() => {
@@ -6541,6 +6516,7 @@ function IslandApp({
         .finally(() => {
           if (overlayGenerationRef.current === generation) {
             setOverlayOpen(false);
+            setOverlayPlacement(null);
           }
         });
     });
@@ -6558,6 +6534,7 @@ function IslandApp({
     petOverlayRef.current = null;
     setPetOverlay(null);
     setOverlayOpen(false);
+    setOverlayPlacement(null);
   }, []);
 
   const hidePetOverlay = useCallback(() => {
@@ -8510,6 +8487,7 @@ function IslandApp({
         sleepAfterSeconds={settings.sleepAfterSeconds}
         overlay={petOverlay}
         overlayOpen={overlayOpen}
+        overlayPlacement={overlayPlacement}
         onOverlayEnter={markOverlayEnter}
         onOverlayLeave={markOverlayLeave}
         onOverlayClose={hidePetOverlay}
