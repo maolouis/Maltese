@@ -6585,6 +6585,8 @@ function IslandApp({
     if (!isTauri() || !settings.proactiveChat) {
       return;
     }
+    // 打开开关后先等一个完整间隔，避免刚启动就冒出一句。
+    lastProactiveChatAt.current = Date.now();
     const minutes = Math.max(5, settings.proactiveChatMinutes);
     const appendChat = (text: string) => {
       try {
