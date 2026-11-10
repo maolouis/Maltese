@@ -1,15 +1,15 @@
 {
-  "version": "1.3.13",
-  "notes": "# Maltese v1.3.13\n\n## 交互调整\n\n- **单击**小狗改为「切到下一张表情」（不再摸头），每次点一下换一个 GIF。\n- **双击**打开互动气泡面板（原来 Ctrl + 悬停的入口），Ctrl 悬停不再触发；右键仍是聊天。\n- 单击的 Q 弹反馈保留。\n\n## 可开关的行为\n\n- 新增「自动切换表情」：关掉后小狗停在你单击选中的那一张，不再每 10 秒自动轮播。\n- 新增「根据行为弹出气泡」：统一控制前台程序感知、时间问候、音乐互动、剪贴板提示、整点报时的气泡，关掉后这些行为仍会记录，只是不弹气泡。\n- 两个开关在岛内设置「感知与陪伴」和独立设置窗口「陪伴与感知」里都能改。\n\n## 模型主动聊天\n\n- 新增「让模型观察并主动找你聊天」开关 + 间隔（5–240 分钟，默认 30 分钟）。\n- 到点后在挂机（收起态）时读取前台程序、正在播放的音乐、闲置时长和当前时间，交给本机聊天后端（本地模型或 DSH）生成一句不超过 30 字的关心，弹云朵气泡并写进聊天记录。\n- 模型不可用或超时会静默跳过，不影响其它功能。\n\n## 自定义音效\n\n- 「开启音效」下面新增「自定义音效」：可选 wav / mp3 / ogg / m4a（≤ 2 MB），支持试听和一键恢复默认。\n- 文件存到应用数据目录的 `sounds/`，路径记在本机；摸头、互动、整点报时都会优先播放自定义音效，失败时回落到内置合成音。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T07:58:51Z",
+  "version": "1.3.14",
+  "notes": "# Maltese v1.3.14\n\n## 修复双击时小狗闪一下\n\n- 双击打开互动气泡时，单击与双击会各触发一次点击：原来单击立刻切表情，双击的第一下已经换了一帧，看起来就是「闪一下」。现在单击延迟 240 ms 生效，双击会取消这次切换。\n- 浮层展开时小狗按槽位尺寸钉在窗口角上再放大窗口，不再在「窗口变大、小狗还居中」的第一帧往左偏。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T08:04:35Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0gwVWtNSlFJK1dqV0IrMnpGK3BxLzc4SWRjTFlmTXYyRTRZZWIvTnBqcCtCVWpDMkhDMDRONlFBU2MxdlNyWnF2RmJtVU5NMlRSc3FNZzhjR25vbkFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3NTI4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEzX3g2NC1zZXR1cC5leGUKR2sremFZMmN1YTIvcGxvVXVOVWQ1RTRPM3R3TFh4dXp5cWh6c3Y2ZFBDcjhySEJpcjN5MGdLVHRTdVdQVllMTFRabW5XUEIvSTM1ejhFVXZmd2h0QkE9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.13/Maltese-1.3.13-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xqRDRDWFB6YjhnRFRKK1hFbUoxbEhvQ3BqM3A1Yi80VXV6dGwrTGRVOFk0Z0MxRDFTOURqZDFTaUlDeFZ4MUI4b1BEWXZxaXN1MG9lVStteU1zQ1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3ODcxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE0X3g2NC1zZXR1cC5leGUKcHJ0d2V3QlpFMU5scS9FM3lwNk8zd05MSTVqdTVYQ3RuVXY2cGQ3Ly9NZU1KaWdZajJEWkY5REY5Uk96enQrL2ZySE9aMVp3STlVWExVYjJsZG5BQ1E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.14/Maltese-1.3.14-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0gwVWtNSlFJK1dqV0IrMnpGK3BxLzc4SWRjTFlmTXYyRTRZZWIvTnBqcCtCVWpDMkhDMDRONlFBU2MxdlNyWnF2RmJtVU5NMlRSc3FNZzhjR25vbkFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3NTI4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEzX3g2NC1zZXR1cC5leGUKR2sremFZMmN1YTIvcGxvVXVOVWQ1RTRPM3R3TFh4dXp5cWh6c3Y2ZFBDcjhySEJpcjN5MGdLVHRTdVdQVllMTFRabW5XUEIvSTM1ejhFVXZmd2h0QkE9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.13/Maltese-1.3.13-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xqRDRDWFB6YjhnRFRKK1hFbUoxbEhvQ3BqM3A1Yi80VXV6dGwrTGRVOFk0Z0MxRDFTOURqZDFTaUlDeFZ4MUI4b1BEWXZxaXN1MG9lVStteU1zQ1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3ODcxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE0X3g2NC1zZXR1cC5leGUKcHJ0d2V3QlpFMU5scS9FM3lwNk8zd05MSTVqdTVYQ3RuVXY2cGQ3Ly9NZU1KaWdZajJEWkY5REY5Uk96enQrL2ZySE9aMVp3STlVWExVYjJsZG5BQ1E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.14/Maltese-1.3.14-x64-setup.exe"
     }
   }
 }
