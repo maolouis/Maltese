@@ -147,6 +147,8 @@ type PetState =
 type PetAction = Exclude<PetState, "idle" | "listening" | "working" | "attention">;
 type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
+type MediaKind = "music" | "video" | "image" | "unknown";
+
 type MediaPlaybackStatus = "unavailable" | "playing" | "paused";
 type AgentProvider = "codex" | "claudeCode";
 type AgentTaskPhase = "idle" | "running" | "completed" | "failed" | "stale";
@@ -215,6 +217,8 @@ type MediaState = {
   canRepeat: boolean;
   volume: number;
   sourceApp: string | null;
+  /** "music" / "video" / "image" / "unknown"，来自系统媒体会话的 PlaybackType。 */
+  mediaKind: MediaKind;
   activeSessionId: string | null;
   sessions: MediaSessionInfo[];
   updatedAt: number;
@@ -324,6 +328,8 @@ type IslandSettings = {
   autoTuck: boolean;
   autoTuckSeconds: number;
   fullscreenAvoid: FullscreenAvoidMode;
+  /** 全屏时是否连 Bongo / 陪伴狗 / 跟随小狗一起隐藏。 */
+  fullscreenHideExtras: boolean;
   fpsMode: PetFpsMode;
   bubbleOn: boolean;
   bubbleDurationMs: number;
@@ -459,6 +465,7 @@ const DEFAULT_MEDIA_STATE: MediaState = {
   canRepeat: false,
   volume: -1,
   sourceApp: null,
+  mediaKind: "unknown",
   activeSessionId: null,
   sessions: [],
   updatedAt: 0,
@@ -485,6 +492,7 @@ function isSameMediaState(a: MediaState, b: MediaState): boolean {
     a.canRepeat !== b.canRepeat ||
     a.volume !== b.volume ||
     a.sourceApp !== b.sourceApp ||
+    a.mediaKind !== b.mediaKind ||
     a.activeSessionId !== b.activeSessionId ||
     a.sessions.length !== b.sessions.length
   ) {
@@ -558,6 +566,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   autoTuck: false,
   autoTuckSeconds: 30,
   fullscreenAvoid: "tuck",
+  fullscreenHideExtras: true,
   fpsMode: "balanced",
   bubbleOn: true,
   bubbleDurationMs: 6000,
@@ -837,6 +846,7 @@ function normalizeSettings(
     fullscreenAvoid: settings?.fullscreenAvoid === "hide" || settings?.fullscreenAvoid === "off"
       ? settings.fullscreenAvoid
       : DEFAULT_SETTINGS.fullscreenAvoid,
+    fullscreenHideExtras: settings?.fullscreenHideExtras !== false,
     fpsMode: settings?.fpsMode === "smooth" || settings?.fpsMode === "normal" || settings?.fpsMode === "saver"
       ? settings.fpsMode
       : DEFAULT_SETTINGS.fpsMode,
@@ -2528,6 +2538,13 @@ function LayoutEditor({
             </button>
           </div>
         </div>
+        {settings.fullscreenAvoid !== "off" && (
+          <ToggleControl
+            label="全屏时连 Bongo 一起隐藏"
+            checked={settings.fullscreenHideExtras}
+            onChange={(fullscreenHideExtras) => onSettingsChange({ ...settings, fullscreenHideExtras })}
+          />
+        )}
       </section>
 
       <section className="settings-section settings-section--pet-bubble">
@@ -5874,11 +5891,14 @@ function IslandApp({
   }, []);
   const [mediaState, setMediaState] =
     useState<MediaState>(DEFAULT_MEDIA_STATE);
+  // 播视频时不要拉歌词：浏览器播视频也会上报「正在播放 + 时长」，
+  // 之前会把它当音乐去搜歌词，出现视频配歌词的错乱。
+  const mediaIsVideo = mediaState.mediaKind === "video" || mediaState.mediaKind === "image";
   const lyrics = useLyrics(
     mediaState.title,
     mediaState.artist,
     mediaState.positionMs,
-    mediaState.available && mediaState.durationMs > 0,
+    mediaState.available && mediaState.durationMs > 0 && !mediaIsVideo,
   );
   const [isMediaTrackChanging, setIsMediaTrackChanging] = useState(false);
   const [mediaCommandError, setMediaCommandError] = useState<string | null>(
@@ -6460,6 +6480,7 @@ function IslandApp({
     isTauri(),
     tuckForFullscreen,
     revealForFullscreen,
+    settings.fullscreenHideExtras,
   );
 
   // ---------- 小狗侧边浮层（hover 互动面板 + 云朵消息框 + 右键菜单） ----------
@@ -6870,6 +6891,10 @@ function IslandApp({
     if (!isTauri() || mode !== "collapsed" || !settings.bubbleOn || !settings.proactiveBubbles || !settings.musicChat) {
       return;
     }
+    // 播视频时不要说「正在听」，那是视频不是音乐。
+    if (mediaState.mediaKind === "video" || mediaState.mediaKind === "image") {
+      return;
+    }
     if (mediaState.playbackStatus !== "playing" || !mediaState.title) {
       return;
     }
@@ -6882,7 +6907,7 @@ function IslandApp({
       showCloudBubble(`🎵 ${mediaState.title}`, `你也喜欢听《${mediaState.title}》呀${artist}～ 我陪你一起听`);
     }
     lastTrackRef.current = key;
-  }, [mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
+  }, [mediaState.artist, mediaState.mediaKind, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
 
   // 剪贴板新增内容 → 云朵气泡（显示内容摘要）
   const lastClipboardIdRef = useRef<string | null>(null);
@@ -8473,7 +8498,9 @@ function IslandApp({
     if (activityMood) {
       return activityMood;
     }
-    if (mediaState.playbackStatus === "playing" || mediaState.audioActive) {
+    // 播视频（浏览器看剧/B 站）不算「在听音乐」：不要切到听歌表情。
+    const mediaIsMusic = mediaState.mediaKind !== "video" && mediaState.mediaKind !== "image";
+    if (mediaIsMusic && (mediaState.playbackStatus === "playing" || mediaState.audioActive)) {
       return "listening";
     }
     if (agentVisualState === "attention" || qqNotifications.preview || qqMail.preview) {

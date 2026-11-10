@@ -512,6 +512,16 @@ fn minimize_island(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// 全屏避让等场景需要单独控制「其它小狗」（Bongo / 陪伴狗 / 跟随小狗）的显隐。
+#[tauri::command]
+fn set_extra_pets_hidden(app: AppHandle, hidden: bool) {
+    if hidden {
+        desktop_extras::hide_extra_pets(&app);
+    } else {
+        desktop_extras::restore_extra_pets(&app);
+    }
+}
+
 // 全屏避让：检测前台窗口是否铺满整个显示器（游戏/视频全屏）。
 // 排除自身窗口、桌面与壳层窗口，避免误判。
 #[tauri::command]
@@ -849,6 +859,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn show_island_no_focus(app: AppHandle) -> Result<(), String> {
     let window = main_window(&app)?;
+    desktop_extras::restore_extra_pets(&app);
     // 窗口已经显示时不要再套用收起态几何：云朵浮层/面板可能正把窗口放大，
     // 这里再 resize 一次会把刚展开的浮层瞬间缩回去（表现为浮窗出不来、频闪）。
     let visible = window.is_visible().unwrap_or(false);
@@ -2618,6 +2629,8 @@ fn show_island(app: &AppHandle) -> Result<(), String> {
     apply_stage_geometry(&window, read_window_state(), false)?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
+    // 隐藏时一起收起的 Bongo / 陪伴狗 / 跟随小狗，显示时一并放回来。
+    desktop_extras::restore_extra_pets(app);
     Ok(())
 }
 
@@ -2627,6 +2640,8 @@ fn hide_island(app: &AppHandle) {
     if let Ok(window) = main_window(app) {
         let _ = window.hide();
     }
+    // 快捷键/托盘隐藏桌宠时，桌上其它小狗也要消失，否则会留下 Bongo 孤零零趴在桌上。
+    desktop_extras::hide_extra_pets(app);
 }
 
 fn window_state() -> &'static Mutex<IslandWindowState> {
@@ -3731,6 +3746,7 @@ pub fn run() {
             plan_island_overlay,
             roam_island_step,
             minimize_island,
+            set_extra_pets_hidden,
             lyrics::fetch_lyrics,
             icons::get_shortcut_icon,
             desktop_extras::sync_desktop_extras,

@@ -73,6 +73,9 @@ pub(crate) struct MediaState {
     can_repeat: bool,
     volume: f32,
     source_app: Option<String>,
+    /// Windows 媒体会话声明的播放类型：music / video / image / unknown。
+    /// 浏览器播视频时也是音乐播放器的样子，前端靠这个字段区分，不要再用标题猜。
+    media_kind: &'static str,
     active_session_id: Option<String>,
     sessions: Vec<MediaSessionInfo>,
     updated_at: i64,
@@ -502,6 +505,15 @@ fn read_media_state_from_manager(
         .and_then(|value| value.Value().ok())
         .unwrap_or(1.0);
 
+    // PlaybackType 是系统给的权威类型：浏览器播 B 站 / YouTube 时通常报告 Video，
+    // 音乐播放器报告 Music。拿不到时退回按来源与标题猜。
+    let media_kind = playback_info
+        .PlaybackType()
+        .ok()
+        .and_then(|value| value.Value().ok())
+        .map(media_kind_label)
+        .unwrap_or("unknown");
+
     let (position_ms, duration_ms) = read_timeline(&session, is_playing, playback_rate);
     let (title, artist, album, thumbnail) = read_metadata(&session, source_app.as_deref());
 
@@ -525,6 +537,7 @@ fn read_media_state_from_manager(
         can_repeat,
         volume,
         source_app: source_app.as_deref().map(friendly_app_label),
+        media_kind,
         active_session_id: session_id(&session),
         sessions,
         updated_at: current_unix_millis(),
@@ -588,6 +601,7 @@ impl MediaState {
             can_repeat: false,
             volume: -1.0,
             source_app: None,
+            media_kind: "unknown",
             active_session_id: None,
             sessions: Vec::new(),
             updated_at: current_unix_millis(),
@@ -786,6 +800,16 @@ fn repeat_mode_label(mode: RepeatMode) -> &'static str {
         RepeatMode::None => "none",
         RepeatMode::Track => "track",
         RepeatMode::List => "list",
+        _ => "unknown",
+    }
+}
+
+/// Windows 媒体会话的播放类型 → 前端用的短标签。
+fn media_kind_label(kind: windows::Media::MediaPlaybackType) -> &'static str {
+    match kind {
+        windows::Media::MediaPlaybackType::Music => "music",
+        windows::Media::MediaPlaybackType::Video => "video",
+        windows::Media::MediaPlaybackType::Image => "image",
         _ => "unknown",
     }
 }

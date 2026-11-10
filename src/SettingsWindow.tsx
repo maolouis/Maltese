@@ -53,6 +53,7 @@ type PetSettings = {
   mouseInteractions: boolean;
   lockCorner: Corner;
   fullscreenAvoid: FullscreenAvoid;
+  fullscreenHideExtras: boolean;
   autoTuck: boolean;
   autoTuckSeconds: number;
   observeApps: boolean;
@@ -94,6 +95,7 @@ const DEFAULTS: PetSettings = {
   mouseInteractions: true,
   lockCorner: "",
   fullscreenAvoid: "tuck",
+  fullscreenHideExtras: true,
   autoTuck: false,
   autoTuckSeconds: 30,
   observeApps: true,
@@ -495,6 +497,14 @@ export default function SettingsWindow() {
           items={[["tuck", "缩边"], ["hide", "隐藏"], ["off", "不处理"]]}
           onChange={(value) => update("fullscreenAvoid", value)}
         />
+        {settings.fullscreenAvoid !== "off" && (
+          <Switch
+            label="全屏时连 Bongo 一起隐藏"
+            hint="Bongo / 陪伴狗 / 跟随鼠标的小狗随主狗一起收起来"
+            checked={settings.fullscreenHideExtras}
+            onChange={(value) => update("fullscreenHideExtras", value)}
+          />
+        )}
       </section>
 
       <section className="sw-card">

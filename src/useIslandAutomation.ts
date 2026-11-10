@@ -12,7 +12,13 @@ export function useFullscreenAvoid(
   isTauri: boolean,
   onTuck: () => void,
   onReveal: () => void,
+  hideExtras = true,
 ) {
+  // Bongo / 陪伴狗 / 跟随小狗也要跟着全屏避让，否则主狗藏起来了它们还在桌上。
+  const hideExtraPets = (hidden: boolean) => {
+    if (!isTauri) return;
+    void invoke("set_extra_pets_hidden", { hidden }).catch(() => undefined);
+  };
   const appliedRef = useRef<FullscreenAvoidMode | null>(null);
   const wasTuckedRef = useRef(false);
   // 用 ref 跟踪最新的 isTucked，避免 isTucked 变化导致 effect 反复重建、
@@ -52,9 +58,15 @@ export function useFullscreenAvoid(
         } else if (!isTuckedRef.current) {
           onTuck();
         }
+        if (hideExtras) {
+          hideExtraPets(true);
+        }
       } else if (!fullscreen && appliedRef.current !== null) {
         const applied = appliedRef.current;
         appliedRef.current = null;
+        if (hideExtras) {
+          hideExtraPets(false);
+        }
         await restore(applied);
       }
     };

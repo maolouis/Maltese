@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 use std::time::Duration;
 use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, Position,
@@ -25,6 +25,10 @@ const BONGO_RATIO: f64 = 1037.0 / 1276.0;
 static CURSOR_ENABLED: AtomicBool = AtomicBool::new(false);
 static CURSOR_SIZE: AtomicU32 = AtomicU32::new(75);
 static CURSOR_LOOP: Once = Once::new();
+// 主桌宠被快捷键/托盘隐藏时，桌上其它小狗（Bongo、陪伴狗、跟随鼠标的小狗）也要一起消失。
+static PETS_HIDDEN: AtomicBool = AtomicBool::new(false);
+// 最近一次同步用的配置，用于「显示回来」时按原样恢复，而不是回到默认值。
+static LAST_CONFIG: Mutex<Option<DesktopExtrasConfig>> = Mutex::new(None);
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +46,39 @@ pub struct DesktopExtrasConfig {
     pub bongo_position: String,
 }
 
+fn pets_hidden() -> bool {
+    PETS_HIDDEN.load(Ordering::SeqCst)
+}
+
+/// 主桌宠被隐藏时调用：Bongo、陪伴狗、跟随鼠标的小狗一起消失。
+pub fn hide_extra_pets(app: &AppHandle) {
+    PETS_HIDDEN.store(true, Ordering::SeqCst);
+    let labels = [
+        BONGO_LABEL,
+        CURSOR_LABEL,
+        "companion-1",
+        "companion-2",
+        "companion-3",
+        "companion-4",
+    ];
+    for label in labels {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.hide();
+        }
+    }
+}
+
+/// 主桌宠重新出现时调用：按最近一次同步的配置把其它小狗放回去。
+pub fn restore_extra_pets(app: &AppHandle) {
+    PETS_HIDDEN.store(false, Ordering::SeqCst);
+    let config = LAST_CONFIG.lock().ok().and_then(|slot| slot.clone());
+    let Some(config) = config else {
+        return;
+    };
+    let _ = sync_companions(app, config.pet_count);
+    let _ = sync_bongo(app, &config);
+    let _ = sync_cursor(app, &config);
+}
 fn work_area(app: &AppHandle) -> (i32, i32, i32, i32, f64) {
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let area = monitor.work_area();
@@ -64,7 +101,7 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
         let Some(window) = app.get_webview_window(&label) else {
             continue;
         };
-        if index <= wanted {
+        if index <= wanted && !pets_hidden() {
             let physical_w = (200.0 * scale).round() as i32;
             let physical_h = (180.0 * scale).round() as i32;
             let x = (left + (80.0 * scale) as i32 + (index as i32 - 1) * physical_w)
@@ -90,7 +127,7 @@ fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Strin
     let height = (width * BONGO_RATIO).round();
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(width, height)));
     let _ = window.set_ignore_cursor_events(config.bongo_click_through);
-    if config.bongo_enabled {
+    if config.bongo_enabled && !pets_hidden() {
         let (left, top, screen_w, screen_h, scale) = work_area(app);
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;
@@ -119,7 +156,7 @@ fn sync_cursor(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Stri
     CURSOR_SIZE.store(config.cursor_pet_size.clamp(30, 180), Ordering::SeqCst);
     if let Some(window) = app.get_webview_window(CURSOR_LABEL) {
         let _ = window.set_ignore_cursor_events(true);
-        if config.follow_mouse {
+        if config.follow_mouse && !pets_hidden() {
             let _ = window.show();
         } else {
             let _ = window.hide();
@@ -160,7 +197,7 @@ fn sync_cursor(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Stri
             let y = y.clamp(top, (top + height - phys).max(top));
             let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(size, size)));
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
-            if !window.is_visible().unwrap_or(false) {
+            if !window.is_visible().unwrap_or(false) && !pets_hidden() {
                 let _ = window.show();
             }
             std::thread::sleep(Duration::from_millis(16));
@@ -178,6 +215,9 @@ pub async fn sync_desktop_extras(
     // 逐个注册这些窗口的；React 首次同步往往早于窗口注册完成。
     // 在后台线程里等它们出现，再显示/隐藏/定位，避免“设置是 3 只，
     // 桌面却一只都没有”。
+    if let Ok(mut slot) = LAST_CONFIG.lock() {
+        *slot = Some(config.clone());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         for _ in 0..40 {
             let ready = app.get_webview_window("companion-1").is_some()
