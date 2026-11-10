@@ -1,15 +1,15 @@
 {
-  "version": "1.3.8",
-  "notes": "# Maltese v1.3.8\n\n## 修复聊天框高度设置不生效\n\n- 1.3.7 里「聊天框高度」只是写进了设置，但原生窗口尺寸仍然写死 520 px，所以拖了没反应。\n- 根因：`stage_dimensions()` 的展开态分支用的是常量 `EXPANDED_PANEL_HEIGHT`，没有读前端传进来的 `expandedHeight`。现在改为 `slot_h.max(state.expanded_height)`，各页面自己算的高度（聊天框设置、待办行数、音乐面板等）都会真正作用到窗口上。\n- 补了单测 `expanded_stage_uses_the_requested_panel_height`：请求 800 px 时窗口高度就是 800，请求 220 px 时不会小于小狗槽高度。\n\n## 验证\n\n- `cargo test --lib expanded_stage_uses_the_requested_panel_height` 通过。\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T06:23:28Z",
+  "version": "1.3.9",
+  "notes": "# Maltese v1.3.9\n\n## 修复向下展开比向上展开矮\n\n- 现象：聊天面板翻到小狗下方时，可见高度比在上方时少了「小狗槽 + 间隙」那一截。\n- 根因：窗口高度只按面板高度算（`max(狗槽, 面板)`），但面板在下方的布局是「狗槽 + 8px + 面板」，多出来的狗槽部分把面板挤出了窗口底边，看起来就被裁短了。\n- 修复：原生层记住面板方向（`PANEL_BELOW`），面板在下方时窗口高度 = 狗槽 + 间隙 + 面板高度；CSS 里把面板高度固定为 `--expanded-island-height`，并用 `max-height` 兜住空间不足的情况。上下两种方向的可见面板高度现在一致。\n- 单测 `expanded_stage_uses_the_requested_panel_height` 覆盖了两种方向：上方 800px → 窗口 800px；下方 800px → 狗槽 + 8 + 800。\n\n## 验证\n\n- `cargo test --lib expanded_stage` 通过；`tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 实机：面板在上方和下方各展开一次，量窗口高度与面板可见高度，两者面板高度一致。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T06:36:44Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0ZWUDk0QXhRclF3MHZoSlgxQlgrcjV0K1Z2dU9tY2NSdlVGaWIyTUxvbEN2TGZOaW1vS1FuTnVOMkhhZnF4ZnhNVFBQaENJMlhwQ081ZmtjN1Q2RGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkxNzkxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjhfeDY0LXNldHVwLmV4ZQp0b0VaaEdZMjNWdjMxL05sV0VEWGxHWXpYVzBNNnNCOG15RGFDWXZJS0c3S05ZOEdPaGJqbnIrc0w5ZFY5cFJzNDJkVHFBRFQyUUJHYjlXUElJcG1Edz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.8/Maltese-1.3.8-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0w3YXhKcjY2eWU1MGxPMmJObGdSSjlMaUZIbmNhVDhuQjdFdkdmdmhiU2UwTDM0MDNvZ0JSTVQxTE5uM09uQVpvdTcxN0NhampIeGx0YWo1WXVlY3dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkyNTg3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjlfeDY0LXNldHVwLmV4ZQpkMjB5KzYzaGNVMnBxNzlUeDhPYnZqMzRHK0loSEs2b09qanZsQVB4MnR1dXdWQU9YQ3A5WGliZWdIKytTZFlZK1FiczlGVmVxU2t2Kyt2WXFOUlpEUT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.9/Maltese-1.3.9-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0ZWUDk0QXhRclF3MHZoSlgxQlgrcjV0K1Z2dU9tY2NSdlVGaWIyTUxvbEN2TGZOaW1vS1FuTnVOMkhhZnF4ZnhNVFBQaENJMlhwQ081ZmtjN1Q2RGcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkxNzkxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjhfeDY0LXNldHVwLmV4ZQp0b0VaaEdZMjNWdjMxL05sV0VEWGxHWXpYVzBNNnNCOG15RGFDWXZJS0c3S05ZOEdPaGJqbnIrc0w5ZFY5cFJzNDJkVHFBRFQyUUJHYjlXUElJcG1Edz09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.8/Maltese-1.3.8-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0w3YXhKcjY2eWU1MGxPMmJObGdSSjlMaUZIbmNhVDhuQjdFdkdmdmhiU2UwTDM0MDNvZ0JSTVQxTE5uM09uQVpvdTcxN0NhampIeGx0YWo1WXVlY3dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkyNTg3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjlfeDY0LXNldHVwLmV4ZQpkMjB5KzYzaGNVMnBxNzlUeDhPYnZqMzRHK0loSEs2b09qanZsQVB4MnR1dXdWQU9YQ3A5WGliZWdIKytTZFlZK1FiczlGVmVxU2t2Kyt2WXFOUlpEUT09Cg==",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.9/Maltese-1.3.9-x64-setup.exe"
     }
   }
 }
