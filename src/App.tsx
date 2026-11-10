@@ -5104,6 +5104,25 @@ const ACTIVITY_LINES: Record<string, string[]> = {
 
 // 用 WebAudio 合成一声很短的小狗哼唧，避免额外音频素材。
 let petAudioContext: AudioContext | null = null;
+// 主动聊天的本地兜底台词：模型没配置 / 调用失败时也要有一句，
+// 否则开关打开了却永远看不到气泡。
+function proactiveFallbackLine(now: Date): string {
+  const hour = now.getHours();
+  const lines =
+    hour < 6
+      ? ["这么晚还没睡呀，我陪着你", "眼睛酸了就眯一会儿吧", "要不要先喝口热水"]
+      : hour < 11
+        ? ["早上好，今天也慢慢来", "先吃早饭再忙吧", "伸个懒腰再开始"]
+        : hour < 14
+          ? ["到饭点啦，别忙过了头", "吃完再干活，我等你", "中午记得休息一下"]
+          : hour < 18
+            ? ["下午了，喝口水吧", "坐久了站起来走两步", "我在这儿陪着你"]
+            : hour < 23
+              ? ["今天辛苦了，歇一会儿吧", "晚上别熬太晚", "要不要听首歌放松下"]
+              : ["夜深了，早点睡吧", "明天再做也不迟"];
+  return lines[Math.floor(Math.random() * lines.length)] ?? "";
+}
+
 function playPetChirp(kind: "soft" | "happy" = "soft") {
   // 用户配置了自定义音效就优先播放它，失败再回落到合成音。
   if (playCustomSound()) {
@@ -6638,15 +6657,24 @@ function IslandApp({
     }, settings.bubbleDurationMs);
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
 
-  // 让模型观察本机状态并主动说一句（聊天记录里也会留一条）。
+  // 让模型观察本机状态并主动说一句；说完弹云朵气泡，聊天记录里也留一条。
+  // 这个 effect 的依赖必须尽量少：之前依赖 mediaState / mode，
+  // 每次切歌或开关面板都会重跑并把计时基准重置成“现在”，
+  // 结果主动聊天几乎永远不到点，也就看不到气泡。
   const lastProactiveChatAt = useRef(0);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const mediaRef = useRef(mediaState);
+  mediaRef.current = mediaState;
+
   useEffect(() => {
     if (!isTauri() || !settings.proactiveChat) {
       return;
     }
-    // 打开开关后先等一个完整间隔，避免刚启动就冒出一句。
-    lastProactiveChatAt.current = Date.now();
     const minutes = Math.max(5, settings.proactiveChatMinutes);
+    if (lastProactiveChatAt.current === 0) {
+      lastProactiveChatAt.current = Date.now();
+    }
     const appendChat = (text: string) => {
       try {
         const key = "focusd-island-pet-chat-messages";
@@ -6665,36 +6693,36 @@ function IslandApp({
     };
     const tick = async () => {
       if (Date.now() - lastProactiveChatAt.current < minutes * 60_000) return;
-      if (mode !== "collapsed") return;
+      // 面板展开或正在聊天时先不插话，等回到挂机状态再弹。
+      if (modeRef.current !== "collapsed") return;
       lastProactiveChatAt.current = Date.now();
+      const context: string[] = [];
       try {
-        const context: string[] = [];
-        try {
-          const activity = await invoke<{ kind: string; process: string; title: string }>(
-            "get_active_activity",
-          );
-          if (activity?.process) {
-            context.push(`前台程序：${activity.title || activity.process}`);
-          }
-        } catch {
-          // 忽略
+        const activity = await invoke<{ kind: string; process: string; title: string }>(
+          "get_active_activity",
+        );
+        if (activity?.process) {
+          context.push(`前台程序：${activity.title || activity.process}`);
         }
-        if (mediaState.title) {
-          context.push(
-            `正在播放：${mediaState.title}${mediaState.artist ? ` - ${mediaState.artist}` : ""}`,
-          );
-        }
-        try {
-          const idle = await invoke<number>("get_system_idle_seconds");
-          if (idle > 60) context.push(`已经 ${Math.round(idle / 60)} 分钟没操作`);
-        } catch {
-          // 忽略
-        }
-        const clock = new Date();
-        context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
-        const prompt = `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
+      } catch {
+        // 忽略
+      }
+      const media = mediaRef.current;
+      if (media.title) {
+        context.push(`正在播放：${media.title}${media.artist ? ` - ${media.artist}` : ""}`);
+      }
+      try {
+        const idle = await invoke<number>("get_system_idle_seconds");
+        if (idle > 60) context.push(`已经 ${Math.round(idle / 60)} 分钟没操作`);
+      } catch {
+        // 忽略
+      }
+      const clock = new Date();
+      context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
+      const prompt = `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
+      let line = "";
+      try {
         const config = loadLocalChatConfig();
-        let line = "";
         if (config.backend === "local" && config.model) {
           line = await invoke<string>("local_chat", {
             baseUrl: config.baseUrl,
@@ -6711,26 +6739,27 @@ function IslandApp({
           });
           line = reply.text;
         }
-        line = (line ?? "").trim();
-        if (!line) return;
-        showCloudBubble("小狗想你了", line);
-        appendChat(line);
       } catch {
-        // 模型不可用时静默跳过，下次再试
+        // 模型不可用时用本地兜底台词，保证气泡照常出现
       }
+      line = (line ?? "").trim();
+      if (!line) {
+        line = proactiveFallbackLine(clock);
+      }
+      if (!line) return;
+      // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
+      if (modeRef.current !== "collapsed") return;
+      showCloudBubble("小狗想你了", line);
+      appendChat(line);
     };
-    const timer = window.setInterval(() => void tick(), 60_000);
+    const timer = window.setInterval(() => void tick(), 30_000);
     return () => window.clearInterval(timer);
   }, [
-    mediaState.artist,
-    mediaState.title,
-    mode,
     proactiveCharacter,
     settings.proactiveChat,
     settings.proactiveChatMinutes,
     showCloudBubble,
   ]);
-
   // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
   useEffect(() => {
     if (
