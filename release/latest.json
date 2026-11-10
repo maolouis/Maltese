@@ -1,15 +1,15 @@
 {
-  "version": "1.3.10",
-  "notes": "# Maltese v1.3.10\n\n## 快捷入口：搜索应用置顶、键盘直达\n\n- 「搜索应用」输入框从底部挪到快捷入口最上方，打开面板第一眼就能输入。\n- 用面板热键打开快捷入口后输入框自动获得焦点，可以直接打字；**↑ / ↓** 在搜索结果里切换，**Enter** 直接打开选中的软件，**Esc** 清空输入。鼠标悬停也会同步高亮当前项。\n- 「＋ 新增快捷方式」（手动填路径）仍留在底部「添加与设置」里，位置和用法不变；点搜索结果依然是「加入快捷入口」，不会误触打开。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 实机：热键打开面板 → 输入「微信」→ ↓ 选择 → Enter 能打开对应程序；点结果仍能添加快捷方式。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T06:57:39Z",
+  "version": "1.3.11",
+  "notes": "# Maltese v1.3.11\n\n## 修复气泡被截断\n\n- 云朵气泡正文不再限制 4 行（`-webkit-line-clamp` 已移除）。\n- 气泡窗口改成按内容高度自适应：渲染后量一次实际高度，调用新的 `resize_pet_bubble` 让窗口长高并重新贴到小狗侧边，最高 560 px。开始待办、长标题、多行提示都能完整显示。\n\n## 修复小狗拖不出屏幕上边\n\n- 之前把小狗往屏幕上方拖时，槽中心一离开显示器范围，位置查找就失败，代码会把坐标夹回工作区，看起来“上面拖不出去，下面却可以”。\n- 现在位置查找失败时退回当前/主显示器继续跟随，保留自定义坐标，上下两个方向都能把小狗拖到边缘外；想找回来用面板里的「复位位置」。\n\n## 热键打开快捷入口自动聚焦搜索框\n\n- 热键打开面板后直接可以打字，不需要再点一下。除了挂载时聚焦，还加了 60 / 180 / 400 ms 重试、窗口重新获得焦点时补聚焦，以及热键重复按下时的重新聚焦。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T07:08:26Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hRTzFHVWpDaEhJWnZpOWw0OWZvajB4SUVRdG15bHIvb0RER2R2WHNRaEwxVjVxTEQwY0hXUGNvZEl5MTlJMHQ3cEVrR0FaYnhGT1dkTkt0RHlrdkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkzODU1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEwX3g2NC1zZXR1cC5leGUKaENKRnk3cGdCOTR3VWhCMEthOTRCbTU0Tm8rU2FkS3lmVnlEaE5JU0RnU0pYSjVML0tzc3FpYldBRjF4R1hlbGFzZEVxS2JiVlNNYW1LN1V4R3BSQ1E9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.10/Maltese-1.3.10-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0RwRjh3QkdoL2hLZXdBUzBVUjF2VTc5aHgxUzUrakhSQkRhZEdZbDRkQzZZQy9Cc1hxM2p0WlJ4MEk0WEFlMmJnY1YzbDFVYy90OS9jVGJwaE5QdUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk0NTAxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjExX3g2NC1zZXR1cC5leGUKc0RzRDZqSzJRZVNRalpYVTRGdXp0R090RTJIZ0daamFUS21kSTJNc05SbUFnR3FBdFdJaStZUXdtU1QydGlsLzVCWGYvUXNaYjFSSWgzVVRZK0ZsQ2c9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.11/Maltese-1.3.11-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hRTzFHVWpDaEhJWnZpOWw0OWZvajB4SUVRdG15bHIvb0RER2R2WHNRaEwxVjVxTEQwY0hXUGNvZEl5MTlJMHQ3cEVrR0FaYnhGT1dkTkt0RHlrdkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkzODU1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEwX3g2NC1zZXR1cC5leGUKaENKRnk3cGdCOTR3VWhCMEthOTRCbTU0Tm8rU2FkS3lmVnlEaE5JU0RnU0pYSjVML0tzc3FpYldBRjF4R1hlbGFzZEVxS2JiVlNNYW1LN1V4R3BSQ1E9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.10/Maltese-1.3.10-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0RwRjh3QkdoL2hLZXdBUzBVUjF2VTc5aHgxUzUrakhSQkRhZEdZbDRkQzZZQy9Cc1hxM2p0WlJ4MEk0WEFlMmJnY1YzbDFVYy90OS9jVGJwaE5QdUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk0NTAxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjExX3g2NC1zZXR1cC5leGUKc0RzRDZqSzJRZVNRalpYVTRGdXp0R090RTJIZ0daamFUS21kSTJNc05SbUFnR3FBdFdJaStZUXdtU1QydGlsLzVCWGYvUXNaYjFSSWgzVVRZK0ZsQ2c9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.11/Maltese-1.3.11-x64-setup.exe"
     }
   }
 }
