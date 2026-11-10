@@ -5066,6 +5066,12 @@ function AssistantPanel() {
   const [appQuery, setAppQuery] = useState("");
   const [appResults, setAppResults] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [appSearching, setAppSearching] = useState(false);
+  const [appActiveIndex, setAppActiveIndex] = useState(-1);
+
+  // 结果刷新后重置选中项，避免上下键停在一个已经不存在的位置。
+  useEffect(() => {
+    setAppActiveIndex(-1);
+  }, [appResults]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => appSearchInputRef.current?.focus());
@@ -5314,19 +5320,31 @@ function AssistantPanel() {
   };
 
   const handleAppSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      const first = appResults[0];
-      if (first) {
+    // 快捷键打开面板后不用动鼠标：直接输入，↑↓ 选，回车打开。
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (appResults.length === 0) return;
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setAppActiveIndex((current) => {
+        const next = current + step;
+        return (next + appResults.length) % appResults.length;
+      });
+      return;
+    }
+    if (event.key === "Escape") {
+      if (appQuery) {
         event.preventDefault();
-        launchPath(first.label, first.path);
+        setAppQuery("");
+        setAppActiveIndex(-1);
       }
       return;
     }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      const firstResult = panelRef.current
-        ?.querySelector<HTMLButtonElement>(".assistant-panel__app-results button");
-      (firstResult ?? panelRef.current?.querySelector<HTMLButtonElement>(".assistant-card__launch"))?.focus();
+    if (event.key === "Enter") {
+      const target = appActiveIndex >= 0 ? appResults[appActiveIndex] : appResults[0];
+      if (target) {
+        event.preventDefault();
+        launchPath(target.label, target.path);
+      }
     }
   };
 
@@ -5437,6 +5455,47 @@ function AssistantPanel() {
             设置
           </button>
         </div>
+      </div>
+      <div className="assistant-panel__app-search">
+        <span className="assistant-panel__label">搜索应用直接打开</span>
+        <input
+          ref={appSearchInputRef}
+          value={appQuery}
+          onChange={(event) => setAppQuery(event.currentTarget.value)}
+          onKeyDown={handleAppSearchKeyDown}
+          placeholder="输入应用名，↑↓ 选择，回车打开"
+          spellCheck={false}
+        />
+        {appQuery.trim() && (
+          <div className="assistant-panel__app-results">
+            {appSearching ? (
+              <small>正在搜索系统应用…</small>
+            ) : appResults.length > 0 ? (
+              appResults.slice(0, 12).map((app, index) => (
+                <button
+                  key={app.path}
+                  type="button"
+                  className={index === appActiveIndex ? "assistant-panel__app-result--active" : undefined}
+                  onMouseEnter={() => setAppActiveIndex(index)}
+                  onClick={() => addSystemApp(app)}
+                  title={app.path}
+                >
+                  <span>{app.label}</span>
+                  <small>
+                    {app.kind === "lnk"
+                      ? "开始菜单"
+                      : app.kind === "appx"
+                        ? "商店应用"
+                        : `.${app.kind}`}
+                  </small>
+                  <strong>＋</strong>
+                </button>
+              ))
+            ) : (
+              <small>没有找到匹配的系统应用</small>
+            )}
+          </div>
+        )}
       </div>
       <div className="assistant-panel__section-head">
         <span>快捷方式</span>
@@ -5647,51 +5706,6 @@ function AssistantPanel() {
               ? "自动识别已关闭；只保留自定义快捷方式。"
               : scanError || (scanDir ? `只扫描：${scanDir}` : "读取桌面和系统开始菜单，不扫描 Program Files。")}
           </small>
-        </div>
-        <div className="assistant-panel__app-search">
-          <span className="assistant-panel__label">搜索应用名称添加</span>
-          <input
-            ref={appSearchInputRef}
-            value={appQuery}
-            onChange={(event) => setAppQuery(event.currentTarget.value)}
-            onKeyDown={handleAppSearchKeyDown}
-            placeholder="输入应用名，例如 微信 / 网易云 / VS Code"
-            spellCheck={false}
-          />
-          {appQuery.trim() && (
-            <div className="assistant-panel__app-results">
-              {appSearching ? (
-                <small>正在搜索系统应用…</small>
-              ) : appResults.length > 0 ? (
-                appResults.slice(0, 12).map((app) => (
-                  <button
-                    key={app.path}
-                    type="button"
-                    onClick={() => addSystemApp(app)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        launchPath(app.label, app.path);
-                      }
-                    }}
-                    title={app.path}
-                  >
-                    <span>{app.label}</span>
-                    <small>
-                      {app.kind === "lnk"
-                        ? "开始菜单"
-                        : app.kind === "appx"
-                          ? "商店应用"
-                          : `.${app.kind}`}
-                    </small>
-                    <strong>＋</strong>
-                  </button>
-                ))
-              ) : (
-                <small>没有找到匹配的系统应用</small>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </section>

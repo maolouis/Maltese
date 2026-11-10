@@ -6059,3 +6059,11 @@ html.maltese-page-opening .island__collapsed {
 @media (prefers-reduced-motion: reduce) {
   .assistant-card__spin { animation: none; }
 }
+
+/* 快捷入口搜索：↑↓ 选中的那一项 */
+.assistant-panel__app-results button.assistant-panel__app-result--active,
+.assistant-panel__app-results button:focus-visible {
+  background: rgba(247, 188, 125, 0.22);
+  color: #ffe5c7;
+  outline: none;
+}
