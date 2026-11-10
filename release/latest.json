@@ -1,15 +1,15 @@
 {
-  "version": "1.3.21",
-  "notes": "# Maltese v1.3.21\n\n## 主动聊天支持两种模式\n\n设置 →「感知与陪伴」（或独立设置窗口「陪伴与感知」）里，「主动聊天方式」可选：\n\n- **定时**（默认）：每隔 5–240 分钟说一次，和之前一致。\n- **跟随状态**：只有情境发生变化时才说。\n  - 情境 = 前台程序类型 + 是否在播放媒体 + 是否离开电脑（闲置超过 10 分钟）。\n  - 情境变化时只重新计时，不立刻开口；新情境稳定 **3 分钟**后才可能说，避免频繁切应用时不停打扰。\n  - 同一个情境只说一次，两次之间至少有「最短间隔」的冷却。\n\n两种模式都只在挂机（收起态）时说话，面板展开或正在聊天时自动跳过；模型不可用时仍用本地兜底台词，气泡照常弹出。原来那个滑杆在定时模式下叫「主动聊天间隔」，在跟随状态模式下叫「最短间隔」。\n\n实现细节：情境判定用 `get_active_activity` + 媒体状态 + `get_system_idle_seconds` 组合出的字符串，`proactiveSituationRef` 记录当前情境、进入时间与已说过的情境；计时基准仍然只在首次进入时初始化，不受切歌、开关面板影响。\n\n## 文档\n\n- README「模型主动聊天」条目补充两种模式。\n- `docs/pet-chat.md`「主动聊天（会弹气泡）」小节补充模式规则（情境定义、3 分钟稳定期、冷却、同情境只说一次）。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T09:27:55Z",
+  "version": "1.3.22",
+  "notes": "# Maltese v1.3.22\n\n## 修复：收起 / 隐藏快捷键失效\n\n现象：更新或重启后，`Ctrl+Alt+Shift+C`（收起面板）和 `Ctrl+Alt+Shift+M`（显示 / 隐藏桌宠）都不响应，手动退出重开又好了。\n\n原因：这两个全局快捷键在启动时各注册一次，注册失败就静默放弃。自动更新、`install-latest.ps1` 都是「杀旧进程 → 立刻起新进程」，旧实例还没把 `RegisterHotKey` 释放掉，新实例注册失败，于是一整场会话快捷键都是哑的。用 PowerShell 复现确认：重启后立刻检查时两个组合键仍被占用但注册失败；隔几秒重启后两者都注册成功。\n\n修复：\n\n- 两个快捷键模块都记录「目标组合键」`DESIRED_BINDING`，注册失败时后台每 2 秒通过 `PostMessage` 让热键窗口重试，最多 30 次（约 1 分钟），抢回来就恢复，不用再手动重启。\n- 主窗口启动时就把保存的「显示 / 隐藏」组合键注册上（以前要等快捷面板挂载才注册，用户改过键的话得先打开面板）。\n- 设置窗口录制快捷键时，如果和另一个 Maltese 快捷键重复，直接提示换一个，避免一个把另一个顶掉。\n\n## 文档\n\n- README「显示 / 隐藏桌宠」「收起面板快捷键」条目补充重试说明。\n\n## 验证\n\n- `cargo check`、`tsc --noEmit`、`vite build` 通过。\n- 本机实测：重启后立刻检测两个组合键均已被本进程注册；`Ctrl+Alt+Shift+C` 收起、`Ctrl+Alt+Shift+M` 隐藏 / 显示正常。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。\n\n## 说明\n\n本次只做本地提交，**没有推送远端仓库**。",
+  "pub_date": "2026-11-10T09:41:42Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0YwdmRQY0wwbTBXc1hIb09iUDBNVVE5QTE5NzIwcXBaU2lyWTZuWE5sNnZEVFRXV3pJOWE5ZFRDc1V5eGszOE03TVRRUnVBZ3prUHRER3YvQXZBSWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAyODY4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjIxX3g2NC1zZXR1cC5leGUKMVB4LzFPOGwxVFZheGtXcUxodkE3TkJHcGJrR1lOK1QrazdIb08xTTY1a291MmprbEpJVUY0cFBNVitrTWtOZGo1a3B2NDArYWVZSm1KRkhsVzZUQ2c9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.21/Maltese-1.3.21-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0RCQjhPbEZTUHV0aTJ5bWhIaHpSSUZJS2xCRUs3ZlJlN0Zhd2J2ZzNZcnFEekp0KzU5aDhZOG4xWUI0UFpoMjFrRFEya08vUjRsYTJBS2NyNnVTOWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAzNjU4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjIyX3g2NC1zZXR1cC5leGUKcnhKSEk4b0hUZ0RjSHlWNWNvN0tNTlJNQTJySHNiS1Q3a3RMaDRZb1h3b2NUTjZwbTVveDJMNDBKaGQ3NnYzakhleGdrc0tQSEtBenFxR0NvSTZrQUE9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.22/Maltese-1.3.22-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0YwdmRQY0wwbTBXc1hIb09iUDBNVVE5QTE5NzIwcXBaU2lyWTZuWE5sNnZEVFRXV3pJOWE5ZFRDc1V5eGszOE03TVRRUnVBZ3prUHRER3YvQXZBSWdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAyODY4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjIxX3g2NC1zZXR1cC5leGUKMVB4LzFPOGwxVFZheGtXcUxodkE3TkJHcGJrR1lOK1QrazdIb08xTTY1a291MmprbEpJVUY0cFBNVitrTWtOZGo1a3B2NDArYWVZSm1KRkhsVzZUQ2c9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.21/Maltese-1.3.21-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0RCQjhPbEZTUHV0aTJ5bWhIaHpSSUZJS2xCRUs3ZlJlN0Zhd2J2ZzNZcnFEekp0KzU5aDhZOG4xWUI0UFpoMjFrRFEya08vUjRsYTJBS2NyNnVTOWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MzAzNjU4CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjIyX3g2NC1zZXR1cC5leGUKcnhKSEk4b0hUZ0RjSHlWNWNvN0tNTlJNQTJySHNiS1Q3a3RMaDRZb1h3b2NUTjZwbTVveDJMNDBKaGQ3NnYzakhleGdrc0tQSEtBenFxR0NvSTZrQUE9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.22/Maltese-1.3.22-x64-setup.exe"
     }
   }
 }

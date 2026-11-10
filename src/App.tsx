@@ -7268,6 +7268,16 @@ function IslandApp({
     setIslandMode("collapsed");
   }, [setIslandMode]);
 
+  // 启动时就把保存的「显示/隐藏」组合键注册上（以前只在快捷面板挂载时才注册，
+  // 用户改过键的话要等打开面板才生效）。
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    void invoke<string>("set_wake_shortcut", { shortcut: loadWakeShortcut() })
+      .then((registered) => saveWakeShortcut(registered))
+      .catch(() => undefined);
+  }, []);
   // 「收起面板」全局快捷键：注册保存的组合键，按下后把展开态收起来。
   useEffect(() => {
     if (!isTauri()) {

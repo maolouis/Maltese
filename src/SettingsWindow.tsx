@@ -296,6 +296,11 @@ export default function SettingsWindow() {
       return;
     }
     const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+    const candidate = [...modifiers, key].join("+");
+    if (candidate === collapseShortcut) {
+      setShortcutError("和「收起面板」用了同一个组合键，换一个");
+      return;
+    }
     try {
       const registered = await invoke<string>("set_wake_shortcut", {
         shortcut: [...modifiers, key].join("+"),
@@ -324,6 +329,11 @@ export default function SettingsWindow() {
       return;
     }
     const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+    const candidate = [...modifiers, key].join("+");
+    if (candidate === shortcut) {
+      setCollapseShortcutError("和「显示 / 隐藏桌宠」用了同一个组合键，换一个");
+      return;
+    }
     try {
       const registered = await invoke<string>("set_collapse_shortcut", {
         shortcut: [...modifiers, key].join("+"),
