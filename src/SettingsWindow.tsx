@@ -15,6 +15,7 @@ import {
 import { UpdatePanel } from "./UpdatePanel";
 import { PET_CHARACTERS, savePetCharacter, usePetCharacter, type PetCharacterId } from "./petCharacters";
 import { TuckGifControl } from "./TuckGifControl";
+import { CustomSoundControl } from "./CustomSoundControl";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -58,6 +59,10 @@ type PetSettings = {
   senseTime: boolean;
   nightCompanion: boolean;
   musicChat: boolean;
+  autoRotateExpressions: boolean;
+  proactiveBubbles: boolean;
+  proactiveChat: boolean;
+  proactiveChatMinutes: number;
   clipboardBubble: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -95,6 +100,10 @@ const DEFAULTS: PetSettings = {
   senseTime: true,
   nightCompanion: true,
   musicChat: true,
+  autoRotateExpressions: true,
+  proactiveBubbles: true,
+  proactiveChat: false,
+  proactiveChatMinutes: 30,
   clipboardBubble: true,
   roam: false,
   sleepAfterSeconds: 150,
@@ -411,6 +420,7 @@ export default function SettingsWindow() {
         </div>
         
         <Switch label="开启音效" checked={settings.soundOn} onChange={(value) => update("soundOn", value)} />
+        <CustomSoundControl />
         <Switch label="整点轻轻叫一声" checked={settings.hourlyChime} onChange={(value) => update("hourlyChime", value)} />
       </section>
 
@@ -493,6 +503,12 @@ export default function SettingsWindow() {
         <Switch label="时间感知" hint="早上 / 中午 / 晚上的问候" checked={settings.senseTime} onChange={(value) => update("senseTime", value)} />
         <Switch label="夜间陪伴" hint="23 点后提醒早点休息" checked={settings.nightCompanion} onChange={(value) => update("nightCompanion", value)} />
         <Switch label="听歌互动" hint="切歌时说一句正在听的歌" checked={settings.musicChat} onChange={(value) => update("musicChat", value)} />
+        <Switch label="自动切换表情" hint="关闭后小狗保持在当前那一张 GIF" checked={settings.autoRotateExpressions} onChange={(value) => update("autoRotateExpressions", value)} />
+        <Switch label="根据行为弹出气泡" hint="前台程序 / 时间 / 音乐 / 剪贴板 / 整点问候" checked={settings.proactiveBubbles} onChange={(value) => update("proactiveBubbles", value)} />
+        <Switch label="让模型主动找你聊天" hint="按间隔读取本机状态，主动说一句话并写进聊天记录" checked={settings.proactiveChat} onChange={(value) => update("proactiveChat", value)} />
+        {settings.proactiveChat && (
+          <Slider label="主动聊天间隔" value={settings.proactiveChatMinutes} min={5} max={240} step={5} suffix="分钟" onChange={(value) => update("proactiveChatMinutes", value)} />
+        )}
         <Slider label="多久没动静就趴下睡" value={settings.sleepAfterSeconds} min={30} max={900} step={15} suffix="s" onChange={(value) => update("sleepAfterSeconds", value)} />
         <TuckGifControl />
         <Slider label="缩边睡觉时露出高度" value={settings.tuckedVisibleHeight} min={24} max={140} step={1} suffix="px" onChange={(value) => update("tuckedVisibleHeight", value)} />

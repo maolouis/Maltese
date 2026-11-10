@@ -87,6 +87,9 @@ import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./Onboard
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
+import { loadLocalChatConfig } from "./localChat";
+import { playCustomSound } from "./customSound";
+import { CustomSoundControl } from "./CustomSoundControl";
 import {
   loadShortcutAutoDetect,
   loadShortcutScanDir,
@@ -334,6 +337,10 @@ type IslandSettings = {
   nightCompanion: boolean;
   observeApps: boolean;
   musicChat: boolean;
+  autoRotateExpressions: boolean;
+  proactiveBubbles: boolean;
+  proactiveChat: boolean;
+  proactiveChatMinutes: number;
   petFlipY: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -378,6 +385,7 @@ type IslandShellProps = {
   onPetHoverEnd: () => void;
   clickSquash: boolean;
   mouseInteractions: boolean;
+  autoRotateExpressions: boolean;
   collapsedScale: number;
   sleepAfterSeconds: number;
   overlay: PetOverlay | null;
@@ -561,6 +569,10 @@ const DEFAULT_SETTINGS: IslandSettings = {
   nightCompanion: true,
   observeApps: true,
   musicChat: true,
+  autoRotateExpressions: true,
+  proactiveBubbles: true,
+  proactiveChat: false,
+  proactiveChatMinutes: 30,
   petFlipY: false,
   roam: false,
   sleepAfterSeconds: 150,
@@ -850,6 +862,14 @@ function normalizeSettings(
     nightCompanion: settings?.nightCompanion !== false,
     observeApps: settings?.observeApps !== false,
     musicChat: settings?.musicChat !== false,
+    autoRotateExpressions: settings?.autoRotateExpressions !== false,
+    proactiveBubbles: settings?.proactiveBubbles !== false,
+    proactiveChat: settings?.proactiveChat === true,
+    proactiveChatMinutes: clamp(
+      Math.round(Number(settings?.proactiveChatMinutes ?? DEFAULT_SETTINGS.proactiveChatMinutes)),
+      5,
+      240,
+    ),
     petFlipY: settings?.petFlipY === true,
     roam: settings?.roam === true,
     clickSquash: settings?.clickSquash !== false,
@@ -1257,6 +1277,7 @@ export function IslandShell({
   onPetHoverEnd,
   clickSquash,
   mouseInteractions,
+  autoRotateExpressions,
   collapsedScale,
   sleepAfterSeconds,
   overlay,
@@ -1387,7 +1408,8 @@ export function IslandShell({
   );
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: 10_000,
-    enabled: !(petState === "idle" && (restingAsleep || isTucked)),
+    enabled:
+      autoRotateExpressions && !(petState === "idle" && (restingAsleep || isTucked)),
   });
   // 缩边/睡觉帧默认跟随当前形象（曾经固定用 rest.gif，结果小白睡着会变成小鸡毛）。
   const tuckedGifSrc = useTuckGifSource(
@@ -1396,7 +1418,19 @@ export function IslandShell({
   const showingTuckedGif = petState === "idle" && (restingAsleep || isTucked);
   // 「趴下睡」的姿势统一用这张图：闲置自动趴下、缩边、手动点「让小狗睡觉」都走它。
   const showingSleepPose = showingTuckedGif || petState === "sleeping";
-  const displayedPetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
+  // 单击切表情：先固定一张，等自动轮播/状态变化时再交还给轮播。
+  const [clickedFrame, setClickedFrame] = useState<string | null>(null);
+  const basePetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
+  const displayedPetGifSrc = clickedFrame ?? basePetGifSrc;
+  const playNextExpression = () => {
+    if (carouselFrames.length === 0) return;
+    const current = carouselFrames.indexOf(displayedPetGifSrc);
+    const next = carouselFrames[(current + 1) % carouselFrames.length];
+    setClickedFrame(next);
+  };
+  useEffect(() => {
+    setClickedFrame(null);
+  }, [petState, showingSleepPose]);
   // 睡眠缩边与全屏避让共用 isTucked，必须记住“这次是谁缩的边”。
   // 否则全屏避让缩边后会被睡眠逻辑立刻展开，反之亦然，表现为边缘频闪。
   const sleepTuckedRef = useRef(false);
@@ -1671,20 +1705,12 @@ export function IslandShell({
             }}
             onPointerMove={(event) => {
               handleWindowDragMove(event);
-              // Ctrl + 悬停才打开互动面板；普通悬停只唤醒小狗，
-              // 避免鼠标经过桌宠时突然弹出大面板。
-              if (event.ctrlKey && !overlayOpen && !isTucked) {
-                onPetHoverStart();
-              }
             }}
             onPointerUp={cancelWindowDrag}
             onPointerCancel={cancelWindowDrag}
-            onMouseEnter={(event) => {
+            onMouseEnter={() => {
               // 鼠标一靠近就醒（LineDogPet 的 wake 行为）
               wakePet();
-              if (event.ctrlKey) {
-                onPetHoverStart();
-              }
             }}
             onMouseLeave={onPetHoverEnd}
             onClick={(event) => {
@@ -1698,13 +1724,15 @@ export function IslandShell({
                 window.setTimeout(() => setPetSquash(false), 240);
               }
               if (!didDragRef.current) {
-                onPetAction("pet");
+                // 单击 = 切到下一张表情，不再做摸头动作。
+                playNextExpression();
               }
             }}
             onDoubleClick={(event) => {
               event.stopPropagation();
               if (mouseInteractions) {
-                onPetAction("celebrate");
+                // 双击打开互动气泡（原来 Ctrl+悬停的入口）。
+                onPetHoverStart();
               }
             }}
             onContextMenu={(event) => {
@@ -2535,6 +2563,7 @@ function LayoutEditor({
           checked={settings.soundOn}
           onChange={(soundOn) => onSettingsChange({ ...settings, soundOn })}
         />
+        <CustomSoundControl />
         <ToggleControl
           label="整点轻轻叫一声"
           checked={settings.hourlyChime}
@@ -2719,6 +2748,32 @@ function LayoutEditor({
           checked={settings.musicChat}
           onChange={(musicChat) => onSettingsChange({ ...settings, musicChat })}
         />
+        <ToggleControl
+          label="自动切换表情（关闭后单张 GIF 保持不动）"
+          checked={settings.autoRotateExpressions}
+          onChange={(autoRotateExpressions) => onSettingsChange({ ...settings, autoRotateExpressions })}
+        />
+        <ToggleControl
+          label="根据行为弹出气泡（前台程序 / 时间 / 音乐 / 剪贴板 / 整点）"
+          checked={settings.proactiveBubbles}
+          onChange={(proactiveBubbles) => onSettingsChange({ ...settings, proactiveBubbles })}
+        />
+        <ToggleControl
+          label="让模型观察并主动找你聊天（本机模型 / DSH）"
+          checked={settings.proactiveChat}
+          onChange={(proactiveChat) => onSettingsChange({ ...settings, proactiveChat })}
+        />
+        {settings.proactiveChat && (
+          <SliderControl
+            label="主动聊天间隔"
+            value={settings.proactiveChatMinutes}
+            min={5}
+            max={240}
+            step={5}
+            suffix="分钟"
+            onChange={(proactiveChatMinutes) => onSettingsChange({ ...settings, proactiveChatMinutes })}
+          />
+        )}
         <SliderControl
           label="多久没动静就趴下睡"
           value={settings.sleepAfterSeconds}
@@ -5017,6 +5072,10 @@ const ACTIVITY_LINES: Record<string, string[]> = {
 // 用 WebAudio 合成一声很短的小狗哼唧，避免额外音频素材。
 let petAudioContext: AudioContext | null = null;
 function playPetChirp(kind: "soft" | "happy" = "soft") {
+  // 用户配置了自定义音效就优先播放它，失败再回落到合成音。
+  if (playCustomSound()) {
+    return;
+  }
   try {
     const Ctx = window.AudioContext;
     if (!Ctx) return;
@@ -5737,6 +5796,7 @@ function IslandApp({
   onLocaleChange: (locale: LocaleCode) => void;
 }) {
   const t = useTranslation();
+  const proactiveCharacter = usePetCharacter();
   const [mode, setMode] = useState<IslandMode>("collapsed");
   const [isTucked, setIsTucked] = useState(false);
   const qqNotifications = useQQNotifications(mode === "collapsed" && !isTucked);
@@ -6519,6 +6579,97 @@ function IslandApp({
     }, settings.bubbleDurationMs);
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
 
+  // 让模型观察本机状态并主动说一句（聊天记录里也会留一条）。
+  const lastProactiveChatAt = useRef(0);
+  useEffect(() => {
+    if (!isTauri() || !settings.proactiveChat) {
+      return;
+    }
+    const minutes = Math.max(5, settings.proactiveChatMinutes);
+    const appendChat = (text: string) => {
+      try {
+        const key = "focusd-island-pet-chat-messages";
+        const raw = window.localStorage.getItem(key);
+        const list = raw ? (JSON.parse(raw) as Array<Record<string, unknown>>) : [];
+        list.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          role: "assistant",
+          text,
+          at: Date.now(),
+        });
+        window.localStorage.setItem(key, JSON.stringify(list.slice(-200)));
+      } catch {
+        // 存储不可用时只弹气泡
+      }
+    };
+    const tick = async () => {
+      if (Date.now() - lastProactiveChatAt.current < minutes * 60_000) return;
+      if (mode !== "collapsed") return;
+      lastProactiveChatAt.current = Date.now();
+      try {
+        const context: string[] = [];
+        try {
+          const activity = await invoke<{ kind: string; process: string; title: string }>(
+            "get_active_activity",
+          );
+          if (activity?.process) {
+            context.push(`前台程序：${activity.title || activity.process}`);
+          }
+        } catch {
+          // 忽略
+        }
+        if (mediaState.title) {
+          context.push(
+            `正在播放：${mediaState.title}${mediaState.artist ? ` - ${mediaState.artist}` : ""}`,
+          );
+        }
+        try {
+          const idle = await invoke<number>("get_system_idle_seconds");
+          if (idle > 60) context.push(`已经 ${Math.round(idle / 60)} 分钟没操作`);
+        } catch {
+          // 忽略
+        }
+        const clock = new Date();
+        context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
+        const prompt = `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
+        const config = loadLocalChatConfig();
+        let line = "";
+        if (config.backend === "local" && config.model) {
+          line = await invoke<string>("local_chat", {
+            baseUrl: config.baseUrl,
+            model: config.model,
+            apiKey: config.apiKey.trim() || null,
+            message: prompt,
+            history: [],
+          });
+        } else {
+          const reply = await invoke<{ text: string }>("dsh_chat", {
+            message: prompt,
+            sessionId: null,
+            character: proactiveCharacter,
+          });
+          line = reply.text;
+        }
+        line = (line ?? "").trim();
+        if (!line) return;
+        showCloudBubble("小狗想你了", line);
+        appendChat(line);
+      } catch {
+        // 模型不可用时静默跳过，下次再试
+      }
+    };
+    const timer = window.setInterval(() => void tick(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [
+    mediaState.artist,
+    mediaState.title,
+    mode,
+    proactiveCharacter,
+    settings.proactiveChat,
+    settings.proactiveChatMinutes,
+    showCloudBubble,
+  ]);
+
   // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
   useEffect(() => {
     if (
@@ -6626,7 +6777,7 @@ function IslandApp({
   // 正在播放的曲目切换 → 云朵气泡（带一点情感互动）
   const lastTrackRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isTauri() || mode !== "collapsed" || !settings.bubbleOn || !settings.musicChat) {
+    if (!isTauri() || mode !== "collapsed" || !settings.bubbleOn || !settings.proactiveBubbles || !settings.musicChat) {
       return;
     }
     if (mediaState.playbackStatus !== "playing" || !mediaState.title) {
@@ -6641,7 +6792,7 @@ function IslandApp({
       showCloudBubble(`🎵 ${mediaState.title}`, `你也喜欢听《${mediaState.title}》呀${artist}～ 我陪你一起听`);
     }
     lastTrackRef.current = key;
-  }, [mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, showCloudBubble]);
+  }, [mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
 
   // 剪贴板新增内容 → 云朵气泡（显示内容摘要）
   const lastClipboardIdRef = useRef<string | null>(null);
@@ -6655,7 +6806,7 @@ function IslandApp({
       return;
     }
     lastClipboardIdRef.current = first.id;
-    if (!settings.clipboardBubble) {
+    if (!settings.clipboardBubble || !settings.proactiveBubbles) {
       return;
     }
     const preview = (first.preview ?? "").trim();
@@ -6669,14 +6820,14 @@ function IslandApp({
           : "已复制新内容",
       image,
     );
-  }, [clipboardHistory.items, settings.clipboardBubble, showCloudBubble]);
+  }, [clipboardHistory.items, settings.clipboardBubble, settings.proactiveBubbles, showCloudBubble]);
 
   // 微信气泡统一由上面的消息候选逻辑发出，避免同一事件弹两次。
 
   // 按前台进程感知「你在做什么」并说一句对应的话（纯本地，默认开启）。
   const lastActivityRef = useRef<{ kind: string; at: number }>({ kind: "", at: 0 });
   useEffect(() => {
-    if (!isTauri() || !settings.observeApps || !settings.bubbleOn || mode !== "collapsed") {
+    if (!isTauri() || !settings.observeApps || !settings.bubbleOn || !settings.proactiveBubbles || mode !== "collapsed") {
       return;
     }
     let cancelled = false;
@@ -6707,11 +6858,11 @@ function IslandApp({
       window.clearTimeout(first);
       window.clearInterval(timer);
     };
-  }, [mode, settings.bubbleOn, settings.observeApps, showActivityMood, showCloudBubble]);
+  }, [mode, settings.bubbleOn, settings.observeApps, settings.proactiveBubbles, showActivityMood, showCloudBubble]);
 
   // 整点轻轻叫一声
   useEffect(() => {
-    if (!isTauri() || !settings.hourlyChime || !settings.bubbleOn) {
+    if (!isTauri() || !settings.hourlyChime || !settings.bubbleOn || !settings.proactiveBubbles) {
       return;
     }
     const tick = () => {
@@ -6735,7 +6886,7 @@ function IslandApp({
     };
     const timer = window.setInterval(tick, 20_000);
     return () => window.clearInterval(timer);
-  }, [settings.bubbleOn, settings.hourlyChime, settings.soundOn, showCloudBubble]);
+  }, [settings.bubbleOn, settings.hourlyChime, settings.proactiveBubbles, settings.soundOn, showCloudBubble]);
 
   // 时间感知 / 夜间陪伴：每天第一次启动时问候一句
   useEffect(() => {
@@ -8280,6 +8431,7 @@ function IslandApp({
         onOverlayClose={hidePetOverlay}
         onOpenPage={openIslandPage}
         clickSquash={settings.clickSquash}
+        autoRotateExpressions={settings.autoRotateExpressions}
         mouseInteractions={settings.mouseInteractions}
         onWindowDragStart={startIslandDrag}
         onCollapse={collapseIsland}

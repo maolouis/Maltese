@@ -21,6 +21,7 @@ mod translation;
 mod wake_shortcut;
 mod shortcut_hotkeys;
 mod collapse_shortcut;
+mod custom_sound;
 mod video_automation;
 
 use serde::{Deserialize, Serialize};
@@ -3712,6 +3713,8 @@ pub fn run() {
             plugins::open_plugins_directory,
             plugins::run_plugin_action,
             pet_gifs::add_pet_gif,
+            custom_sound::add_custom_sound,
+            custom_sound::remove_custom_sound,
             pet_gifs::remove_pet_gif,
             video_automation::get_video_automation_state,
             video_automation::set_video_automation_config,
