@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.3.22-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.3.23-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -66,7 +66,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 - **待办笔记本**：今日任务、每日笔记、历史归档与复盘，支持拖拽排序、Markdown 保存；未完成的待办每天原样保留，不会自动清掉。
 - **剪贴板历史**：文本与图片记录，搜索、收藏、备注；从悬停气泡或快捷入口打开。
-- **音乐**：读取 Windows 媒体会话，识别网易云 / QQ 音乐 / Spotify / 浏览器播放，显示歌名、歌手、专辑、封面与歌词，支持播放、暂停、切歌、音量、随机和循环。音乐卡按系统上报的播放类型区分「音乐 / 视频」：浏览器看视频时不拉歌词、不切到「听歌」表情、也不说「正在听」。
+- **音乐**：读取 Windows 媒体会话，识别网易云 / QQ 音乐 / Spotify / 浏览器播放，显示歌名、歌手、专辑、封面与歌词，支持播放、暂停、切歌、音量、随机和循环。音乐卡综合系统播放类型、浏览器来源和前台窗口类型判断「音乐 / 视频」：浏览器看视频时不拉歌词、不切到「听歌」表情、也不说「正在听」；浏览器里放有歌手的音乐仍正常显示歌词。
 
 ### 消息提醒
 

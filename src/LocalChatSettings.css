@@ -136,6 +136,34 @@
   line-height: 1.45;
 }
 
+.local-chat-settings__fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(20, 24, 35, 0.09);
+  border-radius: 9px;
+}
+
+.local-chat-settings__fieldset legend {
+  padding: 0 4px;
+  color: #626a77;
+  font-size: 10.5px;
+}
+
+.local-chat-settings__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #626a77;
+  font-size: 10.5px;
+}
+
+.local-chat-settings__check input {
+  accent-color: #e79542;
+}
+
 .local-chat-settings__actions {
   display: flex;
   align-items: center;

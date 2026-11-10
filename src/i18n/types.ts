@@ -39,6 +39,18 @@ export type Translations = {
     modelApiKeyHint: string;
     modelPresetOllama: string;
     modelPresetLmStudio: string;
+    modelPresetStrata: string;
+    modelStartStrata: string;
+    modelStartingStrata: string;
+    modelStrataStarted: string;
+    modelStrataHint: string;
+    modelGenerationTitle: string;
+    modelMaxTokens: string;
+    modelTemperature: string;
+    modelTopP: string;
+    modelThinking: string;
+    modelStream: string;
+    modelVision: string;
     modelTest: string;
     modelTesting: string;
     modelTestOk: (count: number) => string;
@@ -46,6 +58,10 @@ export type Translations = {
     modelClose: string;
     modelNotConfigured: string;
     modelBadgeLocal: (model: string) => string;
+    imageAttach: string;
+    imageRemove: string;
+    imageAttached: (count: number) => string;
+    multimodalLocalOnly: string;
   };
   messages: {
     title: string;

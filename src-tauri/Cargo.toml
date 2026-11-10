@@ -1,6 +1,6 @@
 [package]
 name = "maltese-assistant"
-version = "1.3.22"
+version = "1.3.23"
 description = "A line-dog desktop assistant for Windows."
 authors = ["you"]
 edition = "2021"
@@ -33,7 +33,8 @@ keyring = { version = "4.2", default-features = false, features = ["v1", "window
 mailparse = "0.17"
 native-tls = "0.2"
 pollster = "0.4"
-reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls", "stream"] }
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

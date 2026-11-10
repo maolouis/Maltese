@@ -22,6 +22,7 @@ export function LocalChatSettings({
   const [config, setConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
   const [models, setModels] = useState<string[]>([]);
   const [testing, setTesting] = useState(false);
+  const [startingStrata, setStartingStrata] = useState(false);
   const [testStatus, setTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
@@ -58,6 +59,23 @@ export function LocalChatSettings({
       setTestStatus({ ok: false, text: String(error) });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const startStrata = async () => {
+    setStartingStrata(true);
+    setTestStatus(null);
+    try {
+      await invoke("strata_launch");
+      update({
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: config.model || "qwen3.6-35b-a3b-ud-q4_k_xl",
+      });
+      setTestStatus({ ok: true, text: t.chat.modelStrataStarted });
+    } catch (error) {
+      setTestStatus({ ok: false, text: String(error) });
+    } finally {
+      setStartingStrata(false);
     }
   };
 
@@ -119,6 +137,27 @@ export function LocalChatSettings({
             >
               {t.chat.modelPresetLmStudio}
             </button>
+            <button
+              type="button"
+              onClick={() => update({
+                baseUrl: "http://127.0.0.1:8080/v1",
+                model: config.model || "qwen3.6-35b-a3b-ud-q4_k_xl",
+              })}
+            >
+              {t.chat.modelPresetStrata}
+            </button>
+          </div>
+          <p className="local-chat-settings__hint">{t.chat.modelStrataHint}</p>
+          <div className="local-chat-settings__actions">
+            <button
+              type="button"
+              className="local-chat-settings__test"
+              disabled={startingStrata}
+              onClick={() => void startStrata()}
+            >
+              <Server size={13} />
+              {startingStrata ? t.chat.modelStartingStrata : t.chat.modelStartStrata}
+            </button>
           </div>
           <label className="local-chat-settings__field">
             <span>{t.chat.modelBaseUrl}</span>
@@ -156,6 +195,59 @@ export function LocalChatSettings({
             />
           </label>
           <p className="local-chat-settings__hint">{t.chat.modelApiKeyHint}</p>
+          <fieldset className="local-chat-settings__fieldset">
+            <legend>{t.chat.modelGenerationTitle}</legend>
+            <label className="local-chat-settings__field">
+              <span>{t.chat.modelMaxTokens}</span>
+              <input
+                type="number"
+                min={32}
+                max={2048}
+                step={32}
+                value={config.maxTokens}
+                onChange={(event) => update({ maxTokens: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label className="local-chat-settings__field">
+              <span>{t.chat.modelTemperature}</span>
+              <input
+                type="number"
+                min={0}
+                max={2}
+                step={0.1}
+                value={config.temperature}
+                onChange={(event) => update({ temperature: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label className="local-chat-settings__field">
+              <span>{t.chat.modelTopP}</span>
+              <input
+                type="number"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={config.topP}
+                onChange={(event) => update({ topP: Number(event.currentTarget.value) })}
+              />
+            </label>
+            <label className="local-chat-settings__check">
+              <input
+                type="checkbox"
+                checked={config.enableThinking}
+                onChange={(event) => update({ enableThinking: event.currentTarget.checked })}
+              />
+              <span>{t.chat.modelThinking}</span>
+            </label>
+            <label className="local-chat-settings__check">
+              <input
+                type="checkbox"
+                checked={config.stream}
+                onChange={(event) => update({ stream: event.currentTarget.checked })}
+              />
+              <span>{t.chat.modelStream}</span>
+            </label>
+            <p className="local-chat-settings__hint">{t.chat.modelVision}</p>
+          </fieldset>
           <div className="local-chat-settings__actions">
             <button
               type="button"

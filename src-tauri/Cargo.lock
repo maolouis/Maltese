@@ -2484,10 +2484,11 @@ dependencies = [
 
 [[package]]
 name = "maltese-assistant"
-version = "1.3.22"
+version = "1.3.23"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "futures-util",
  "image",
  "imap",
  "imap-proto",

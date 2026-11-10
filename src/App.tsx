@@ -5920,14 +5920,63 @@ function IslandApp({
   }, []);
   const [mediaState, setMediaState] =
     useState<MediaState>(DEFAULT_MEDIA_STATE);
+  // 前台程序类型（用来判断是不是在看视频）。系统媒体会话对浏览器经常只报
+  // Unknown，光靠 PlaybackType 认不出视频，所以这里补一份前台窗口类型。
+  const [activeActivityKind, setActiveActivityKind] = useState("");
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    let cancelled = false;
+    const tick = () => {
+      void invoke<{ kind: string }>("get_active_activity")
+        .then((info) => {
+          if (!cancelled) setActiveActivityKind(info?.kind ?? "");
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const timer = window.setInterval(tick, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // 判定「现在播的是视频而不是音乐」。三道依据按可靠性排序：
+  // 1) 系统明确上报 Video / Image；
+  // 2) 前台是浏览器且这段媒体没有歌手信息（浏览器播视频通常只有标题）；
+  // 3) 前台窗口类型已经是 video（B 站客户端、播放器、全屏视频页）。
+  const mediaLooksLikeVideo = useMemo(() => {
+    if (mediaState.mediaKind === "video" || mediaState.mediaKind === "image") {
+      return true;
+    }
+    const source = (mediaState.sourceApp ?? "").toLowerCase();
+    const browserSource =
+      /chrome|edge|firefox|brave|opera|360|qqbrowser|sogou|arc/.test(source);
+    // 有些浏览器把「网站名」塞进 artist 字段，这种也不算歌手。
+    const artistText = (mediaState.artist ?? "").trim();
+    const artistIsSiteName =
+      artistText === "" ||
+      /^(youtube|bilibili|哔哩哔哩|netflix|爱奇艺|iqiyi|腾讯视频|优酷|youku|抖音|douyin|微博|weibo|vimeo|twitch)$/i.test(
+        artistText,
+      );
+    if (browserSource && artistIsSiteName) {
+      return true;
+    }
+    if (activeActivityKind === "video") {
+      return true;
+    }
+    return false;
+  }, [activeActivityKind, mediaState.artist, mediaState.mediaKind, mediaState.sourceApp]);
+
   // 播视频时不要拉歌词：浏览器播视频也会上报「正在播放 + 时长」，
   // 之前会把它当音乐去搜歌词，出现视频配歌词的错乱。
-  const mediaIsVideo = mediaState.mediaKind === "video" || mediaState.mediaKind === "image";
   const lyrics = useLyrics(
     mediaState.title,
     mediaState.artist,
     mediaState.positionMs,
-    mediaState.available && mediaState.durationMs > 0 && !mediaIsVideo,
+    mediaState.available && mediaState.durationMs > 0 && !mediaLooksLikeVideo,
   );
   const [isMediaTrackChanging, setIsMediaTrackChanging] = useState(false);
   const [mediaCommandError, setMediaCommandError] = useState<string | null>(
@@ -6967,7 +7016,7 @@ function IslandApp({
       return;
     }
     // 播视频时不要说「正在听」，那是视频不是音乐。
-    if (mediaState.mediaKind === "video" || mediaState.mediaKind === "image") {
+    if (mediaLooksLikeVideo) {
       return;
     }
     if (mediaState.playbackStatus !== "playing" || !mediaState.title) {
@@ -6982,7 +7031,7 @@ function IslandApp({
       showCloudBubble(`🎵 ${mediaState.title}`, `你也喜欢听《${mediaState.title}》呀${artist}～ 我陪你一起听`);
     }
     lastTrackRef.current = key;
-  }, [mediaState.artist, mediaState.mediaKind, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
+  }, [mediaLooksLikeVideo, mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
 
   // 剪贴板新增内容 → 云朵气泡（显示内容摘要）
   const lastClipboardIdRef = useRef<string | null>(null);
@@ -8584,8 +8633,7 @@ function IslandApp({
       return activityMood;
     }
     // 播视频（浏览器看剧/B 站）不算「在听音乐」：不要切到听歌表情。
-    const mediaIsMusic = mediaState.mediaKind !== "video" && mediaState.mediaKind !== "image";
-    if (mediaIsMusic && (mediaState.playbackStatus === "playing" || mediaState.audioActive)) {
+    if (!mediaLooksLikeVideo && (mediaState.playbackStatus === "playing" || mediaState.audioActive)) {
       return "listening";
     }
     if (agentVisualState === "attention" || qqNotifications.preview || qqMail.preview) {
@@ -8595,7 +8643,7 @@ function IslandApp({
       return "working";
     }
     return "idle";
-  }, [activityMood, agentVisualState, mediaState.audioActive, mediaState.playbackStatus, petAction, qqMail.preview, qqNotifications.preview]);
+  }, [activityMood, agentVisualState, mediaLooksLikeVideo, mediaState.audioActive, mediaState.playbackStatus, petAction, qqMail.preview, qqNotifications.preview]);
 
   return (
     <main

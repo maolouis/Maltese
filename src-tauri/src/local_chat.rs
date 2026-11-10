@@ -1,10 +1,13 @@
 //! 本地模型聊天桥：兼容 Ollama / LM Studio / llama.cpp 等提供的
 //! OpenAI Chat Completions 接口。所有请求只从本机发出，不依赖 DSH。
 
+use futures_util::StreamExt;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::process::Command;
 use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 fn persona(character: &str) -> &'static str {
     match character {
@@ -22,12 +25,94 @@ fn persona(character: &str) -> &'static str {
 const MAX_HISTORY_TURNS: usize = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(180);
+const STRATA_LAUNCHER: &str = r"F:\Strata\bin\strata.cmd";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalChatTurn {
     role: String,
     content: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalChatGenerationSettings {
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub enable_thinking: Option<bool>,
+}
+
+fn build_messages(
+    message: &str,
+    history: Option<Vec<LocalChatTurn>>,
+    character: &str,
+    images: Option<Vec<String>>,
+) -> Vec<Value> {
+    let mut messages = vec![json!({ "role": "system", "content": persona(character) })];
+    if let Some(history) = history {
+        let mut turns = history
+            .into_iter()
+            .filter(|turn| matches!(turn.role.as_str(), "user" | "assistant"))
+            .filter(|turn| !turn.content.trim().is_empty())
+            .collect::<Vec<_>>();
+        let keep_from = turns.len().saturating_sub(MAX_HISTORY_TURNS);
+        turns.drain(..keep_from);
+        for turn in turns {
+            messages.push(json!({
+                "role": turn.role,
+                "content": turn.content.trim(),
+            }));
+        }
+    }
+    messages.push(json!({
+        "role": "user",
+        "content": user_content(message, images),
+    }));
+    messages
+}
+
+fn user_content(message: &str, images: Option<Vec<String>>) -> Value {
+    let images = images
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|image| image.starts_with("data:image/"))
+        .collect::<Vec<_>>();
+    if images.is_empty() {
+        return json!(message);
+    }
+    let mut parts = vec![json!({ "type": "text", "text": message })];
+    parts.extend(images.into_iter().map(|image| {
+        json!({
+            "type": "image_url",
+            "image_url": { "url": image }
+        })
+    }));
+    Value::Array(parts)
+}
+
+fn generation_payload(
+    model: &str,
+    messages: Vec<Value>,
+    settings: &LocalChatGenerationSettings,
+    stream: bool,
+) -> Value {
+    let mut payload = json!({
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+        "max_tokens": settings.max_tokens.unwrap_or(256),
+        "temperature": settings.temperature.unwrap_or(0.7),
+        "top_p": settings.top_p.unwrap_or(0.9),
+        "enable_thinking": settings.enable_thinking.unwrap_or(false),
+        "reasoning_budget_tokens": if settings.enable_thinking.unwrap_or(false) { 128 } else { 0 },
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if object.get("max_tokens") == Some(&Value::from(0)) {
+            object.remove("max_tokens");
+        }
+    }
+    payload
 }
 
 #[tauri::command]
@@ -51,35 +136,17 @@ pub async fn local_chat(
         return Err("还没有填写本地模型名称。请先在聊天右上角的设置里选择模型。".into());
     }
     let endpoint = chat_endpoint(&base_url)?;
-    let mut messages = Vec::new();
-    messages.push(json!({ "role": "system", "content": persona(&character) }));
-    if let Some(history) = history {
-        let mut turns = history
-            .into_iter()
-            .filter(|turn| matches!(turn.role.as_str(), "user" | "assistant"))
-            .filter(|turn| !turn.content.trim().is_empty())
-            .collect::<Vec<_>>();
-        let keep_from = turns.len().saturating_sub(MAX_HISTORY_TURNS);
-        turns.drain(..keep_from);
-        for turn in turns {
-            messages.push(json!({
-                "role": turn.role,
-                "content": turn.content.trim(),
-            }));
-        }
-    }
-    messages.push(json!({ "role": "user", "content": message }));
+    let settings = LocalChatGenerationSettings::default();
+    let messages = build_messages(&message, history, &character, None);
 
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CHAT_TIMEOUT)
         .build()
         .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
-    let mut request = client.post(endpoint.clone()).json(&json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-    }));
+    let mut request = client
+        .post(endpoint.clone())
+        .json(&generation_payload(&model, messages, &settings, false));
     if let Some(key) = api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }
@@ -108,6 +175,134 @@ pub async fn local_chat(
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
         .ok_or_else(|| "本地模型没有返回文字。请检查模型名称是否正确。".to_string())
+}
+
+#[tauri::command]
+pub async fn local_chat_stream(
+    app: AppHandle,
+    request_id: String,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    message: String,
+    history: Option<Vec<LocalChatTurn>>,
+    character: String,
+    images: Option<Vec<String>>,
+    settings: Option<LocalChatGenerationSettings>,
+) -> Result<String, String> {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        return Err("想和小狗说什么？".into());
+    }
+    if message.chars().count() > 4_000 {
+        return Err("一次最多说 4000 个字。".into());
+    }
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("还没有填写本地模型名称。请先在聊天右上角的设置里选择模型。".into());
+    }
+    let endpoint = chat_endpoint(&base_url)?;
+    let settings = settings.unwrap_or_default();
+    let messages = build_messages(&message, history, &character, images);
+    let client = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(CHAT_TIMEOUT)
+        .build()
+        .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
+    let mut request = client
+        .post(endpoint.clone())
+        .json(&generation_payload(&model, messages, &settings, true));
+    if let Some(key) = api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            format!("本地模型响应超时（{endpoint}）。模型可能还在加载，稍后再试一次。")
+        } else if error.is_connect() {
+            format!("连接不到本地模型服务（{endpoint}）。请确认服务已启动，并检查接口地址。")
+        } else {
+            format!("请求本地模型失败：{error}")
+        }
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let error = api_error(status.as_u16(), &body);
+        emit_stream_event(&app, &request_id, "error", &error);
+        return Err(error);
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut pending = String::new();
+    let mut full_text = String::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("读取本地模型流失败：{error}"))?;
+        pending.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(newline) = pending.find('\n') {
+            let line = pending.drain(..=newline).collect::<String>();
+            let data = line.trim().strip_prefix("data:").map(str::trim).unwrap_or("");
+            if data.is_empty() {
+                continue;
+            }
+            if data == "[DONE]" {
+                break;
+            }
+            let value = match serde_json::from_str::<Value>(data) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if let Some(delta) = extract_delta(&value) {
+                full_text.push_str(&delta);
+                emit_stream_delta(&app, &request_id, &delta);
+            }
+        }
+    }
+    if full_text.trim().is_empty() {
+        return Err("本地模型没有返回文字。请检查模型名称和服务日志。".into());
+    }
+    emit_stream_event(&app, &request_id, "done", &full_text);
+    Ok(full_text.trim().to_string())
+}
+
+fn emit_stream_delta(app: &AppHandle, request_id: &str, text: &str) {
+    let _ = app.emit(
+        "local-chat-stream",
+        json!({ "requestId": request_id, "kind": "delta", "text": text }),
+    );
+}
+
+fn emit_stream_event(app: &AppHandle, request_id: &str, kind: &str, text: &str) {
+    let _ = app.emit(
+        "local-chat-stream",
+        json!({ "requestId": request_id, "kind": kind, "text": text }),
+    );
+}
+
+fn extract_delta(value: &Value) -> Option<String> {
+    value
+        .pointer("/choices/0/delta/content")
+        .or_else(|| value.pointer("/choices/0/text"))
+        .or_else(|| value.pointer("/message/content"))
+        .and_then(content_to_string)
+}
+
+#[tauri::command]
+pub fn strata_launch() -> Result<(), String> {
+    let launcher = std::path::Path::new(STRATA_LAUNCHER);
+    if !launcher.is_file() {
+        return Err(format!("找不到 Strata 启动器：{STRATA_LAUNCHER}"));
+    }
+    let mut command = Command::new("cmd.exe");
+    command.args(["/d", "/c", STRATA_LAUNCHER, "launch", "--no-tui", "--yes"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("启动 Strata 失败：{error}"))?;
+    Ok(())
 }
 
 #[tauri::command]

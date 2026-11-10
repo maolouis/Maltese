@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { LoaderCircle, Send, Settings2, Sparkles, Trash2 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
 import { usePetCharacter } from "./petCharacters";
@@ -18,6 +19,13 @@ type ChatMessage = {
   role: "user" | "assistant";
   text: string;
   at: number;
+  imageCount?: number;
+};
+
+type LocalChatStreamEvent = {
+  requestId: string;
+  kind: "delta" | "done" | "error";
+  text: string;
 };
 
 const MESSAGES_KEY = "focusd-island-pet-chat-messages";
@@ -58,6 +66,8 @@ export function PetChat() {
     window.localStorage.getItem(SESSION_KEY),
   );
   const [draft, setDraft] = useState("");
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [streamingReply, setStreamingReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatConfig, setChatConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
@@ -89,6 +99,15 @@ export function PetChat() {
     } catch {
       // 存储满了也不影响当前会话。
     }
+  }, []);
+
+  const attachImage = useCallback((file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setImageData(reader.result);
+    };
+    reader.readAsDataURL(file);
   }, []);
 
   const send = useCallback(async () => {
