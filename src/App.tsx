@@ -5074,8 +5074,24 @@ function AssistantPanel() {
   }, [appResults]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => appSearchInputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
+    // 面板可能是热键打开的：窗口刚显示时 DOM 还没拿到焦点，单次 focus 会被吞掉。
+    // 这里补几次重试，并在窗口重新获得焦点时再抢一次，保证能直接打字。
+    const focusSearch = () => appSearchInputRef.current?.focus();
+    const timers = [0, 60, 180, 400].map((ms) => window.setTimeout(focusSearch, ms));
+    const handleWindowFocus = () => focusSearch();
+    window.addEventListener("focus", handleWindowFocus);
+    void getCurrentWindow().setFocus().catch(() => undefined);
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, []);
+
+  // 热键重复按（面板已展开时）也要把焦点拉回搜索框。
+  useEffect(() => {
+    const focusSearch = () => appSearchInputRef.current?.focus();
+    window.addEventListener("maltese-focus-app-search", focusSearch);
+    return () => window.removeEventListener("maltese-focus-app-search", focusSearch);
   }, []);
 
   useEffect(() => {
@@ -6882,6 +6898,10 @@ function IslandApp({
     let unlisten: (() => void) | null = null;
     void listen("maltese-open-shortcut-panel", () => {
       openIslandPage("assistant");
+      // 等 AssistantPanel 挂载并注册监听后再触发聚焦。
+      window.setTimeout(() => {
+        window.dispatchEvent(new Event("maltese-focus-app-search"));
+      }, 120);
     })
       .then((cleanup) => {
         if (cancelled) cleanup();

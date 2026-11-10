@@ -793,6 +793,39 @@ fn show_pet_bubble(
         "menu" => LogicalSize::new(240.0, 232.0),
         _ => LogicalSize::new(300.0, 224.0),
     };
+
+    place_bubble_near_main(&app, &bubble, &main, desired)?;
+    let payload = json!({ "mode": mode, "title": title, "body": body, "ttlMs": ttl_ms });
+    if let Ok(mut cached) = BUBBLE_PAYLOAD.lock() {
+        *cached = Some(payload.clone());
+    }
+    bubble.show().map_err(|error| error.to_string())?;
+    bubble
+        .emit("pet-bubble-content", payload)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// 气泡窗口按内容调整高度后重新贴到小狗侧边（云朵文字长度不固定，固定窗口会截断）。
+#[tauri::command]
+fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let main = main_window(&app)?;
+    let bubble = app
+        .get_webview_window(BUBBLE_WINDOW_LABEL)
+        .ok_or_else(|| "气泡窗口未注册".to_string())?;
+    let width = width.clamp(220.0, 420.0);
+    let height = height.clamp(120.0, 560.0);
+    place_bubble_near_main(&app, &bubble, &main, LogicalSize::new(width, height))
+}
+
+/// 设置气泡尺寸并贴到小狗旁边：优先右侧，放不下翻左侧；上下空间不够就翻面。
+fn place_bubble_near_main(
+    app: &AppHandle,
+    bubble: &tauri::WebviewWindow,
+    main: &tauri::WebviewWindow,
+    desired: LogicalSize<f64>,
+) -> Result<(), String> {
+    let _ = app;
     let _ = bubble.set_size(Size::Logical(desired));
 
     let main_pos = main
@@ -837,16 +870,7 @@ fn show_pet_bubble(
 
     bubble
         .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-        .map_err(|error| error.to_string())?;
-    let payload = json!({ "mode": mode, "title": title, "body": body, "ttlMs": ttl_ms });
-    if let Ok(mut cached) = BUBBLE_PAYLOAD.lock() {
-        *cached = Some(payload.clone());
-    }
-    bubble.show().map_err(|error| error.to_string())?;
-    bubble
-        .emit("pet-bubble-content", payload)
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| error.to_string())
 }
 
 // 前端（气泡窗口）启动后补取最后一次气泡内容，避免冷启动丢事件。
@@ -2597,13 +2621,16 @@ fn apply_stage_geometry(
     let primary_monitor = window
         .primary_monitor()
         .map_err(|error| error.to_string())?;
-    let custom_monitor = state
-        .custom_position
-        .and_then(|position| {
-            monitor_for_island_position(window, position, state.collapsed_scale)
-                .ok()
-                .flatten()
-        });
+    // 拖到屏幕边缘外时，小狗槽中心可能已经不在任何显示器范围内；
+    // 这时退回当前/主显示器，而不是当成“没有自定义位置”把坐标夹回工作区，
+    // 否则表现为「可以往下拖出屏幕，却拖不出上边」。
+    let custom_monitor = state.custom_position.and_then(|position| {
+        monitor_for_island_position(window, position, state.collapsed_scale)
+            .ok()
+            .flatten()
+            .or_else(|| window.current_monitor().ok().flatten())
+            .or_else(|| window.primary_monitor().ok().flatten())
+    });
     let has_custom_monitor = custom_monitor.is_some();
     let monitor = custom_monitor
         .or_else(|| primary_monitor.or(current_monitor))
@@ -3608,6 +3635,7 @@ pub fn run() {
             desktop_extras::sync_desktop_extras,
             desktop_extras::get_pressed_keys,
             show_pet_bubble,
+            resize_pet_bubble,
             get_pet_bubble_payload,
             hide_pet_bubble,
             lock_island_corner,

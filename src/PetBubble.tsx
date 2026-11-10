@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import "./PetBubble.css";
 
@@ -24,6 +24,22 @@ export default function PetBubble() {
   const [todoLeft, setTodoLeft] = useState<number | null>(null);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
   const hideTimer = useRef<number | null>(null);
+  const cloudRef = useRef<HTMLDivElement | null>(null);
+
+  // 云朵文字长度不固定，固定 224px 的窗口会把内容截断：
+  // 渲染后量一次实际高度，让原生窗口跟着长高（上限由后端 clamp）。
+  useEffect(() => {
+    if (!isTauri() || payload?.mode !== "cloud") {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const element = cloudRef.current;
+      if (!element) return;
+      const height = Math.ceil(element.getBoundingClientRect().height + 28);
+      void invoke("resize_pet_bubble", { width: 300, height }).catch(() => undefined);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [payload]);
 
   const reportHover = useCallback((hovered: boolean) => {
     void emit("maltese-bubble-hover", { hovered });
@@ -156,7 +172,7 @@ export default function PetBubble() {
           </button>
         </div>
       ) : payload?.mode === "cloud" ? (
-        <div className="pet-cloud pet-bubble-cloud" role="status">
+        <div className="pet-cloud pet-bubble-cloud" role="status" ref={cloudRef}>
           {payload.title && <strong className="pet-bubble-cloud__title">{payload.title}</strong>}
           {payload.body && <p className="pet-bubble-cloud__body">{payload.body}</p>}
           <span className="pet-cloud__tail pet-cloud__tail--1" aria-hidden="true" />
