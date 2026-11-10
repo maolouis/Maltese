@@ -67,6 +67,8 @@ const EXPANDED_ISLAND_WIDTH: f64 = 560.0;
 const DEFAULT_EXPANDED_ISLAND_HEIGHT: f64 = 306.0;
 const MIN_EXPANDED_ISLAND_HEIGHT: f64 = 220.0;
 const EXPANDED_ISLAND_HEIGHT_RANGE: f64 = 240.0;
+/// 聊天框可以单独调高，这里给到 960，实际会被屏幕工作区再收一次。
+const MAX_EXPANDED_ISLAND_HEIGHT: f64 = 960.0;
 const EXPANDED_RADIUS: f64 = 30.0;
 const STAGE_WINDOW_PADDING_Y: f64 = 24.0;
 const TUCKED_VISIBLE_EDGE_HEIGHT: f64 = 10.0;
@@ -353,7 +355,7 @@ fn set_island_interaction(
         if let Some(expanded_height) = expanded_height {
             state.expanded_height = expanded_height.clamp(
                 MIN_EXPANDED_ISLAND_HEIGHT,
-                DEFAULT_EXPANDED_ISLAND_HEIGHT + EXPANDED_ISLAND_HEIGHT_RANGE,
+                MAX_EXPANDED_ISLAND_HEIGHT,
             );
         }
         if let Some(collapsed_width) = collapsed_width {

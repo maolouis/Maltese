@@ -303,6 +303,7 @@ type IslandSettings = {
   cursorPetSize: number;
   collapsedScale: number;
   expandedScale: number;
+  chatPanelHeight: number;
   marginY: number;
   taskTextColor: string;
   pulseColor: string;
@@ -529,6 +530,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   cursorPetSize: 75,
   collapsedScale: 0.89,
   expandedScale: 0.91,
+  chatPanelHeight: 520,
   marginY: 0,
   taskTextColor: DEFAULT_TASK_TEXT_COLOR,
   pulseColor: "#3ae489",
@@ -761,6 +763,11 @@ function normalizeSettings(
       Number(expandedScale),
       0.5,
       1.8,
+    ),
+    chatPanelHeight: clamp(
+      Math.round(Number(settings?.chatPanelHeight ?? DEFAULT_SETTINGS.chatPanelHeight)),
+      360,
+      900,
     ),
     marginY: clamp(
       Number(hasPreviousDefaultMargin ? DEFAULT_SETTINGS.marginY : marginY),
@@ -2362,6 +2369,15 @@ function LayoutEditor({
           step={0.01}
           suffix="x"
           onChange={(expandedScale) => onSettingsChange({ ...settings, expandedScale })}
+        />
+        <SliderControl
+          label="聊天框高度"
+          value={settings.chatPanelHeight}
+          min={360}
+          max={900}
+          step={10}
+          suffix="px"
+          onChange={(chatPanelHeight) => onSettingsChange({ ...settings, chatPanelHeight })}
         />
         <SliderControl
           label={t.settings.layout.marginY}
@@ -5877,7 +5893,7 @@ function IslandApp({
           : page === "assistant"
             ? 520
           : page === "chat"
-            ? 520
+            ? settings.chatPanelHeight
           : page === "video"
             ? 430
           : page === "qq"
