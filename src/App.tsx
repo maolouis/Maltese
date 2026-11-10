@@ -348,6 +348,8 @@ type IslandSettings = {
   proactiveBubbles: boolean;
   proactiveChat: boolean;
   proactiveChatMinutes: number;
+  /** 主动聊天方式：定时（interval）或跟随状态变化（state）。 */
+  proactiveChatMode: ProactiveChatMode;
   petFlipY: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -359,6 +361,8 @@ type PetFpsMode = "smooth" | "balanced" | "normal" | "saver";
 type PetLockCorner = "" | "tl" | "tr" | "bl" | "br";
 
 type FullscreenAvoidMode = "tuck" | "hide" | "off";
+
+type ProactiveChatMode = "interval" | "state";
 
 type IslandPreset = {
   id: string;
@@ -585,6 +589,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   proactiveBubbles: true,
   proactiveChat: false,
   proactiveChatMinutes: 30,
+  proactiveChatMode: "interval",
   petFlipY: false,
   roam: false,
   sleepAfterSeconds: 150,
@@ -883,6 +888,7 @@ function normalizeSettings(
       5,
       240,
     ),
+    proactiveChatMode: settings?.proactiveChatMode === "state" ? "state" : "interval",
     petFlipY: settings?.petFlipY === true,
     roam: settings?.roam === true,
     clickSquash: settings?.clickSquash !== false,
@@ -2814,15 +2820,38 @@ function LayoutEditor({
           onChange={(proactiveChat) => onSettingsChange({ ...settings, proactiveChat })}
         />
         {settings.proactiveChat && (
-          <SliderControl
-            label="主动聊天间隔"
-            value={settings.proactiveChatMinutes}
-            min={5}
-            max={240}
-            step={5}
-            suffix="分钟"
-            onChange={(proactiveChatMinutes) => onSettingsChange({ ...settings, proactiveChatMinutes })}
-          />
+          <>
+            <div className="appearance-mode-control">
+              <span>主动聊天方式</span>
+              <div className="appearance-mode-control__segments" role="group" aria-label="主动聊天方式">
+                <button
+                  type="button"
+                  className={settings.proactiveChatMode === "interval" ? "appearance-mode-control--active" : ""}
+                  aria-pressed={settings.proactiveChatMode === "interval"}
+                  onClick={() => onSettingsChange({ ...settings, proactiveChatMode: "interval" })}
+                >
+                  定时
+                </button>
+                <button
+                  type="button"
+                  className={settings.proactiveChatMode === "state" ? "appearance-mode-control--active" : ""}
+                  aria-pressed={settings.proactiveChatMode === "state"}
+                  onClick={() => onSettingsChange({ ...settings, proactiveChatMode: "state" })}
+                >
+                  跟随状态
+                </button>
+              </div>
+            </div>
+            <SliderControl
+              label={settings.proactiveChatMode === "state" ? "最短间隔（状态模式下两次之间的冷却）" : "主动聊天间隔"}
+              value={settings.proactiveChatMinutes}
+              min={5}
+              max={240}
+              step={5}
+              suffix="分钟"
+              onChange={(proactiveChatMinutes) => onSettingsChange({ ...settings, proactiveChatMinutes })}
+            />
+          </>
         )}
         <SliderControl
           label="多久没动静就趴下睡"
@@ -6679,20 +6708,30 @@ function IslandApp({
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
 
   // 让模型观察本机状态并主动说一句；说完弹云朵气泡，聊天记录里也留一条。
-  // 这个 effect 的依赖必须尽量少：之前依赖 mediaState / mode，
-  // 每次切歌或开关面板都会重跑并把计时基准重置成“现在”，
-  // 结果主动聊天几乎永远不到点，也就看不到气泡。
+  // 支持两种模式：
+  //   interval —— 每隔 N 分钟说一次（定时）；
+  //   state    —— 只在前台程序 / 播放状态这类“情境”稳定变化后说（跟随状态）。
+  // 这个 effect 的依赖必须尽量少，否则切歌/开关面板会把计时基准重置成“现在”，
+  // 主动聊天就永远不到点。
   const lastProactiveChatAt = useRef(0);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const mediaRef = useRef(mediaState);
   mediaRef.current = mediaState;
+  // 状态模式用：上一次的情境、情境开始时间、上次说过的情境。
+  const proactiveSituationRef = useRef<{ key: string; since: number; firedFor: string }>({
+    key: "",
+    since: 0,
+    firedFor: "",
+  });
 
   useEffect(() => {
     if (!isTauri() || !settings.proactiveChat) {
       return;
     }
     const minutes = Math.max(5, settings.proactiveChatMinutes);
+    const cooldownMs = minutes * 60_000;
+    const mode_ = settings.proactiveChatMode;
     if (lastProactiveChatAt.current === 0) {
       lastProactiveChatAt.current = Date.now();
     }
@@ -6712,16 +6751,19 @@ function IslandApp({
         // 存储不可用时只弹气泡
       }
     };
+
     const tick = async () => {
-      if (Date.now() - lastProactiveChatAt.current < minutes * 60_000) return;
-      // 面板展开或正在聊天时先不插话，等回到挂机状态再弹。
+      // 面板展开或正在聊天时先不插话，等回到挂机状态再处理。
       if (modeRef.current !== "collapsed") return;
-      lastProactiveChatAt.current = Date.now();
+      const now = Date.now();
+
       const context: string[] = [];
+      let kind = "";
       try {
         const activity = await invoke<{ kind: string; process: string; title: string }>(
           "get_active_activity",
         );
+        kind = activity?.kind ?? "";
         if (activity?.process) {
           context.push(`前台程序：${activity.title || activity.process}`);
         }
@@ -6729,18 +6771,49 @@ function IslandApp({
         // 忽略
       }
       const media = mediaRef.current;
+      const mediaPlaying = media.playbackStatus === "playing" && Boolean(media.title);
       if (media.title) {
         context.push(`正在播放：${media.title}${media.artist ? ` - ${media.artist}` : ""}`);
       }
+      let idleSeconds = 0;
       try {
-        const idle = await invoke<number>("get_system_idle_seconds");
-        if (idle > 60) context.push(`已经 ${Math.round(idle / 60)} 分钟没操作`);
+        idleSeconds = await invoke<number>("get_system_idle_seconds");
+        if (idleSeconds > 60) context.push(`已经 ${Math.round(idleSeconds / 60)} 分钟没操作`);
       } catch {
         // 忽略
       }
       const clock = new Date();
       context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
-      const prompt = `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
+
+      if (mode_ === "state") {
+        // 情境 = 前台程序类型 + 是否在播放 + 是否离开电脑。
+        const situation = `${kind}|${mediaPlaying ? "playing" : "silent"}|${idleSeconds > 600 ? "away" : "here"}`;
+        const state = proactiveSituationRef.current;
+        if (state.key !== situation) {
+          proactiveSituationRef.current = { ...state, key: situation, since: now };
+          return;
+        }
+        // 情境要稳定 3 分钟以上才说话，避免频繁切换应用时不停打扰。
+        if (now - state.since < 3 * 60_000) return;
+        // 同一个情境只主动说一次，且不能突破冷却时间。
+        if (state.firedFor === situation) return;
+        if (now - lastProactiveChatAt.current < cooldownMs) return;
+      } else if (now - lastProactiveChatAt.current < cooldownMs) {
+        return;
+      }
+
+      lastProactiveChatAt.current = now;
+      if (mode_ === "state") {
+        proactiveSituationRef.current = {
+          ...proactiveSituationRef.current,
+          firedFor: `${kind}|${mediaPlaying ? "playing" : "silent"}|${idleSeconds > 600 ? "away" : "here"}`,
+        };
+      }
+
+      const prompt =
+        mode_ === "state"
+          ? `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`
+          : `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
       let line = "";
       try {
         const config = loadLocalChatConfig();
@@ -6770,18 +6843,20 @@ function IslandApp({
       if (!line) return;
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
-      showCloudBubble("小狗想你了", line);
+      const greeting = kind === "browser" || kind === "video" ? "小狗也在看" : "小狗想你了";
+      showCloudBubble(greeting, line);
       appendChat(line);
     };
+
     const timer = window.setInterval(() => void tick(), 30_000);
     return () => window.clearInterval(timer);
   }, [
     proactiveCharacter,
     settings.proactiveChat,
     settings.proactiveChatMinutes,
+    settings.proactiveChatMode,
     showCloudBubble,
-  ]);
-  // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
+  ]);  // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
   useEffect(() => {
     if (
       updateState.stage !== "available" ||

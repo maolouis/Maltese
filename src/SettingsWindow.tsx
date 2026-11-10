@@ -64,6 +64,7 @@ type PetSettings = {
   proactiveBubbles: boolean;
   proactiveChat: boolean;
   proactiveChatMinutes: number;
+  proactiveChatMode: "interval" | "state";
   clipboardBubble: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -106,6 +107,7 @@ const DEFAULTS: PetSettings = {
   proactiveBubbles: true,
   proactiveChat: false,
   proactiveChatMinutes: 30,
+  proactiveChatMode: "interval",
   clipboardBubble: true,
   roam: false,
   sleepAfterSeconds: 150,
@@ -517,7 +519,23 @@ export default function SettingsWindow() {
         <Switch label="根据行为弹出气泡" hint="前台程序 / 时间 / 音乐 / 剪贴板 / 整点问候" checked={settings.proactiveBubbles} onChange={(value) => update("proactiveBubbles", value)} />
         <Switch label="让模型主动找你聊天" hint="按间隔读取本机状态，主动说一句话并写进聊天记录" checked={settings.proactiveChat} onChange={(value) => update("proactiveChat", value)} />
         {settings.proactiveChat && (
-          <Slider label="主动聊天间隔" value={settings.proactiveChatMinutes} min={5} max={240} step={5} suffix="分钟" onChange={(value) => update("proactiveChatMinutes", value)} />
+          <>
+            <Segments
+              label="主动聊天方式"
+              value={settings.proactiveChatMode}
+              items={[["interval", "定时"], ["state", "跟随状态"]]}
+              onChange={(value) => update("proactiveChatMode", value === "state" ? "state" : "interval")}
+            />
+            <Slider
+              label={settings.proactiveChatMode === "state" ? "最短间隔" : "主动聊天间隔"}
+              value={settings.proactiveChatMinutes}
+              min={5}
+              max={240}
+              step={5}
+              suffix="分钟"
+              onChange={(value) => update("proactiveChatMinutes", value)}
+            />
+          </>
         )}
         <Slider label="多久没动静就趴下睡" value={settings.sleepAfterSeconds} min={30} max={900} step={15} suffix="s" onChange={(value) => update("sleepAfterSeconds", value)} />
         <TuckGifControl />
