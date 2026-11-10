@@ -1491,6 +1491,47 @@ export function IslandShell({
     }
   }, [collapsedScale, overlayOpen, onOverlayClose]);
 
+  // 浮层刚打开时原生窗口还没来得及回传方向，先按小狗当前位置预判，
+  // 否则首帧会用上一轮的方向摆小狗，看起来往另一侧闪一下。
+  // 只在 overlayOpen 从 false 变 true 的那一帧算一次，之后以原生回传为准。
+  const overlayPlacementRef = useRef<{ side: "left" | "right"; vertical: "above" | "below" } | null>(
+    null,
+  );
+  if (!overlayOpen) {
+    overlayPlacementRef.current = null;
+  } else if (!overlayPlacementRef.current) {
+    const computed = window.getComputedStyle(document.documentElement);
+    const slotWidth = Number.parseFloat(computed.getPropertyValue("--pet-slot-w")) || 148;
+    const slotHeight = Number.parseFloat(computed.getPropertyValue("--pet-slot-h")) || 128;
+    const panelWidth = overlay?.mode === "hover" ? 320 : 300;
+    const panelHeight = overlay?.mode === "hover" ? 540 : 400;
+    const screenInfo = window.screen as Screen & { availLeft?: number; availTop?: number };
+    const availLeft = screenInfo.availLeft ?? 0;
+    const availTop = screenInfo.availTop ?? 0;
+    const dogX = window.screenX;
+    const dogY = window.screenY;
+    overlayPlacementRef.current = {
+      side:
+        dogX + slotWidth + 8 + panelWidth <= availLeft + screenInfo.availWidth ? "right" : "left",
+      vertical: dogY + slotHeight - panelHeight >= availTop ? "above" : "below",
+    };
+  }
+  const overlaySide = overlayPlacementRef.current?.side ?? panelSide;
+  const overlayVertical = overlayPlacementRef.current?.vertical ?? panelVertical;
+
+  // 原生算好的浮层方向：先钉住小狗，再放大窗口。
+  useEffect(() => {
+    const apply = (event: Event) => {
+      const detail = (event as CustomEvent<{ side?: string; vertical?: string }>).detail;
+      if (!detail) return;
+      setPanelSide(detail.side === "left" ? "left" : "right");
+      setPanelVertical(detail.vertical === "below" ? "below" : "above");
+      overlayPlacementRef.current = null;
+    };
+    window.addEventListener("maltese-overlay-placement", apply);
+    return () => window.removeEventListener("maltese-overlay-placement", apply);
+  }, []);
+
   const className = [
     "island",
     `island--${mode}`,
@@ -1501,8 +1542,8 @@ export function IslandShell({
     isLiquidGlass ? `island--glass-${nativeGlassState}` : "",
     showTitle ? "" : "island--title-hidden",
     overlayOpen ? "island--overlay-open" : "",
-    overlayOpen ? `island--overlay-${panelSide}` : "",
-    overlayOpen && panelVertical === "below" ? "island--overlay-below" : "",
+    overlayOpen ? `island--overlay-${overlaySide}` : "",
+    overlayOpen && overlayVertical === "below" ? "island--overlay-below" : "",
     mode === "expanded" ? `island--panel-${panelSide}` : "",
     mode === "expanded" && panelVertical === "below" ? "island--panel-below" : "",
   ]
@@ -6461,16 +6502,32 @@ function IslandApp({
     const generation = overlayGenerationRef.current;
     petOverlayRef.current = next;
     if (next) {
-      // 先把小狗钉到窗口角上（overlay 类），再让原生窗口放大：
-      // 顺序反过来的话，窗口已经变大、小狗还居中，会往左闪一下。
-      setOverlayOpen(true);
-      void invoke("set_island_overlay", { overlay: next.mode, generation })
-        .catch(() => undefined)
-        .finally(() => {
-          if (overlayGenerationRef.current === generation) {
-            setPetOverlay(next);
-          }
-        });
+      // 严格三步，避免中间帧：①让原生只算方向 → ②把小狗按该方向钉到窗口角上
+      // （下一帧 React 提交，此时窗口还是原尺寸，画面不动）→ ③原生一次性改几何。
+      void (async () => {
+        try {
+          const plan = await invoke<{ side: "left" | "right"; vertical: "above" | "below" }>(
+            "plan_island_overlay",
+            { overlay: next.mode },
+          );
+          window.dispatchEvent(
+            new CustomEvent("maltese-overlay-placement", { detail: plan }),
+          );
+        } catch {
+          // 预判失败时退回原生事件回传的方向
+        }
+        if (overlayGenerationRef.current !== generation) {
+          return;
+        }
+        setOverlayOpen(true);
+        invoke("set_island_overlay", { overlay: next.mode, generation })
+          .catch(() => undefined)
+          .finally(() => {
+            if (overlayGenerationRef.current === generation) {
+              setPetOverlay(next);
+            }
+          });
+      })();
       return;
     }
     // 先移除面板，缩回窗口并回到原位后再取消底部锚定，小狗全程不移动。

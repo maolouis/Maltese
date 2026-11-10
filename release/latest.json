@@ -1,15 +1,15 @@
 {
-  "version": "1.3.15",
-  "notes": "# Maltese v1.3.15\n\n## 双击闪烁修复（改进版）\n\n- 双击改成自己按间隔判定（320 ms 内两次点击），不再依赖系统 `dblclick`：拖动用的指针捕获会让 `dblclick` 时有时无，之前双击打不开、还先切了一帧表情。\n- 单击切表情延迟到 340 ms 后执行；确认是双击就取消这次切换，双击时不会再闪一帧。\n- 浮层打开时先把小狗按槽位尺寸钉在窗口角上，再放大原生窗口，避免窗口变大、小狗还居中的第一帧往左偏。\n- 双击入口保持为互动气泡面板（原来 Ctrl + 悬停），右键仍是聊天。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T08:11:45Z",
+  "version": "1.3.17",
+  "notes": "# Maltese v1.3.17\n\n## 双击闪一下：改成「先定方向，再改窗口」\n\nv1.3.16 已经做了两件事（原子 `SetWindowPos`、打开时本地预判方向），但根本顺序问题还在：**方向是原生算完再回传的，前端第一次渲染只能用上一轮的方向**。小狗贴着屏幕右侧时，气泡要往左长，窗口会整体左移；如果这时前端还按「面板在右」布局（小狗钉在窗口左边），小狗就会跟着窗口一起左移，闪一下再弹回来。\n\n现在拆成严格三步：\n\n1. 新增 `plan_island_overlay(mode)`：原生只算方向（左右 / 上下），**不动窗口**。\n2. 前端拿到方向后先提交一次渲染，把小狗钉到正确的窗口角上（此时窗口还是原尺寸，屏幕画面不变）。\n3. 再调用 `set_island_overlay`，由原生一次 `SetWindowPos` 同时改尺寸和位置。\n\n这样窗口几何只有一次变化，且变化时小狗已经锚在正确的一侧，中间不存在错位帧。方向回传仍然是权威值，预判只作为预判失败时的兜底。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T08:37:49Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hXOGIrWXVWdTc3YjlOQlZnY1VVQVNuUElra2M4dUhjRHp5L2tzMFBLU0ZMZFlUTWVRbE8vS3N4Tnd2aVJKK1YzbTFRUnhqZDRYT05xL3k1Y29HbmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk4MjU2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE1X3g2NC1zZXR1cC5leGUKSEVvanlyWVZMTU01UjVRbzh2aHNVYjRHbmNOMFJla1ZxbTlFbVdKb01UOHJWOE9ZaWs5bzJtOFB2UnpKOFJsMjM2N25ybG1HZ0o0MzhsU2hmYTlWQlE9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.15/Maltese-1.3.15-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM01jY3Vtcm53eGN3c2locElIckw1L01JbjdIV1JRZVBjNjNYa09maUdiL3hJa0gwbFZaRlRDaW9pOE9Wc01VQStVWFdGaHNHcHBXMExiVVh5TCtpc1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk5ODM1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE3X3g2NC1zZXR1cC5leGUKYktvS0xXYmRZUjJ5cG1lN2Q3dytkbmNaQUNjNmMxWXB3TU4yQzdnNWtERExNbE5mZHNSZFRhVzdzTmFxaktadWt2dmlmeE5VRFVEdTJpdEpBb1JBRHc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.17/Maltese-1.3.17-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hXOGIrWXVWdTc3YjlOQlZnY1VVQVNuUElra2M4dUhjRHp5L2tzMFBLU0ZMZFlUTWVRbE8vS3N4Tnd2aVJKK1YzbTFRUnhqZDRYT05xL3k1Y29HbmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk4MjU2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE1X3g2NC1zZXR1cC5leGUKSEVvanlyWVZMTU01UjVRbzh2aHNVYjRHbmNOMFJla1ZxbTlFbVdKb01UOHJWOE9ZaWs5bzJtOFB2UnpKOFJsMjM2N25ybG1HZ0o0MzhsU2hmYTlWQlE9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.15/Maltese-1.3.15-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM01jY3Vtcm53eGN3c2locElIckw1L01JbjdIV1JRZVBjNjNYa09maUdiL3hJa0gwbFZaRlRDaW9pOE9Wc01VQStVWFdGaHNHcHBXMExiVVh5TCtpc1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk5ODM1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE3X3g2NC1zZXR1cC5leGUKYktvS0xXYmRZUjJ5cG1lN2Q3dytkbmNaQUNjNmMxWXB3TU4yQzdnNWtERExNbE5mZHNSZFRhVzdzTmFxaktadWt2dmlmeE5VRFVEdTJpdEpBb1JBRHc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.17/Maltese-1.3.17-x64-setup.exe"
     }
   }
 }

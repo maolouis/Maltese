@@ -50,8 +50,9 @@ use windows::Win32::{
     Graphics::Gdi::SetWindowRgn,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
     UI::WindowsAndMessaging::{
-        FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect, IsWindowVisible, ShowWindow,
-        SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
+        FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect, IsWindowVisible, SetWindowPos,
+        ShowWindow, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+        SW_SHOWNORMAL,
     },
 };
 use windows::core::{w, PCWSTR};
@@ -539,6 +540,34 @@ static OVERLAY_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OVERLAY_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 // 浮层打开时主窗口需要正常接收鼠标事件，暂停“鼠标不在岛内就穿透”的逻辑。
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+// 一次性设置窗口位置和尺寸。
+// 分开调用 set_size / set_position 会先后应用两次几何：中间那一帧窗口已经变大、
+// 位置还没挪（或反过来），小狗会从正确位置闪到另一侧。
+fn set_window_rect_atomic(
+    window: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    width: f64,
+    height: f64,
+    scale: f64,
+) -> Result<(), String> {
+    let phys_w = (width * scale).round().max(1.0) as i32;
+    let phys_h = (height * scale).round().max(1.0) as i32;
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    unsafe {
+        SetWindowPos(
+            HWND(hwnd.0 as *mut _),
+            None,
+            x,
+            y,
+            phys_w,
+            phys_h,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
 /// 展开态面板当前是否长在小狗下方。面板在下方时，窗口还要额外容纳
 /// 小狗槽 + 间隙，否则面板会被窗口底边裁掉，表现为“向下展开比向上展开矮”。
 static PANEL_BELOW: AtomicBool = AtomicBool::new(false);
@@ -588,16 +617,17 @@ fn set_island_overlay(
             let snapshot = OVERLAY_SNAPSHOT.lock().ok().and_then(|mut slot| slot.take());
             if let Some(snapshot) = snapshot {
                 // 浮层打开时窗口向上展开（小狗锚定在底部），收起时连同位置一起恢复，小狗不移动。
-                let _ = window.set_size(Size::Logical(LogicalSize::new(
-                    snapshot.base_w.max(1.0),
-                    snapshot.base_h.max(1.0),
-                )));
-                // 原样恢复小狗槽锚点。这里不要按“展开后的窗口尺寸”再 clamp 一次，
+                // 尺寸和位置必须一次设置：分两次会出现错位帧，看起来小狗闪一下。
+                // 原样恢复小狗槽锚点，不要按展开后的窗口尺寸再 clamp 一次，
                 // 否则靠屏幕边缘的小狗每开合一次气泡都会被往内挤一点，越飘越远。
-                let _ = window.set_position(Position::Physical(PhysicalPosition::new(
+                let _ = set_window_rect_atomic(
+                    &window,
                     snapshot.anchor_x,
                     snapshot.anchor_y,
-                )));
+                    snapshot.base_w.max(1.0),
+                    snapshot.base_h.max(1.0),
+                    scale,
+                );
             }
             // 缩回后再按最新状态套一次几何（浮层期间可能改过大小/位置）。
             let state = read_window_state();
@@ -709,15 +739,69 @@ fn set_island_overlay(
             };
             let _ = window.emit("maltese-panel-side", panel_side);
             let _ = window.emit("maltese-panel-vertical", panel_vertical);
-            window
-                .set_size(Size::Logical(LogicalSize::new(width, height)))
-                .map_err(|error| error.to_string())?;
-            window
-                .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-                .map_err(|error| error.to_string())?;
-            Ok(())
+            set_window_rect_atomic(&window, x, y, width, height, scale)
         }
     }
+}
+
+// 只算「面板朝哪边长」，不改窗口。
+// 前端先问这个，把小狗按正确方向钉住，再让 set_island_overlay 一次性改几何：
+// 反过来的话，窗口已经放大而小狗还按上一轮的方向摆，就会往一侧闪一下。
+#[tauri::command]
+fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Value, String> {
+    let window = main_window(&app)?;
+    let state = read_window_state();
+    let monitor = state
+        .custom_position
+        .and_then(|position| {
+            monitor_for_island_position(&window, position, state.collapsed_scale)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "没有可用的显示器".to_string())?;
+    let scale = monitor.scale_factor();
+    let work_area = monitor.work_area();
+    let mon_left = work_area.position.x;
+    let mon_right = work_area.position.x + work_area.size.width as i32;
+
+    let existing = OVERLAY_SNAPSHOT.lock().ok().and_then(|slot| *slot);
+    let (base_w, base_h) = match existing {
+        Some(snapshot) => (snapshot.base_w, snapshot.base_h),
+        None => stage_dimensions(state),
+    };
+    let anchor = existing
+        .map(|snapshot| IslandPosition {
+            x: snapshot.anchor_x,
+            y: snapshot.anchor_y,
+        })
+        .or(state.custom_position)
+        .or_else(|| window.outer_position().ok().map(|position| IslandPosition {
+            x: position.x,
+            y: position.y,
+        }))
+        .ok_or_else(|| "没有可用的窗口位置".to_string())?;
+
+    let (panel_w, panel_h): (f64, f64) = match overlay.as_str() {
+        "hover" => (320.0, 540.0),
+        "menu" => (210.0, 260.0),
+        _ => (300.0, 400.0),
+    };
+    let gap = 8.0;
+    let base_w_phys = (base_w * scale).round() as i32;
+    let base_h_phys = (base_h * scale).round() as i32;
+    let desired_w_phys = ((base_w + gap + panel_w) * scale).round() as i32;
+    let side = expanded_panel_side(anchor.x, base_w_phys, desired_w_phys, mon_left, mon_right);
+    let vertical = overlay_panel_vertical(
+        anchor.y,
+        base_h_phys,
+        (gap * scale).round() as i32,
+        (panel_h * scale).round() as i32,
+        work_area.position.y,
+        work_area.position.y + work_area.size.height as i32,
+    );
+    Ok(json!({ "side": side, "vertical": vertical }))
 }
 
 // 设置窗口点 X 时只隐藏，避免窗口被销毁后再也打不开。
@@ -3644,6 +3728,7 @@ pub fn run() {
             show_island_no_focus,
             open_settings_window,
             set_island_overlay,
+            plan_island_overlay,
             roam_island_step,
             minimize_island,
             lyrics::fetch_lyrics,
