@@ -1300,6 +1300,7 @@ export function IslandShell({
   const glassFrameRef = useRef<number | null>(null);
   const didDragRef = useRef(false);
   const clickTimerRef = useRef<number | null>(null);
+  const lastClickAtRef = useRef(0);
   const windowDragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -1717,35 +1718,46 @@ export function IslandShell({
             onClick={(event) => {
               event.stopPropagation();
               wakePet();
+              if (!mouseInteractions || didDragRef.current) {
+                return;
+              }
+              // 自己按时间间隔判定双击：系统 dblclick 和拖动/指针捕获打架，
+              // 这里用两次点击的间隔更可靠，也能在确认双击前不切表情。
+              const now = Date.now();
+              if (now - lastClickAtRef.current < 320) {
+                lastClickAtRef.current = 0;
+                if (clickTimerRef.current !== null) {
+                  window.clearTimeout(clickTimerRef.current);
+                  clickTimerRef.current = null;
+                }
+                onPetHoverStart();
+                return;
+              }
+              lastClickAtRef.current = now;
+              if (clickTimerRef.current !== null) {
+                window.clearTimeout(clickTimerRef.current);
+              }
+              clickTimerRef.current = window.setTimeout(() => {
+                clickTimerRef.current = null;
+                if (clickSquash) {
+                  setPetSquash(true);
+                  window.setTimeout(() => setPetSquash(false), 240);
+                }
+                playNextExpression();
+              }, 340);
+            }}
+            onDoubleClick={(event) => {
+              // 兜底：系统 dblclick 能触发时也走同一个入口（重复调用只会刷新内容，不会反复改窗口）。
+              event.stopPropagation();
               if (!mouseInteractions) {
                 return;
               }
-              if (!didDragRef.current) {
-                // 单击 = 切到下一张表情，但要等 240ms 确认不是双击，
-                // 否则双击会被拆成两次单击，小狗连闪两帧。
-                if (clickTimerRef.current !== null) {
-                  window.clearTimeout(clickTimerRef.current);
-                }
-                clickTimerRef.current = window.setTimeout(() => {
-                  clickTimerRef.current = null;
-                  if (clickSquash) {
-                    setPetSquash(true);
-                    window.setTimeout(() => setPetSquash(false), 240);
-                  }
-                  playNextExpression();
-                }, 240);
-              }
-            }}
-            onDoubleClick={(event) => {
-              event.stopPropagation();
               if (clickTimerRef.current !== null) {
                 window.clearTimeout(clickTimerRef.current);
                 clickTimerRef.current = null;
               }
-              if (mouseInteractions) {
-                // 双击打开互动气泡（原来 Ctrl+悬停的入口）。
-                onPetHoverStart();
-              }
+              lastClickAtRef.current = 0;
+              onPetHoverStart();
             }}
             onContextMenu={(event) => {
               // 右键小狗直接打开聊天；配置/隐藏到托盘在任务栏托盘菜单，

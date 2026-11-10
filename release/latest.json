@@ -1,15 +1,15 @@
 {
-  "version": "1.3.14",
-  "notes": "# Maltese v1.3.14\n\n## 修复双击时小狗闪一下\n\n- 双击打开互动气泡时，单击与双击会各触发一次点击：原来单击立刻切表情，双击的第一下已经换了一帧，看起来就是「闪一下」。现在单击延迟 240 ms 生效，双击会取消这次切换。\n- 浮层展开时小狗按槽位尺寸钉在窗口角上再放大窗口，不再在「窗口变大、小狗还居中」的第一帧往左偏。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T08:04:35Z",
+  "version": "1.3.15",
+  "notes": "# Maltese v1.3.15\n\n## 双击闪烁修复（改进版）\n\n- 双击改成自己按间隔判定（320 ms 内两次点击），不再依赖系统 `dblclick`：拖动用的指针捕获会让 `dblclick` 时有时无，之前双击打不开、还先切了一帧表情。\n- 单击切表情延迟到 340 ms 后执行；确认是双击就取消这次切换，双击时不会再闪一帧。\n- 浮层打开时先把小狗按槽位尺寸钉在窗口角上，再放大原生窗口，避免窗口变大、小狗还居中的第一帧往左偏。\n- 双击入口保持为互动气泡面板（原来 Ctrl + 悬停），右键仍是聊天。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T08:11:45Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xqRDRDWFB6YjhnRFRKK1hFbUoxbEhvQ3BqM3A1Yi80VXV6dGwrTGRVOFk0Z0MxRDFTOURqZDFTaUlDeFZ4MUI4b1BEWXZxaXN1MG9lVStteU1zQ1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3ODcxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE0X3g2NC1zZXR1cC5leGUKcHJ0d2V3QlpFMU5scS9FM3lwNk8zd05MSTVqdTVYQ3RuVXY2cGQ3Ly9NZU1KaWdZajJEWkY5REY5Uk96enQrL2ZySE9aMVp3STlVWExVYjJsZG5BQ1E9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.14/Maltese-1.3.14-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hXOGIrWXVWdTc3YjlOQlZnY1VVQVNuUElra2M4dUhjRHp5L2tzMFBLU0ZMZFlUTWVRbE8vS3N4Tnd2aVJKK1YzbTFRUnhqZDRYT05xL3k1Y29HbmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk4MjU2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE1X3g2NC1zZXR1cC5leGUKSEVvanlyWVZMTU01UjVRbzh2aHNVYjRHbmNOMFJla1ZxbTlFbVdKb01UOHJWOE9ZaWs5bzJtOFB2UnpKOFJsMjM2N25ybG1HZ0o0MzhsU2hmYTlWQlE9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.15/Maltese-1.3.15-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xqRDRDWFB6YjhnRFRKK1hFbUoxbEhvQ3BqM3A1Yi80VXV6dGwrTGRVOFk0Z0MxRDFTOURqZDFTaUlDeFZ4MUI4b1BEWXZxaXN1MG9lVStteU1zQ1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk3ODcxCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE0X3g2NC1zZXR1cC5leGUKcHJ0d2V3QlpFMU5scS9FM3lwNk8zd05MSTVqdTVYQ3RuVXY2cGQ3Ly9NZU1KaWdZajJEWkY5REY5Uk96enQrL2ZySE9aMVp3STlVWExVYjJsZG5BQ1E9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.14/Maltese-1.3.14-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hXOGIrWXVWdTc3YjlOQlZnY1VVQVNuUElra2M4dUhjRHp5L2tzMFBLU0ZMZFlUTWVRbE8vS3N4Tnd2aVJKK1YzbTFRUnhqZDRYT05xL3k1Y29HbmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mjk4MjU2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjE1X3g2NC1zZXR1cC5leGUKSEVvanlyWVZMTU01UjVRbzh2aHNVYjRHbmNOMFJla1ZxbTlFbVdKb01UOHJWOE9ZaWs5bzJtOFB2UnpKOFJsMjM2N25ybG1HZ0o0MzhsU2hmYTlWQlE9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.15/Maltese-1.3.15-x64-setup.exe"
     }
   }
 }

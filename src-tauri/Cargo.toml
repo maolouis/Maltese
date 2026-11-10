@@ -1,6 +1,6 @@
 [package]
 name = "maltese-assistant"
-version = "1.3.14"
+version = "1.3.15"
 description = "A line-dog desktop assistant for Windows."
 authors = ["you"]
 edition = "2021"
