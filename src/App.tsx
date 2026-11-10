@@ -1299,6 +1299,7 @@ export function IslandShell({
   const t = useTranslation();
   const glassFrameRef = useRef<number | null>(null);
   const didDragRef = useRef(false);
+  const clickTimerRef = useRef<number | null>(null);
   const windowDragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -1698,7 +1699,7 @@ export function IslandShell({
             role="button"
             tabIndex={0}
             aria-label={collapsedLabel}
-            title="单击摸摸头，双击庆祝，按住左键拖动换位置；按住 Ctrl 悬停打开互动面板"
+            title="单击切换下一张表情，双击打开互动面板，按住左键拖动换位置"
             onPointerDown={(event) => {
               wakePet();
               prepareWindowDrag(event);
@@ -1719,17 +1720,28 @@ export function IslandShell({
               if (!mouseInteractions) {
                 return;
               }
-              if (clickSquash) {
-                setPetSquash(true);
-                window.setTimeout(() => setPetSquash(false), 240);
-              }
               if (!didDragRef.current) {
-                // 单击 = 切到下一张表情，不再做摸头动作。
-                playNextExpression();
+                // 单击 = 切到下一张表情，但要等 240ms 确认不是双击，
+                // 否则双击会被拆成两次单击，小狗连闪两帧。
+                if (clickTimerRef.current !== null) {
+                  window.clearTimeout(clickTimerRef.current);
+                }
+                clickTimerRef.current = window.setTimeout(() => {
+                  clickTimerRef.current = null;
+                  if (clickSquash) {
+                    setPetSquash(true);
+                    window.setTimeout(() => setPetSquash(false), 240);
+                  }
+                  playNextExpression();
+                }, 240);
               }
             }}
             onDoubleClick={(event) => {
               event.stopPropagation();
+              if (clickTimerRef.current !== null) {
+                window.clearTimeout(clickTimerRef.current);
+                clickTimerRef.current = null;
+              }
               if (mouseInteractions) {
                 // 双击打开互动气泡（原来 Ctrl+悬停的入口）。
                 onPetHoverStart();
@@ -6437,7 +6449,8 @@ function IslandApp({
     const generation = overlayGenerationRef.current;
     petOverlayRef.current = next;
     if (next) {
-      // 先把小狗固定到窗口底部，再把窗口向上放大，最后渲染面板，避免裁切与跳动。
+      // 先把小狗钉到窗口角上（overlay 类），再让原生窗口放大：
+      // 顺序反过来的话，窗口已经变大、小狗还居中，会往左闪一下。
       setOverlayOpen(true);
       void invoke("set_island_overlay", { overlay: next.mode, generation })
         .catch(() => undefined)

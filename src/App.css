@@ -5357,6 +5357,15 @@ html.maltese-page-opening .island__collapsed {
   pointer-events: auto;
 }
 
+/* 浮层展开时小狗按槽位尺寸钉在角上：窗口放大/回缩的过程中不再重新居中，
+   否则双开时的第一帧会看到小狗往左侧闪一下。 */
+.island--overlay-left .island__collapsed.island__collapsed--pet-only,
+.island--overlay-below .island__collapsed.island__collapsed--pet-only {
+  width: var(--pet-slot-w, 148px);
+  height: var(--pet-slot-h, 128px);
+  justify-content: center;
+  align-items: center;
+}
 /* 小狗在屏幕右侧时，气泡翻到小狗左边：气泡向左长，小狗钉在窗口右边不移动。 */
 .island--overlay-left .island__collapsed.island__collapsed--pet-only {
   left: auto;
