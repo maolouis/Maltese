@@ -1,15 +1,15 @@
 {
-  "version": "1.3.9",
-  "notes": "# Maltese v1.3.9\n\n## 修复向下展开比向上展开矮\n\n- 现象：聊天面板翻到小狗下方时，可见高度比在上方时少了「小狗槽 + 间隙」那一截。\n- 根因：窗口高度只按面板高度算（`max(狗槽, 面板)`），但面板在下方的布局是「狗槽 + 8px + 面板」，多出来的狗槽部分把面板挤出了窗口底边，看起来就被裁短了。\n- 修复：原生层记住面板方向（`PANEL_BELOW`），面板在下方时窗口高度 = 狗槽 + 间隙 + 面板高度；CSS 里把面板高度固定为 `--expanded-island-height`，并用 `max-height` 兜住空间不足的情况。上下两种方向的可见面板高度现在一致。\n- 单测 `expanded_stage_uses_the_requested_panel_height` 覆盖了两种方向：上方 800px → 窗口 800px；下方 800px → 狗槽 + 8 + 800。\n\n## 验证\n\n- `cargo test --lib expanded_stage` 通过；`tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 实机：面板在上方和下方各展开一次，量窗口高度与面板可见高度，两者面板高度一致。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
-  "pub_date": "2026-11-10T06:36:44Z",
+  "version": "1.3.10",
+  "notes": "# Maltese v1.3.10\n\n## 快捷入口：搜索应用置顶、键盘直达\n\n- 「搜索应用」输入框从底部挪到快捷入口最上方，打开面板第一眼就能输入。\n- 用面板热键打开快捷入口后输入框自动获得焦点，可以直接打字；**↑ / ↓** 在搜索结果里切换，**Enter** 直接打开选中的软件，**Esc** 清空输入。鼠标悬停也会同步高亮当前项。\n- 「＋ 新增快捷方式」（手动填路径）仍留在底部「添加与设置」里，位置和用法不变；点搜索结果依然是「加入快捷入口」，不会误触打开。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- 实机：热键打开面板 → 输入「微信」→ ↓ 选择 → Enter 能打开对应程序；点结果仍能添加快捷方式。\n- 交付前按 [release-checklist](../release-checklist.md) 跑 `verify-release-artifacts.ps1`。",
+  "pub_date": "2026-11-10T06:57:39Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0w3YXhKcjY2eWU1MGxPMmJObGdSSjlMaUZIbmNhVDhuQjdFdkdmdmhiU2UwTDM0MDNvZ0JSTVQxTE5uM09uQVpvdTcxN0NhampIeGx0YWo1WXVlY3dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkyNTg3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjlfeDY0LXNldHVwLmV4ZQpkMjB5KzYzaGNVMnBxNzlUeDhPYnZqMzRHK0loSEs2b09qanZsQVB4MnR1dXdWQU9YQ3A5WGliZWdIKytTZFlZK1FiczlGVmVxU2t2Kyt2WXFOUlpEUT09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.9/Maltese-1.3.9-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hRTzFHVWpDaEhJWnZpOWw0OWZvajB4SUVRdG15bHIvb0RER2R2WHNRaEwxVjVxTEQwY0hXUGNvZEl5MTlJMHQ3cEVrR0FaYnhGT1dkTkt0RHlrdkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkzODU1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEwX3g2NC1zZXR1cC5leGUKaENKRnk3cGdCOTR3VWhCMEthOTRCbTU0Tm8rU2FkS3lmVnlEaE5JU0RnU0pYSjVML0tzc3FpYldBRjF4R1hlbGFzZEVxS2JiVlNNYW1LN1V4R3BSQ1E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.10/Maltese-1.3.10-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0w3YXhKcjY2eWU1MGxPMmJObGdSSjlMaUZIbmNhVDhuQjdFdkdmdmhiU2UwTDM0MDNvZ0JSTVQxTE5uM09uQVpvdTcxN0NhampIeGx0YWo1WXVlY3dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkyNTg3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjlfeDY0LXNldHVwLmV4ZQpkMjB5KzYzaGNVMnBxNzlUeDhPYnZqMzRHK0loSEs2b09qanZsQVB4MnR1dXdWQU9YQ3A5WGliZWdIKytTZFlZK1FiczlGVmVxU2t2Kyt2WXFOUlpEUT09Cg==",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.9/Maltese-1.3.9-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0hRTzFHVWpDaEhJWnZpOWw0OWZvajB4SUVRdG15bHIvb0RER2R2WHNRaEwxVjVxTEQwY0hXUGNvZEl5MTlJMHQ3cEVrR0FaYnhGT1dkTkt0RHlrdkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjkzODU1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjEwX3g2NC1zZXR1cC5leGUKaENKRnk3cGdCOTR3VWhCMEthOTRCbTU0Tm8rU2FkS3lmVnlEaE5JU0RnU0pYSjVML0tzc3FpYldBRjF4R1hlbGFzZEVxS2JiVlNNYW1LN1V4R3BSQ1E9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.10/Maltese-1.3.10-x64-setup.exe"
     }
   }
 }
