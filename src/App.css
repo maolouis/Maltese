@@ -5475,7 +5475,11 @@ html.maltese-page-opening .island__collapsed {
 
 .island--panel-below .island__expanded {
   top: calc(var(--pet-slot-h, 128px) + 8px);
-  bottom: 0;
+  /* 高度固定成面板自身高度，窗口多出来的部分是给小狗槽用的；
+     空间不够时用 max-height 兜底，避免整块面板被窗口底边裁掉。 */
+  bottom: auto;
+  height: var(--expanded-island-height, 306px);
+  max-height: calc(100% - var(--pet-slot-h, 128px) - 8px);
 }
 
 .island--panel-below .island__expanded::before {

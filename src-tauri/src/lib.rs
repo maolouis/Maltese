@@ -524,6 +524,9 @@ static OVERLAY_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OVERLAY_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 // 浮层打开时主窗口需要正常接收鼠标事件，暂停“鼠标不在岛内就穿透”的逻辑。
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 展开态面板当前是否长在小狗下方。面板在下方时，窗口还要额外容纳
+/// 小狗槽 + 间隙，否则面板会被窗口底边裁掉，表现为“向下展开比向上展开矮”。
+static PANEL_BELOW: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn set_island_overlay(
@@ -2727,6 +2730,9 @@ fn apply_stage_geometry(
                 work_top,
                 work_bottom,
             );
+            // 面板翻到下方时窗口要额外装下小狗槽和间隙；重新按方向取一次尺寸。
+            PANEL_BELOW.store(panel_vertical == "below", Ordering::Relaxed);
+            let (_, stage_height) = stage_dimensions(state);
             let vertical_space = if panel_vertical == "above" {
                 (dog_y + slot_h_phys - work_top).max(0)
             } else {
@@ -2898,9 +2904,15 @@ fn stage_dimensions(state: IslandWindowState) -> (f64, f64) {
             // 之前写死成 520，导致设置里的聊天框高度改了也不生效。
             let slot_w = slot_width_css(state.collapsed_scale);
             let slot_h = slot_height_css(state.collapsed_scale);
+            let height = if PANEL_BELOW.load(Ordering::Relaxed) {
+                // 面板在小狗下方：狗槽 + 间隙 + 面板，否则面板会被窗口底边裁掉。
+                slot_h + EXPANDED_PANEL_GAP + state.expanded_height
+            } else {
+                slot_h.max(state.expanded_height)
+            };
             (
                 slot_w + EXPANDED_PANEL_GAP + EXPANDED_PANEL_WIDTH,
-                slot_h.max(state.expanded_height),
+                height,
             )
         }
     }
@@ -3113,14 +3125,24 @@ mod tests {
 
     #[test]
     fn expanded_stage_uses_the_requested_panel_height() {
+        // 面板在上方（或左右）：窗口高度就是面板高度，且不小于小狗槽。
+        PANEL_BELOW.store(false, Ordering::Relaxed);
         let expanded = state(IslandMode::Expanded, 0.89, 800.0);
         let (_, height) = stage_dimensions(expanded);
         assert!((height - 800.0).abs() < 0.5);
 
-        // 面板比小狗槽还矮时仍然要留出小狗的位置。
         let small = state(IslandMode::Expanded, 0.89, 220.0);
         let (_, small_height) = stage_dimensions(small);
         assert!(small_height >= slot_height_css(0.89));
+
+        // 面板在下方：窗口要额外容纳小狗槽 + 间隙，否则面板会被底边裁掉。
+        // 两个断言放在同一个测试里，避免并行测试互相改 PANEL_BELOW。
+        PANEL_BELOW.store(true, Ordering::Relaxed);
+        let below = state(IslandMode::Expanded, 0.89, 800.0);
+        let (_, below_height) = stage_dimensions(below);
+        let expected = slot_height_css(0.89) + EXPANDED_PANEL_GAP + 800.0;
+        assert!((below_height - expected).abs() < 0.5);
+        PANEL_BELOW.store(false, Ordering::Relaxed);
     }
 
     #[test]
