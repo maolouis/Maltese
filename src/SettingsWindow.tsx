@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
+import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
+import { isLocaleCode, LOCALE_CODES, LOCALE_STORAGE_KEY, loadLocale, saveLocale } from "./i18n";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { LocalChatSettings } from "./LocalChatSettings";
 import {
@@ -215,6 +217,9 @@ export default function SettingsWindow() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const [shortcut, setShortcut] = useState(loadWakeShortcut);
   const [shortcutError, setShortcutError] = useState("");
+  const [collapseShortcut, setCollapseShortcut] = useState(loadCollapseShortcut);
+  const [collapseShortcutError, setCollapseShortcutError] = useState("");
+  const [locale, setLocale] = useState(loadLocale);
   const [shortcutScanDir, setShortcutScanDir] = useState(loadShortcutScanDir);
   const [shortcutAutoDetect, setShortcutAutoDetect] = useState(loadShortcutAutoDetect);
   const petCharacter = usePetCharacter();
@@ -287,6 +292,34 @@ export default function SettingsWindow() {
       setShortcutError("");
     } catch (error) {
       setShortcutError(String(error));
+    }
+  };
+
+  const recordCollapseShortcut = async (event: React.KeyboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) {
+      return;
+    }
+    const modifiers = [
+      event.ctrlKey && "Ctrl",
+      event.altKey && "Alt",
+      event.shiftKey && "Shift",
+      event.metaKey && "Win",
+    ].filter(Boolean) as string[];
+    if (!modifiers.length) {
+      setCollapseShortcutError("至少按住 Ctrl / Alt / Shift / Win 之一");
+      return;
+    }
+    const key = event.key === " " ? "Space" : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+    try {
+      const registered = await invoke<string>("set_collapse_shortcut", {
+        shortcut: [...modifiers, key].join("+"),
+      });
+      setCollapseShortcut(registered);
+      saveCollapseShortcut(registered);
+      setCollapseShortcutError("");
+    } catch (error) {
+      setCollapseShortcutError(String(error));
     }
   };
 
@@ -382,6 +415,38 @@ export default function SettingsWindow() {
       </section>
 
       <section className="sw-card">
+        <h2>语言</h2>
+        <div className="sw-row">
+          <span className="sw-copy">
+            <span className="sw-label">界面语言</span>
+            <span className="sw-hint">切换后主窗口立即生效，设置窗口下次打开时跟随</span>
+          </span>
+          <select
+            className="sw-input"
+            value={locale}
+            onChange={(event) => {
+              const next = event.currentTarget.value;
+              if (isLocaleCode(next)) {
+                setLocale(next);
+                saveLocale(next);
+                try {
+                  window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
+                } catch {
+                  // 忽略写入失败
+                }
+              }
+            }}
+          >
+            {LOCALE_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code === "zh-CN" ? "简体中文" : "English"}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
+
+      <section className="sw-card">
         <h2>互动</h2>
         <Switch label="鼠标交互" hint="点击摸头、双击庆祝、右键打开聊天" checked={settings.mouseInteractions} onChange={(value) => update("mouseInteractions", value)} />
         <Switch label="剪贴板气泡" hint="复制内容时用云朵气泡显示" checked={settings.clipboardBubble} onChange={(value) => update("clipboardBubble", value)} />
@@ -396,6 +461,17 @@ export default function SettingsWindow() {
           />
         </div>
         {shortcutError && <p className="sw-error">{shortcutError}</p>}
+        <div className="sw-row">
+          <span className="sw-label">收起面板</span>
+          <input
+            className="sw-input"
+            readOnly
+            value={collapseShortcut}
+            onKeyDown={(event) => void recordCollapseShortcut(event)}
+            title="点击后按下新的组合键；展开面板时按它直接收起"
+          />
+        </div>
+        {collapseShortcutError && <p className="sw-error">{collapseShortcutError}</p>}
         <Switch label="开机自启动" checked={launchAtStartup} onChange={(value) => void toggleStartup(value)} />
         <Segments
           label="复位位置"

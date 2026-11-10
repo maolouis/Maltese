@@ -27,18 +27,28 @@ export default function PetBubble() {
   const cloudRef = useRef<HTMLDivElement | null>(null);
 
   // 云朵文字长度不固定，固定 224px 的窗口会把内容截断：
-  // 渲染后量一次实际高度，让原生窗口跟着长高（上限由后端 clamp）。
+  // 用 ResizeObserver 持续量内容高度（scrollHeight 不受弹出动画的 transform 影响），
+  // 变化时让原生窗口跟着长高。只用一次 rAF 会在字体/换行没稳定时量小。
   useEffect(() => {
     if (!isTauri() || payload?.mode !== "cloud") {
       return;
     }
-    const frame = window.requestAnimationFrame(() => {
-      const element = cloudRef.current;
-      if (!element) return;
-      const height = Math.ceil(element.getBoundingClientRect().height + 28);
+    const element = cloudRef.current;
+    if (!element) return;
+    let lastHeight = 0;
+    const apply = () => {
+      const height = Math.ceil(element.scrollHeight + 28);
+      if (Math.abs(height - lastHeight) < 2) return;
+      lastHeight = height;
       void invoke("resize_pet_bubble", { width: 300, height }).catch(() => undefined);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    };
+    const frame = window.requestAnimationFrame(apply);
+    const observer = new ResizeObserver(apply);
+    observer.observe(element);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [payload]);
 
   const reportHover = useCallback((hovered: boolean) => {

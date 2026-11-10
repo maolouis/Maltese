@@ -20,6 +20,7 @@ mod wechat_reminders;
 mod translation;
 mod wake_shortcut;
 mod shortcut_hotkeys;
+mod collapse_shortcut;
 mod video_automation;
 
 use serde::{Deserialize, Serialize};
@@ -426,6 +427,13 @@ fn start_island_drag(app: AppHandle) -> Result<(), String> {
     }
 
     let position = window.outer_position().map_err(|error| error.to_string())?;
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) }.map_err(|error| error.to_string())?;
+    // 记录光标相对窗口左上角的偏移，后面按光标位移手动移动窗口。
+    // 不用 window.start_dragging()：那是系统标题栏拖拽，Windows 会阻止窗口
+    // 上边缘越过屏幕顶部（下边却允许移出去），所以“往上拖不出去”。
+    let grab_offset_x = cursor.x - position.x;
+    let grab_offset_y = cursor.y - position.y;
     POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
     mutate_window_state(|state| {
         state.custom_position = Some(IslandPosition {
@@ -436,17 +444,23 @@ fn start_island_drag(app: AppHandle) -> Result<(), String> {
         *state
     });
 
-    if let Err(error) = window.start_dragging() {
-        mutate_window_state(|state| {
-            state.is_dragging = false;
-            state.custom_position = current_state.custom_position;
-            *state
-        });
-        return Err(error.to_string());
-    }
-
     thread::spawn(move || {
-        while unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0 {
+        let mut last = position;
+        loop {
+            if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } >= 0 {
+                break;
+            }
+            let mut point = POINT::default();
+            if unsafe { GetCursorPos(&mut point) }.is_ok() {
+                let target = PhysicalPosition::new(
+                    point.x - grab_offset_x,
+                    point.y - grab_offset_y,
+                );
+                if target != last {
+                    let _ = window.set_position(Position::Physical(target));
+                    last = target;
+                }
+            }
             thread::sleep(Duration::from_millis(8));
         }
         thread::sleep(Duration::from_millis(8));
@@ -814,7 +828,7 @@ fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<(), Stri
         .get_webview_window(BUBBLE_WINDOW_LABEL)
         .ok_or_else(|| "气泡窗口未注册".to_string())?;
     let width = width.clamp(220.0, 420.0);
-    let height = height.clamp(120.0, 560.0);
+    let height = height.clamp(120.0, 640.0);
     place_bubble_near_main(&app, &bubble, &main, LogicalSize::new(width, height))
 }
 
@@ -3573,6 +3587,7 @@ pub fn run() {
             }
             wake_shortcut::init(app.handle());
             shortcut_hotkeys::init(app.handle());
+            collapse_shortcut::init(app.handle());
             video_automation::init(app.handle());
             dsh_api::init(app.handle());
             if let Err(error) = qq_mail::init(app.handle()) {
@@ -3689,6 +3704,7 @@ pub fn run() {
             translation::translate_text,
             translation::set_translation_shortcut,
             wake_shortcut::set_wake_shortcut,
+            collapse_shortcut::set_collapse_shortcut,
             shortcut_hotkeys::set_shortcut_panel_hotkey,
             plugins::list_plugins,
             plugins::install_plugin,

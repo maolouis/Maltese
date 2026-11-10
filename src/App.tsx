@@ -86,6 +86,7 @@ import { PluginsPanel } from "./PluginsPanel";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
+import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
 import {
   loadShortcutAutoDetect,
   loadShortcutScanDir,
@@ -6925,6 +6926,26 @@ function IslandApp({
   const collapseIsland = useCallback(() => {
     setIslandMode("collapsed");
   }, [setIslandMode]);
+
+  // 「收起面板」全局快捷键：注册保存的组合键，按下后把展开态收起来。
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    void invoke<string>("set_collapse_shortcut", { shortcut: loadCollapseShortcut() })
+      .then((registered) => saveCollapseShortcut(registered))
+      .catch(() => undefined);
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void listen("maltese-collapse-panel", () => collapseIsland()).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [collapseIsland]);
 
   const refreshMediaState = useCallback(async () => {
     if (isRefreshingMediaState.current) {

@@ -109,6 +109,9 @@ body,
   opacity: 0.82;
   word-break: break-word;
   white-space: pre-wrap;
+  /* 极端长文本兜底：窗口最高 640，超出部分内部滚动而不是被窗口裁掉。 */
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 /* ---------- hover 互动面板（云朵形） ---------- */
