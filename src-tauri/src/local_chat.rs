@@ -108,6 +108,9 @@ fn generation_payload(
         "reasoning_budget_tokens": if settings.enable_thinking.unwrap_or(false) { 128 } else { 0 },
     });
     if let Some(object) = payload.as_object_mut() {
+        if !settings.enable_thinking.unwrap_or(false) {
+            object.insert("reasoning_effort".to_string(), Value::from("none"));
+        }
         if object.get("max_tokens") == Some(&Value::from(0)) {
             object.remove("max_tokens");
         }
@@ -281,6 +284,7 @@ fn emit_stream_event(app: &AppHandle, request_id: &str, kind: &str, text: &str) 
 fn extract_delta(value: &Value) -> Option<String> {
     value
         .pointer("/choices/0/delta/content")
+        .or_else(|| value.pointer("/choices/0/delta/reasoning_content"))
         .or_else(|| value.pointer("/choices/0/text"))
         .or_else(|| value.pointer("/message/content"))
         .and_then(content_to_string)

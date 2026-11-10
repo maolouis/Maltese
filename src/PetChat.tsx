@@ -112,7 +112,7 @@ export function PetChat() {
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && !imageData) || busy) return;
     if (!isTauri()) {
       setError(t.chat.desktopOnly);
       return;
@@ -122,31 +122,75 @@ export function PetChat() {
       setShowModelSettings(true);
       return;
     }
+    if (chatConfig.backend === "dsh" && imageData) {
+      setError(t.chat.multimodalLocalOnly);
+      return;
+    }
+    const currentImage = imageData;
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
       text,
       at: Date.now(),
+      imageCount: currentImage ? 1 : undefined,
     };
     const next = [...messages, userMessage];
     persist(next);
     setDraft("");
+    setImageData(null);
     setError(null);
     setBusy(true);
+    setStreamingReply("");
     try {
       let replyText: string;
       if (chatConfig.backend === "local") {
-        replyText = await invoke<string>("local_chat", {
-          baseUrl: chatConfig.baseUrl,
-          model: chatConfig.model,
-          apiKey: chatConfig.apiKey.trim() || null,
-          message: text,
-          history: messages.slice(-16).map((message) => ({
-            role: message.role,
-            content: message.text,
-          })),
-          character,
-        });
+        const requestId = createId();
+        const unlisten = chatConfig.stream
+          ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
+            if (event.payload.requestId !== requestId) return;
+            if (event.payload.kind === "delta") {
+              setStreamingReply((current) => current + event.payload.text);
+            } else if (event.payload.kind === "error") {
+              setError(event.payload.text);
+            }
+          })
+          : null;
+        try {
+          const localPayload = {
+            requestId,
+            baseUrl: chatConfig.baseUrl,
+            model: chatConfig.model,
+            apiKey: chatConfig.apiKey.trim() || null,
+            message: text,
+            history: messages.slice(-16).map((message) => ({
+              role: message.role,
+              content: message.text,
+            })),
+            character,
+            images: currentImage ? [currentImage] : null,
+            settings: {
+              maxTokens: chatConfig.maxTokens,
+              temperature: chatConfig.temperature,
+              topP: chatConfig.topP,
+              enableThinking: chatConfig.enableThinking,
+            },
+          };
+          replyText = await invoke<string>(
+            chatConfig.stream ? "local_chat_stream" : "local_chat",
+            chatConfig.stream
+              ? localPayload
+              : {
+                baseUrl: localPayload.baseUrl,
+                model: localPayload.model,
+                apiKey: localPayload.apiKey,
+                message: localPayload.message,
+                history: localPayload.history,
+                character: localPayload.character,
+              },
+          );
+        } finally {
+          unlisten?.();
+        }
       } else {
         const reply = await invoke<DshChatReply>("dsh_chat", {
           message: text,
@@ -168,8 +212,10 @@ export function PetChat() {
           at: Date.now(),
         },
       ]);
+      setStreamingReply("");
     } catch (reason) {
       setError(String(reason));
+      setStreamingReply("");
     } finally {
       setBusy(false);
     }
@@ -178,19 +224,28 @@ export function PetChat() {
     chatConfig.apiKey,
     chatConfig.backend,
     chatConfig.baseUrl,
+    chatConfig.enableThinking,
+    chatConfig.maxTokens,
     chatConfig.model,
+    chatConfig.stream,
+    chatConfig.temperature,
+    chatConfig.topP,
     character,
     draft,
+    imageData,
     messages,
     persist,
     sessionId,
     t.chat.desktopOnly,
     t.chat.modelNotConfigured,
+    t.chat.multimodalLocalOnly,
   ]);
 
   const clear = useCallback(() => {
     persist([]);
     setSessionId(null);
+    setImageData(null);
+    setStreamingReply("");
     setError(null);
     window.localStorage.removeItem(SESSION_KEY);
   }, [persist]);
@@ -253,6 +308,9 @@ export function PetChat() {
             className={`pet-chat__bubble pet-chat__bubble--${message.role}`}
           >
             <p>{message.text}</p>
+            {message.imageCount ? (
+              <small className="pet-chat__image-note">{t.chat.imageAttached(message.imageCount)}</small>
+            ) : null}
             <time dateTime={new Date(message.at).toISOString()}>
               {new Date(message.at).toLocaleTimeString(t.localeTag, {
                 hour: "2-digit",
@@ -261,6 +319,11 @@ export function PetChat() {
             </time>
           </div>
         ))}
+        {busy && streamingReply && (
+          <div className="pet-chat__bubble pet-chat__bubble--assistant">
+            <p>{streamingReply}</p>
+          </div>
+        )}
         {busy && (
           <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
             <LoaderCircle size={15} className="pet-chat__spin" />
@@ -271,7 +334,32 @@ export function PetChat() {
 
       {error && <p className="pet-chat__error" role="alert">{error}</p>}
 
+      {imageData && (
+        <div className="pet-chat__attachment">
+          <img src={imageData} alt={t.chat.imageAttached(1)} />
+          <button
+            type="button"
+            title={t.chat.imageRemove}
+            aria-label={t.chat.imageRemove}
+            onClick={() => setImageData(null)}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
       <div className="pet-chat__composer">
+        <label className="pet-chat__attach" title={t.chat.imageAttach} aria-label={t.chat.imageAttach}>
+          <ImagePlus size={16} strokeWidth={1.9} />
+          <input
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(event) => {
+              attachImage(event.currentTarget.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
         <textarea
           value={draft}
           rows={2}
@@ -290,7 +378,7 @@ export function PetChat() {
         <button
           className="pet-chat__send"
           type="button"
-          disabled={busy || !draft.trim()}
+          disabled={busy || (!draft.trim() && !imageData)}
           title={t.chat.send}
           aria-label={t.chat.send}
           onClick={() => void send()}
