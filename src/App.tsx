@@ -7090,6 +7090,7 @@ function IslandApp({
         now: new Date(),
         streakMinutes,
         recentEvents: recentDiaryTexts(3),
+        character: proactiveCharacter,
       };
 
       if (!force && mode_ === "state") {

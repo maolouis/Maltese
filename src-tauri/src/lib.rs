@@ -1610,21 +1610,67 @@ fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
+        "ps1" | "py" | "bat" | "cmd" => launch_script(canonical_path, &extension),
+        // .lnk / .url / .exe 等资源管理器入口交给 ShellExecute。
+        _ => shell_execute(canonical_path),
+    }
+}
+
+/// 用脚本自己的目录作为工作目录启动脚本。
+///
+/// `canonicalize()` 在 Windows 上可能返回 `\\?\` 扩展路径前缀，
+/// PowerShell、Python 启动器和 cmd 对这种前缀的兼容性并不一致，
+/// 所以脚本执行也和 ShellExecute 一样先还原成普通 Win32 路径。
+fn launch_script(path: &Path, extension: &str) -> Result<(), String> {
+    let normalized_path = normalize_shell_execute_path(path);
+    let working_directory = normalized_path.parent();
+    match extension {
         "ps1" => {
             let mut command = Command::new("powershell.exe");
             command
                 .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-                .arg(canonical_path);
+                .arg(&normalized_path);
+            if let Some(directory) = working_directory {
+                command.current_dir(directory);
+            }
             spawn_detached(command)
         }
         "py" => {
             let mut command = Command::new("py.exe");
-            command.arg(canonical_path);
+            command.arg(&normalized_path);
+            if let Some(directory) = working_directory {
+                command.current_dir(directory);
+            }
+            match spawn_detached(command) {
+                Ok(()) => Ok(()),
+                Err(py_error) => {
+                    // 某些 Windows 环境只安装 python.exe，没有 Python Launcher。
+                    let mut fallback = Command::new("python.exe");
+                    fallback.arg(&normalized_path);
+                    if let Some(directory) = working_directory {
+                        fallback.current_dir(directory);
+                    }
+                    spawn_detached(fallback).map_err(|python_error| {
+                        format!(
+                            "无法启动 Python 脚本：py.exe 失败（{py_error}），python.exe 也不可用（{python_error}）"
+                        )
+                    })
+                }
+            }
+        }
+        "bat" | "cmd" => {
+            // 直接执行脚本，不再使用 `start`。`call` 让 cmd 正确处理带空格的路径，
+            // `/d` 禁止用户的 AutoRun 命令干扰快捷入口。
+            let mut command = Command::new("cmd.exe");
+            command
+                .args(["/d", "/c", "call"])
+                .arg(&normalized_path);
+            if let Some(directory) = working_directory {
+                command.current_dir(directory);
+            }
             spawn_detached(command)
         }
-        // .lnk / .url / .bat / .cmd / .exe 都交给 ShellExecute，
-        // 和资源管理器双击同一条路径，省掉 cmd 这一跳。
-        _ => shell_execute(canonical_path),
+        _ => Err("不支持的脚本类型。".to_string()),
     }
 }
 
@@ -1723,22 +1769,8 @@ fn run_common_script(path: String) -> Result<(), String> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "ps1" => {
-            let mut command = Command::new("powershell.exe");
-            command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-            command.arg(canonical_path);
-            spawn_detached(command)
-        }
-        "py" => {
-            let mut command = Command::new("py.exe");
-            command.arg(canonical_path);
-            spawn_detached(command)
-        }
-        "bat" | "cmd" | "lnk" => {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/C", "start", "", canonical_path.to_string_lossy().as_ref()]);
-            spawn_detached(command)
-        }
+        "ps1" | "py" | "bat" | "cmd" => launch_script(&canonical_path, &extension),
+        "lnk" => shell_execute(&canonical_path),
         _ => Err("不支持的脚本类型。".to_string()),
     }
 }

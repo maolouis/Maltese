@@ -397,6 +397,7 @@ fn open_url(url: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::video_rules::{is_browser_process, title_matches};
     use super::*;
 
     #[test]

@@ -175,7 +175,7 @@ try {
   }
   if (!nativeSource.includes("fn discover_installed_apps") ||
       !appSource.includes("discover_installed_apps") ||
-      !appSource.includes("搜索应用名称添加")) {
+       !appSource.includes("搜索应用直接打开")) {
     fail("快捷面板没有接入系统应用搜索/添加");
   }
   const pluginSource = fs.readFileSync(path.join(root, "src/PluginsPanel.tsx"), "utf8");
@@ -183,6 +183,19 @@ try {
     fail("插件使用说明没有独立的 hover 浮窗");
   }
   console.log("[verify] ✓ 快捷方式自动识别开关/扫描目录与插件 hover 浮窗正常");
+
+  if (
+    !nativeSource.includes("fn launch_script") ||
+    !nativeSource.includes('args(["/d", "/c", "call"])') ||
+    !nativeSource.includes('Command::new("powershell.exe")') ||
+    !nativeSource.includes('Command::new("py.exe")') ||
+    !nativeSource.includes('Command::new("python.exe")') ||
+    !nativeSource.includes("current_dir(directory)")
+  ) {
+    fail("脚本入口没有统一使用对应解释器、工作目录和 cmd call 启动");
+  } else {
+    console.log("[verify] ✓ cmd/bat/ps1/py 脚本启动路径已接入统一启动器");
+  }
 } catch (error) {
   fail(`快捷方式目录/插件说明检查失败：${error}`);
 }

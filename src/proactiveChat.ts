@@ -18,6 +18,8 @@ export type ProactiveContext = {
   streakMinutes: number;
   /** 最近的日记事件（用户做过什么） */
   recentEvents: string[];
+  /** 当前桌宠形象：xiaobai / xiaojimao / duo */
+  character?: string;
 };
 
 const HISTORY_KEY = "maltese-proactive-history";
@@ -109,6 +111,28 @@ export function cleanTitle(title: string): string {
     .slice(0, 28);
 }
 
+function storyGuidance(character: string): string[] {
+  const common =
+    "参考《亲爱的小狗》的设定：小白是白色马尔济斯，小鸡毛是金黄色小金毛；两只小狗是亲密的好朋狗，在四季日常里用无声默契和无条件信任互相陪伴，把幸福落在很小的事情上。";
+  switch (character) {
+    case "xiaojimao":
+      return [
+        common,
+        "当前是小鸡毛：像小太阳一样活泼、黏人、爱撒娇，偶尔贪吃和俏皮，但先用温柔的陪伴让主人放松。",
+      ];
+    case "duo":
+      return [
+        common,
+        "当前是两只小狗一起：小白安静细心、略害羞，小鸡毛热情活泼；让两种气质互相接住，不抢话，也不要写成客服或旁白。",
+      ];
+    default:
+      return [
+        common,
+        "当前是小白：安静、温柔、细心，带一点害羞和胆小；先观察主人的情绪，再轻声陪着说，不要突然说教。",
+      ];
+  }
+}
+
 export function buildPrompt(context: ProactiveContext, avoid: string[]): string {
   const bucket = timeBucket(context.now);
   const clock = `${context.now.getHours()}:${String(context.now.getMinutes()).padStart(2, "0")}`;
@@ -126,6 +150,7 @@ export function buildPrompt(context: ProactiveContext, avoid: string[]): string 
 
   const lines = [
     "你是住在主人电脑桌面上的线条小狗，现在主动找主人搭话。",
+    ...storyGuidance(context.character ?? "xiaobai"),
     "已知信息：",
     ...facts.map((fact) => `- ${fact}`),
     "",
@@ -219,10 +244,34 @@ function fillTemplate(template: string, context: ProactiveContext): string {
     .replace("{event}", context.recentEvents[0] ?? "忙了一阵");
 }
 
+function characterFallbacks(character: string): string[] {
+  switch (character) {
+    case "xiaojimao":
+      return [
+        "我闻到你今天的忙碌啦，蹭过来陪你一下",
+        "你忙得像小旋风，我先把尾巴摇给你看",
+        "想吃点什么吗？我先替你馋一口",
+      ];
+    case "duo":
+      return [
+        "小白想安静陪着你，小鸡毛已经摇着尾巴凑过来了",
+        "我们都在这儿，一个安静看着，一个负责把你逗笑",
+        "今天的幸福先从你和我们说句话开始",
+      ];
+    default:
+      return [
+        "我先安静陪着你，想到什么慢慢说",
+        "你忙你的，我把这点安静留给你",
+        "看到你还在认真做事，我就安心了",
+      ];
+  }
+}
+
 /** 模型不可用时用：按当前情境挑一句，并避开最近说过的。 */
 export function pickFallback(context: ProactiveContext, history = readHistory()): string {
   const matching = FALLBACKS.filter((rule) => rule.when(context));
   const pool: string[] = [];
+  pool.push(...characterFallbacks(context.character ?? "xiaobai"));
   for (const rule of matching) {
     for (const line of rule.lines) pool.push(fillTemplate(line, context));
   }
