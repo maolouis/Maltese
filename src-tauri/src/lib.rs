@@ -24,6 +24,7 @@ mod collapse_shortcut;
 mod custom_sound;
 mod video_automation;
 mod video_rules;
+mod actions;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -3820,6 +3821,9 @@ pub fn run() {
             custom_sound::add_custom_sound,
             custom_sound::remove_custom_sound,
             pet_gifs::remove_pet_gif,
+            actions::read_clipboard_text,
+            actions::set_clipboard_text,
+            actions::type_text,
             video_automation::get_video_automation_state,
             video_automation::set_video_automation_config,
             video_automation::start_video_automation,

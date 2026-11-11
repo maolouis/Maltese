@@ -343,13 +343,17 @@ pub async fn strata_launch() -> Result<(), String> {
         .map_err(|error| format!("Strata 地址无效：{error}"))?;
     let settings_url = Url::parse(&format!("{STRATA_BASE_URL}/settings"))
         .map_err(|error| format!("Strata 设置地址无效：{error}"))?;
+    let mut observed_restart = false;
     let mut ready = false;
-    for _ in 0..45 {
-        if let Ok(response) = client.get(health_url.clone()).send().await {
-            if response.status().is_success() {
-                ready = true;
-                break;
+    for _ in 0..60 {
+        match client.get(health_url.clone()).send().await {
+            Ok(response) if response.status().is_success() => {
+                if observed_restart {
+                    ready = true;
+                    break;
+                }
             }
+            _ => observed_restart = true,
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, X } from "lucide-react";
+import { Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
+import { PetSkillsSettings } from "./PetSkillsSettings";
 import { ChatText } from "./ChatText";
+import {
+  loadCustomSkills,
+  loadEnabledSkills,
+  parseSkillCall,
+  runSkill,
+  skillsPrompt,
+} from "./petSkills";
 import { usePetCharacter } from "./petCharacters";
 import {
   loadLocalChatConfig,
@@ -23,6 +31,8 @@ type ChatMessage = {
   imageCount?: number;
   /** 消息里展示的缩略图（data URL）；发送给模型的是另一份更大的图。 */
   thumbnails?: string[];
+  /** 小狗实际执行了什么动作（例如记待办），显示成一条小提示。 */
+  toolNote?: string;
 };
 
 type LocalChatStreamEvent = {
@@ -101,6 +111,16 @@ export function PetChat() {
   const [error, setError] = useState<string | null>(null);
   const [chatConfig, setChatConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
   const [showModelSettings, setShowModelSettings] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
+  const [agentEnabled, setAgentEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("maltese-agent-mode") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const [enabledSkills] = useState(loadEnabledSkills);
+  const [customSkills] = useState(loadCustomSkills);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -154,6 +174,40 @@ export function PetChat() {
     }
   }, [attachments.length, t.chat.imageLimit, t.chat.imageReadFailed]);
 
+  // 非流式的模型调用：给「先决定动作、再总结」这类两步流程用。
+  const askModel = useCallback(
+    async (message: string, history: ChatMessage[], images: string[] | null) => {
+      if (chatConfig.backend === "dsh") {
+        const reply = await invoke<DshChatReply>("dsh_chat", {
+          message,
+          sessionId,
+          character,
+        });
+        if (reply.sessionId) {
+          setSessionId(reply.sessionId);
+          window.localStorage.setItem(SESSION_KEY, reply.sessionId);
+        }
+        return reply.text;
+      }
+      return invoke<string>("local_chat", {
+        baseUrl: chatConfig.baseUrl,
+        model: chatConfig.model,
+        apiKey: chatConfig.apiKey.trim() || null,
+        message,
+        history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+        character,
+        images: images && images.length > 0 ? images : null,
+      });
+    },
+    [
+      character,
+      chatConfig.apiKey,
+      chatConfig.backend,
+      chatConfig.baseUrl,
+      chatConfig.model,
+      sessionId,
+    ],
+  );
   const send = useCallback(async () => {
     const text = draft.trim();
     const sendImages = attachments.map((item) => item.send);
@@ -189,7 +243,45 @@ export function PetChat() {
     setStreamingReply("");
     try {
       let replyText: string;
-      if (chatConfig.backend === "local") {
+      // 「动手」流程：先让模型决定要不要调用本机技能，执行后再让它总结成人话。
+      // 只在本机模型 + 没有图片时走，DSH 后端自己就能用工具。
+      if (agentEnabled && chatConfig.backend === "local" && sendImages.length === 0) {
+        const decision = await askModel(
+          `${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`,
+          messages,
+          null,
+        );
+        const call = parseSkillCall(decision);
+        if (call) {
+          const result = await runSkill(call.action, call.args);
+          const toolNote = result.ok ? result.message : `没做成：${result.message}`;
+          let summary = "";
+          try {
+            summary = await askModel(
+              `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用一句不超过 30 字的中文口语回复主人，不要输出 JSON，也不要重复格式。`,
+              [],
+              null,
+            );
+          } catch {
+            summary = "";
+          }
+          replyText = (summary || result.message).trim();
+          persist([
+            ...next,
+            {
+              id: createId(),
+              role: "assistant",
+              text: replyText,
+              at: Date.now(),
+              toolNote,
+            },
+          ]);
+          setStreamingReply("");
+          setBusy(false);
+          return;
+        }
+        replyText = decision.trim();
+      } else if (chatConfig.backend === "local") {
         const requestId = createId();
         const unlisten = chatConfig.stream
           ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
@@ -315,6 +407,34 @@ export function PetChat() {
         </div>
         <div className="pet-chat__header-actions">
           <button
+            className={`pet-chat__model-toggle${agentEnabled ? " is-active" : ""}`}
+            type="button"
+            title={agentEnabled ? "动手模式：开（点一下关闭）" : "动手模式：关（点一下开启）"}
+            aria-label="动手模式"
+            aria-pressed={agentEnabled}
+            onClick={() => {
+              const nextValue = !agentEnabled;
+              setAgentEnabled(nextValue);
+              try {
+                window.localStorage.setItem("maltese-agent-mode", nextValue ? "on" : "off");
+              } catch {
+                // 忽略
+              }
+            }}
+          >
+            <Hand size={15} strokeWidth={1.8} />
+          </button>
+          <button
+            className={`pet-chat__model-toggle${showSkills ? " is-active" : ""}`}
+            type="button"
+            title="技能"
+            aria-label="技能"
+            aria-expanded={showSkills}
+            onClick={() => setShowSkills((open) => !open)}
+          >
+            <Wrench size={15} strokeWidth={1.8} />
+          </button>
+          <button
             className={`pet-chat__model-toggle${showModelSettings ? " is-active" : ""}`}
             type="button"
             title={t.chat.modelSettings}
@@ -340,6 +460,11 @@ export function PetChat() {
       {showModelSettings && (
         <LocalChatSettings onClose={() => setShowModelSettings(false)} />
       )}
+      {showSkills && (
+        <div className="pet-chat__skills">
+          <PetSkillsSettings />
+        </div>
+      )}
 
       <div className="pet-chat__list" ref={listRef} role="log" aria-live="polite">
         {messages.length === 0 && (
@@ -362,6 +487,9 @@ export function PetChat() {
               </div>
             )}
             {message.text && <ChatText text={message.text} />}
+            {message.toolNote ? (
+              <small className="pet-chat__tool-note">{message.toolNote}</small>
+            ) : null}
             <time dateTime={new Date(message.at).toISOString()}>
               {new Date(message.at).toLocaleTimeString(t.localeTag, {
                 hour: "2-digit",

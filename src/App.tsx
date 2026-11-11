@@ -4910,6 +4910,16 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
   const [provider, setProvider] = useState<"bilibili" | "douyin">("bilibili");
   const [intervalSeconds, setIntervalSeconds] = useState(45);
   const [maxMinutes, setMaxMinutes] = useState(30);
+  // 评论区互动：生成一句评论 → 复制 / 直接敲进已聚焦的评论框。
+  const [comment, setComment] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [autoComment, setAutoComment] = useState(() => {
+    try {
+      return window.localStorage.getItem("maltese-video-auto-comment") === "on";
+    } catch {
+      return false;
+    }
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -4959,6 +4969,76 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
     }
   };
 
+  const generateComment = useCallback(async () => {
+    setCommentBusy(true);
+    const title = snapshot.foregroundTitle || "";
+    const fallback = [
+      "这个视频讲得挺清楚的，学到了。",
+      "刚好在找这个内容，谢谢分享。",
+      "看到这里忍不住点赞，up 主加油。",
+      "节奏很舒服，看着不累。",
+    ];
+    try {
+      const config = loadLocalChatConfig();
+      const prompt = `你是正在看视频的观众，视频标题是「${title || "未知视频"}」。请写一条不超过 20 个字的中文弹幕风格评论，自然、不夸张、不带话题标签。`;
+      let text = "";
+      try {
+        if (config.backend === "local" && config.model) {
+          text = await invoke<string>("local_chat", {
+            baseUrl: config.baseUrl,
+            model: config.model,
+            apiKey: config.apiKey.trim() || null,
+            message: prompt,
+            history: [],
+            character: "xiaobai",
+            images: null,
+          });
+        } else {
+          const reply = await invoke<{ text: string }>("dsh_chat", {
+            message: prompt,
+            sessionId: null,
+            character: "xiaobai",
+          });
+          text = reply.text;
+        }
+      } catch {
+        text = "";
+      }
+      const line = (text || "").trim().replace(/^["「『]|["」』]$/g, "");
+      setComment(line || fallback[Math.floor(Math.random() * fallback.length)]);
+    } finally {
+      setCommentBusy(false);
+    }
+  }, [snapshot.foregroundTitle]);
+
+  const copyComment = useCallback(async (text: string) => {
+    try {
+      await invoke("set_clipboard_text", { text });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // 自动评论：每次翻页后生成一句并放进剪贴板，用户点开评论框直接 Ctrl+V。
+  const lastStepsRef = useRef(0);
+  useEffect(() => {
+    if (!autoComment) {
+      lastStepsRef.current = snapshot.steps;
+      return;
+    }
+    if (snapshot.steps > lastStepsRef.current) {
+      lastStepsRef.current = snapshot.steps;
+      void (async () => {
+        await generateComment();
+      })();
+    }
+  }, [autoComment, generateComment, snapshot.steps]);
+
+  useEffect(() => {
+    if (!autoComment || !comment) return;
+    void copyComment(comment);
+  }, [autoComment, comment, copyComment]);
   return (
     <section className="video-automation" aria-label="自动刷视频">
       <div className="video-automation__head">
@@ -4985,6 +5065,69 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
         打开有窗口浏览器并登录，保持视频页在前台；首次翻页约 6 秒后执行，之后按间隔翻页。
         切到其他窗口时会自动暂停，不抢焦点、不乱按键。
       </p>
+      <div className="video-automation__comment">
+        <div className="video-automation__comment-head">
+          <span className="assistant-panel__label">评论区</span>
+          <label className="video-automation__comment-toggle">
+            <input
+              type="checkbox"
+              checked={autoComment}
+              onChange={(event) => {
+                const next = event.currentTarget.checked;
+                setAutoComment(next);
+                try {
+                  window.localStorage.setItem("maltese-video-auto-comment", next ? "on" : "off");
+                } catch {
+                  // 忽略
+                }
+              }}
+            />
+            <span>每次翻页后自动准备一句评论</span>
+          </label>
+        </div>
+        <textarea
+          value={comment}
+          rows={2}
+          placeholder="小狗会按当前视频写一句，也可以自己改"
+          onChange={(event) => setComment(event.currentTarget.value)}
+        />
+        <div className="video-automation__comment-actions">
+          <button type="button" disabled={commentBusy} onClick={() => void generateComment()}>
+            {commentBusy ? "生成中…" : "生成评论"}
+          </button>
+          <button
+            type="button"
+            disabled={!comment.trim()}
+            onClick={() =>
+              void copyComment(comment).then((ok) =>
+                onNotice(ok ? "评论已复制，点开评论框 Ctrl+V 即可" : "复制失败"),
+              )
+            }
+          >
+            复制
+          </button>
+          <button
+            type="button"
+            disabled={!comment.trim()}
+            onClick={() =>
+              void (async () => {
+                const ok = await copyComment(comment);
+                try {
+                  await invoke("type_text", { text: comment });
+                  onNotice("已把评论敲进当前输入框，回车发送即可");
+                } catch (error) {
+                  onNotice(`输入失败：${String(error)}${ok ? "（评论已复制）" : ""}`);
+                }
+              })()
+            }
+          >
+            输入到评论框
+          </button>
+        </div>
+        <p className="video-automation__hint">
+          先用鼠标点一下网页里的评论输入框，再点「输入到评论框」；自动模式只生成并复制，不会替你发送。
+        </p>
+      </div>
       {snapshot.running && snapshot.waitingForBrowser && snapshot.foregroundTitle && (
         <p className="video-automation__hint video-automation__hint--warn">
           当前前台：{snapshot.foregroundTitle}

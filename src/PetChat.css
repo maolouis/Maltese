@@ -337,3 +337,14 @@
   border: 1px solid rgba(20, 24, 35, 0.12);
   display: block;
 }
+/* 动手模式执行结果提示 */
+.pet-chat__tool-note {
+  display: block;
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(120, 190, 140, 0.16);
+  color: #3f7a52;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
