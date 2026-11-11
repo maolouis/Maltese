@@ -59,6 +59,8 @@ const zhCN: Translations = {
     imageAttach: "添加图片",
     imageRemove: "移除图片",
     imageAttached: (count) => `已附加 ${count} 张图片`,
+  imageLimit: (max) => `最多一次发 ${max} 张图片`,
+  imageReadFailed: "这张图片读不出来，换一张试试。",
     multimodalLocalOnly: "图片聊天需要使用本地模型后端。",
   },
   messages: {

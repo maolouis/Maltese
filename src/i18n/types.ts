@@ -61,6 +61,8 @@ export type Translations = {
     imageAttach: string;
     imageRemove: string;
     imageAttached: (count: number) => string;
+  imageLimit: (max: number) => string;
+  imageReadFailed: string;
     multimodalLocalOnly: string;
   };
   messages: {

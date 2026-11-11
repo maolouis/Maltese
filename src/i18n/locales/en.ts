@@ -59,6 +59,8 @@ const en: Translations = {
     imageAttach: "Add image",
     imageRemove: "Remove image",
     imageAttached: (count) => `${count} image${count === 1 ? "" : "s"} attached`,
+  imageLimit: (max) => `Up to ${max} images at a time`,
+  imageReadFailed: "That image could not be read.",
     multimodalLocalOnly: "Image chat requires the local model backend.",
   },
   messages: {

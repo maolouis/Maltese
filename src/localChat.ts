@@ -16,9 +16,9 @@ export const LOCAL_CHAT_STORAGE_KEY = "maltese-local-chat-settings";
 export const LOCAL_CHAT_UPDATED_EVENT = "maltese-local-chat-settings-updated";
 
 export const DEFAULT_LOCAL_CHAT: LocalChatConfig = {
-  backend: "dsh",
-  baseUrl: "http://127.0.0.1:11434/v1",
-  model: "",
+  backend: "local",
+  baseUrl: "http://127.0.0.1:8080/v1",
+  model: "qwen3.6-35b-a3b-ud-q4_k_xl",
   apiKey: "",
   maxTokens: 256,
   temperature: 0.7,

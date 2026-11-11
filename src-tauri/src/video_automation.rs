@@ -1,3 +1,4 @@
+use crate::video_rules::{self, Action};
 use serde::{Deserialize, Serialize};
 use std::{
     os::windows::process::CommandExt,
@@ -34,24 +35,6 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// 首次翻页前给浏览器启动/加载留时间；之后使用用户配置的间隔。
 const FIRST_ACTION_DELAY: u64 = 6;
 
-const BROWSER_EXES: &[&str] = &[
-    "chrome.exe",
-    "msedge.exe",
-    "firefox.exe",
-    "brave.exe",
-    "vivaldi.exe",
-    "opera.exe",
-    "opera_gx.exe",
-    // 国内常见壳浏览器
-    "360se.exe",
-    "360chrome.exe",
-    "qqbrowser.exe",
-    "sogouexplorer.exe",
-    "liebao.exe",
-    "2345explorer.exe",
-    "maxthon.exe",
-    "ucbrowser.exe",
-];
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,11 +123,8 @@ pub fn get_video_automation_state() -> Result<VideoAutomationState, String> {
 
 #[tauri::command]
 pub fn set_video_automation_config(config: VideoAutomationConfig) -> Result<VideoAutomationState, String> {
-    if !(15..=600).contains(&config.interval_seconds) {
-        return Err("翻页间隔需要在 15 到 600 秒之间。".to_string());
-    }
-    if !(1..=240).contains(&config.max_minutes) {
-        return Err("每日观看上限需要在 1 到 240 分钟之间。".to_string());
+    if let Err(message) = video_rules::validate_config(config.interval_seconds, config.max_minutes) {
+        return Err(message.to_string());
     }
     let mut current = state().lock().map_err(|error| error.to_string())?;
     current.interval_seconds = config.interval_seconds;
@@ -154,10 +134,9 @@ pub fn set_video_automation_config(config: VideoAutomationConfig) -> Result<Vide
 
 #[tauri::command]
 pub fn start_video_automation(provider: String) -> Result<VideoAutomationState, String> {
-    let provider = provider.trim().to_ascii_lowercase();
-    if provider != "bilibili" && provider != "douyin" {
-        return Err("只支持 bilibili 或 douyin。".to_string());
-    }
+    let provider = video_rules::normalize_provider(&provider)
+        .map_err(|message| message.to_string())?
+        .to_string();
     let (interval_seconds, max_minutes) = {
         let mut current = state().lock().map_err(|error| error.to_string())?;
         if current.running {
@@ -237,18 +216,24 @@ pub fn start_video_automation(provider: String) -> Result<VideoAutomationState, 
                         let target = HWND(current.target_window as *mut _);
                         let target_alive = !target.is_invalid()
                             && unsafe { IsWindow(Some(target)).as_bool() };
-                        let active = if target_alive {
-                            foreground.as_ref().is_some_and(|info| info.hwnd == target)
-                        } else {
+                        let foreground_is_target = foreground
+                            .as_ref()
+                            .is_some_and(|info| info.hwnd == target);
+                        let foreground_is_provider = foreground.as_ref().is_some_and(|info| {
+                            video_rules::is_browser_process(&info.executable, &current.provider)
+                                && video_rules::title_matches(&info.title, &current.provider)
+                        });
+                        if !target_alive {
                             current.target_window = 0;
-                            foreground.as_ref().is_some_and(|info| {
-                                is_browser_process(&info.executable, &current.provider)
-                                    && title_matches(&info.title, &current.provider)
-                            })
-                        };
+                        }
+                        let action = video_rules::next_action(
+                            target_alive,
+                            foreground_is_target,
+                            foreground_is_provider,
+                        );
 
-                        if active {
-                            let key = if current.provider == "douyin" {
+                        if action == Action::SendKey {
+                            let key = if video_rules::page_key(&current.provider) == "ArrowDown" {
                                 VK_DOWN
                             } else {
                                 VK_NEXT
@@ -355,23 +340,7 @@ fn foreground_info() -> Option<WindowInfo> {
     }
 }
 
-fn is_browser_process(executable: &str, provider: &str) -> bool {
-    if BROWSER_EXES.contains(&executable) {
-        return true;
-    }
-    (provider == "douyin" && executable == "douyin.exe")
-        || (provider == "bilibili" && executable == "bilibili.exe")
-}
 
-fn title_matches(title: &str, provider: &str) -> bool {
-    let title = title.to_ascii_lowercase();
-    let keywords: &[&str] = if provider == "douyin" {
-        &["抖音", "douyin"]
-    } else {
-        &["bilibili", "哔哩哔哩", "b站"]
-    };
-    keywords.iter().any(|keyword| title.contains(keyword))
-}
 
 struct TargetSearch<'a> {
     provider: &'a str,
@@ -383,13 +352,13 @@ unsafe extern "system" fn find_target_window(window: HWND, context: LPARAM) -> B
     if !IsWindowVisible(window).as_bool() {
         return true.into();
     }
-    if !title_matches(&window_title(window), search.provider) {
+    if !video_rules::title_matches(&window_title(window), search.provider) {
         return true.into();
     }
     let Some(executable) = process_executable(window) else {
         return true.into();
     };
-    if !is_browser_process(&executable, search.provider) {
+    if !video_rules::is_browser_process(&executable, search.provider) {
         return true.into();
     }
     let mut rect = RECT::default();
@@ -454,5 +423,45 @@ mod tests {
     #[ignore = "Requires an open browser window whose title contains 哔哩哔哩/Bilibili"]
     fn finds_live_bilibili_browser_window() {
         assert!(find_target_browser("bilibili").is_some());
+    }
+
+    #[test]
+    fn rejects_unsupported_provider_without_side_effects() {
+        // 不支持的平台要在打开浏览器之前就被拒掉。
+        assert!(start_video_automation("youtube".to_string()).is_err());
+        assert!(start_video_automation("".to_string()).is_err());
+    }
+
+    #[test]
+    fn validates_interval_and_duration_bounds() {
+        assert!(set_video_automation_config(VideoAutomationConfig {
+            interval_seconds: 15,
+            max_minutes: 1,
+        })
+        .is_ok());
+        assert!(set_video_automation_config(VideoAutomationConfig {
+            interval_seconds: 600,
+            max_minutes: 240,
+        })
+        .is_ok());
+        assert!(set_video_automation_config(VideoAutomationConfig {
+            interval_seconds: 14,
+            max_minutes: 30,
+        })
+        .is_err());
+        assert!(set_video_automation_config(VideoAutomationConfig {
+            interval_seconds: 45,
+            max_minutes: 0,
+        })
+        .is_err());
+        // 复原默认，避免影响其它测试。
+        let _ = set_video_automation_config(VideoAutomationConfig::default());
+    }
+
+    #[test]
+    fn stop_clears_running_state() {
+        let stopped = stop_video_automation().expect("stop should succeed");
+        assert!(!stopped.running);
+        assert!(stopped.started_at.is_none());
     }
 }

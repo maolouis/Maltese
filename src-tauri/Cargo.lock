@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "maltese-assistant"
-version = "1.3.23"
+version = "1.3.24"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2505,6 +2505,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tokio",
  "window-vibrancy",
  "windows",
  "windows-future",

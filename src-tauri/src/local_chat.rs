@@ -26,6 +26,7 @@ const MAX_HISTORY_TURNS: usize = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(180);
 const STRATA_LAUNCHER: &str = r"F:\Strata\bin\strata.cmd";
+const STRATA_BASE_URL: &str = "http://127.0.0.1:8080";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +127,7 @@ pub async fn local_chat(
     message: String,
     history: Option<Vec<LocalChatTurn>>,
     character: String,
+    images: Option<Vec<String>>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -140,7 +142,8 @@ pub async fn local_chat(
     }
     let endpoint = chat_endpoint(&base_url)?;
     let settings = LocalChatGenerationSettings::default();
-    let messages = build_messages(&message, history, &character, None);
+    // 非流式也要支持图片（复选框里没开流式时，粘贴的图片同样要发给模型）。
+    let messages = build_messages(&message, history, &character, images);
 
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -291,13 +294,37 @@ fn extract_delta(value: &Value) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn strata_launch() -> Result<(), String> {
+pub async fn strata_launch() -> Result<(), String> {
     let launcher = std::path::Path::new(STRATA_LAUNCHER);
     if !launcher.is_file() {
         return Err(format!("找不到 Strata 启动器：{STRATA_LAUNCHER}"));
     }
     let mut command = Command::new("cmd.exe");
-    command.args(["/d", "/c", STRATA_LAUNCHER, "launch", "--no-tui", "--yes"]);
+    command.args([
+        "/d",
+        "/c",
+        STRATA_LAUNCHER,
+        "launch",
+        "--family",
+        "qwen36",
+        "--model",
+        "ud-q4_k_xl",
+        "--context",
+        "8192",
+        "--vision",
+        "cpu",
+        "--mtp",
+        "on",
+        "--tune",
+        "skip",
+        "--access",
+        "local",
+        "--port",
+        "8080",
+        "--restart",
+        "--no-tui",
+        "--yes",
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -306,6 +333,48 @@ pub fn strata_launch() -> Result<(), String> {
     command
         .spawn()
         .map_err(|error| format!("启动 Strata 失败：{error}"))?;
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(4))
+        .build()
+        .map_err(|error| format!("无法准备 Strata 设置同步：{error}"))?;
+    let health_url = Url::parse(&format!("{STRATA_BASE_URL}/health"))
+        .map_err(|error| format!("Strata 地址无效：{error}"))?;
+    let settings_url = Url::parse(&format!("{STRATA_BASE_URL}/settings"))
+        .map_err(|error| format!("Strata 设置地址无效：{error}"))?;
+    let mut ready = false;
+    for _ in 0..45 {
+        if let Ok(response) = client.get(health_url.clone()).send().await {
+            if response.status().is_success() {
+                ready = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    if !ready {
+        return Err("Strata 启动超时，请查看 F:\\Strata\\Strata\\launch\\ud-q4_k_xl-8k.engine.log。".into());
+    }
+    let settings = json!({
+        "defaults": {
+            "reasoning_effort": "none",
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "max_tokens": 256,
+            "reasoning_budget_tokens": 0
+        }
+    });
+    client
+        .post(settings_url)
+        .header("Origin", STRATA_BASE_URL)
+        .json(&settings)
+        .send()
+        .await
+        .map_err(|error| format!("同步 Strata 低延迟设置失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("同步 Strata 低延迟设置失败：{error}"))?;
     Ok(())
 }
 

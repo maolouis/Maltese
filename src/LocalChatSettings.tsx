@@ -69,7 +69,7 @@ export function LocalChatSettings({
       await invoke("strata_launch");
       update({
         baseUrl: "http://127.0.0.1:8080/v1",
-        model: config.model || "qwen3.6-35b-a3b-ud-q4_k_xl",
+        model: "qwen3.6-35b-a3b-ud-q4_k_xl",
       });
       setTestStatus({ ok: true, text: t.chat.modelStrataStarted });
     } catch (error) {

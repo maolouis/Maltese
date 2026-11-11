@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
+import { ChatText } from "./ChatText";
 import { usePetCharacter } from "./petCharacters";
 import {
   loadLocalChatConfig,
@@ -20,6 +21,8 @@ type ChatMessage = {
   text: string;
   at: number;
   imageCount?: number;
+  /** 消息里展示的缩略图（data URL）；发送给模型的是另一份更大的图。 */
+  thumbnails?: string[];
 };
 
 type LocalChatStreamEvent = {
@@ -29,6 +32,28 @@ type LocalChatStreamEvent = {
 };
 
 const MESSAGES_KEY = "focusd-island-pet-chat-messages";
+const MAX_IMAGES = 4;
+const SEND_IMAGE_MAX_SIDE = 1280;
+const THUMB_IMAGE_MAX_SIDE = 360;
+
+/** 把图片文件压到指定最长边，返回 data URL（避免把几 MB 的原图塞进请求/存储）。 */
+async function fileToDataUrl(file: File, maxSide: number, quality: number): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close();
+    return "";
+  }
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", quality);
+}
 const SESSION_KEY = "focusd-island-pet-chat-session";
 const MAX_MESSAGES = 60;
 
@@ -66,7 +91,11 @@ export function PetChat() {
     window.localStorage.getItem(SESSION_KEY),
   );
   const [draft, setDraft] = useState("");
-  const [imageData, setImageData] = useState<string | null>(null);
+  // 待发送的图片：sendImages 给模型，thumbnails 存消息里展示。
+  const [attachments, setAttachments] = useState<{
+    send: string;
+    thumb: string;
+  }[]>([]);
   const [streamingReply, setStreamingReply] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,18 +130,35 @@ export function PetChat() {
     }
   }, []);
 
-  const attachImage = useCallback((file: File | undefined) => {
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") setImageData(reader.result);
-    };
-    reader.readAsDataURL(file);
-  }, []);
+  const addImages = useCallback(async (files: File[]) => {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    const room = MAX_IMAGES - attachments.length;
+    if (room <= 0) {
+      setError(t.chat.imageLimit(MAX_IMAGES));
+      return;
+    }
+    setError(null);
+    const next: { send: string; thumb: string }[] = [];
+    for (const file of imageFiles.slice(0, room)) {
+      try {
+        const send = await fileToDataUrl(file, SEND_IMAGE_MAX_SIDE, 0.9);
+        if (!send) continue;
+        next.push({ send, thumb: await fileToDataUrl(file, THUMB_IMAGE_MAX_SIDE, 0.72) });
+      } catch {
+        setError(t.chat.imageReadFailed);
+      }
+    }
+    if (next.length > 0) {
+      setAttachments((current) => [...current, ...next].slice(0, MAX_IMAGES));
+    }
+  }, [attachments.length, t.chat.imageLimit, t.chat.imageReadFailed]);
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if ((!text && !imageData) || busy) return;
+    const sendImages = attachments.map((item) => item.send);
+    const thumbnails = attachments.map((item) => item.thumb);
+    if ((!text && sendImages.length === 0) || busy) return;
     if (!isTauri()) {
       setError(t.chat.desktopOnly);
       return;
@@ -122,22 +168,22 @@ export function PetChat() {
       setShowModelSettings(true);
       return;
     }
-    if (chatConfig.backend === "dsh" && imageData) {
+    if (chatConfig.backend === "dsh" && sendImages.length > 0) {
       setError(t.chat.multimodalLocalOnly);
       return;
     }
-    const currentImage = imageData;
     const userMessage: ChatMessage = {
       id: createId(),
       role: "user",
       text,
       at: Date.now(),
-      imageCount: currentImage ? 1 : undefined,
+      imageCount: thumbnails.length > 0 ? thumbnails.length : undefined,
+      thumbnails: thumbnails.length > 0 ? thumbnails : undefined,
     };
     const next = [...messages, userMessage];
     persist(next);
     setDraft("");
-    setImageData(null);
+    setAttachments([]);
     setError(null);
     setBusy(true);
     setStreamingReply("");
@@ -167,7 +213,7 @@ export function PetChat() {
               content: message.text,
             })),
             character,
-            images: currentImage ? [currentImage] : null,
+            images: sendImages.length > 0 ? sendImages : null,
             settings: {
               maxTokens: chatConfig.maxTokens,
               temperature: chatConfig.temperature,
@@ -186,6 +232,7 @@ export function PetChat() {
                 message: localPayload.message,
                 history: localPayload.history,
                 character: localPayload.character,
+                images: localPayload.images,
               },
           );
         } finally {
@@ -231,8 +278,8 @@ export function PetChat() {
     chatConfig.temperature,
     chatConfig.topP,
     character,
+    attachments,
     draft,
-    imageData,
     messages,
     persist,
     sessionId,
@@ -244,7 +291,7 @@ export function PetChat() {
   const clear = useCallback(() => {
     persist([]);
     setSessionId(null);
-    setImageData(null);
+    setAttachments([]);
     setStreamingReply("");
     setError(null);
     window.localStorage.removeItem(SESSION_KEY);
@@ -307,10 +354,14 @@ export function PetChat() {
             key={message.id}
             className={`pet-chat__bubble pet-chat__bubble--${message.role}`}
           >
-            <p>{message.text}</p>
-            {message.imageCount ? (
-              <small className="pet-chat__image-note">{t.chat.imageAttached(message.imageCount)}</small>
-            ) : null}
+            {message.thumbnails && message.thumbnails.length > 0 && (
+              <div className="pet-chat__thumbs">
+                {message.thumbnails.map((thumb, index) => (
+                  <img key={index} src={thumb} alt={t.chat.imageAttached(index + 1)} />
+                ))}
+              </div>
+            )}
+            {message.text && <ChatText text={message.text} />}
             <time dateTime={new Date(message.at).toISOString()}>
               {new Date(message.at).toLocaleTimeString(t.localeTag, {
                 hour: "2-digit",
@@ -321,7 +372,7 @@ export function PetChat() {
         ))}
         {busy && streamingReply && (
           <div className="pet-chat__bubble pet-chat__bubble--assistant">
-            <p>{streamingReply}</p>
+            <ChatText text={streamingReply} />
           </div>
         )}
         {busy && (
@@ -334,17 +385,21 @@ export function PetChat() {
 
       {error && <p className="pet-chat__error" role="alert">{error}</p>}
 
-      {imageData && (
-        <div className="pet-chat__attachment">
-          <img src={imageData} alt={t.chat.imageAttached(1)} />
-          <button
-            type="button"
-            title={t.chat.imageRemove}
-            aria-label={t.chat.imageRemove}
-            onClick={() => setImageData(null)}
-          >
-            <X size={13} />
-          </button>
+      {attachments.length > 0 && (
+        <div className="pet-chat__attachments">
+          {attachments.map((item, index) => (
+            <div className="pet-chat__attachment" key={index}>
+              <img src={item.thumb} alt={t.chat.imageAttached(index + 1)} />
+              <button
+                type="button"
+                title={t.chat.imageRemove}
+                aria-label={t.chat.imageRemove}
+                onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
         </div>
       )}
       <div className="pet-chat__composer">
@@ -355,7 +410,7 @@ export function PetChat() {
             accept="image/*"
             hidden
             onChange={(event) => {
-              attachImage(event.currentTarget.files?.[0]);
+              void addImages(Array.from(event.currentTarget.files ?? []));
               event.currentTarget.value = "";
             }}
           />
@@ -368,6 +423,18 @@ export function PetChat() {
           aria-label={t.chat.placeholder}
           disabled={busy}
           onChange={(event) => setDraft(event.currentTarget.value)}
+          onPaste={(event) => {
+            // 直接 Ctrl+V 粘贴截图 / 复制的图片，不用先存成文件。
+            const items = Array.from(event.clipboardData?.items ?? []);
+            const files = items
+              .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+              .map((item) => item.getAsFile())
+              .filter((file): file is File => Boolean(file));
+            if (files.length > 0) {
+              event.preventDefault();
+              void addImages(files);
+            }
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -378,7 +445,7 @@ export function PetChat() {
         <button
           className="pet-chat__send"
           type="button"
-          disabled={busy || (!draft.trim() && !imageData)}
+          disabled={busy || (!draft.trim() && attachments.length === 0)}
           title={t.chat.send}
           aria-label={t.chat.send}
           onClick={() => void send()}

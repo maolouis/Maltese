@@ -23,6 +23,7 @@ mod shortcut_hotkeys;
 mod collapse_shortcut;
 mod custom_sound;
 mod video_automation;
+mod video_rules;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};

@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.3.23-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.3.24-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -35,7 +35,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **双击互动气泡**：双击小狗弹出云朵面板，可直接摸头、挠下巴、抱抱、转圈、陪玩、躲猫猫、追球、喂食、睡觉，以及打开 **待办、音乐、剪贴板、聊天、消息、快捷入口**。
 - **表情轮播设置**：设置窗口里可按缩略图查看 GIF 播放顺序，添加自己的 GIF、删除或上下调整顺序；支持「全选现有表情」把当前形象某状态的全部 GIF 补回列表；还可多选/全选状态，让待机时轮播多个表情，并显示每张素材的实际路径。配置按形象分开保存。
 - **小狗大小**：收起 / 展开缩放范围 **0.5–1.8 倍**，前端与原生窗口布局同步。
-- **聊天框高度**：右键展开的聊天面板默认 520 px，可在设置里按 **360–900 px** 调整，拖动即时生效并在重启后保留。
+- **聊天框高度**：右键展开的聊天面板默认 520 px，可在设置里按 **360–900 px** 调整，拖动即时生效并在重启后保留。 聊天框支持直接 `Ctrl+V` 粘贴图片（最多 4 张，自动压缩），并用 KaTeX 渲染行内/块级公式与代码块（`$...$`、`$$...$$`、`\(...\)`、`\[...\]`）。
 - **让小狗睡觉**：在悬停面板底部，一键缩到屏幕边缘。
 - **任务栏托盘菜单**：右键任务栏小图标可选择 **显示小狗 / 配置桌宠 / 隐藏到托盘 / 退出 Maltese**。
 - **桌宠右键**：直接打开聊天页；配置和隐藏统一收进托盘菜单，避免多层菜单误触。
@@ -80,7 +80,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 ### 桌宠聊天（DSH / 本地模型）
 
 - 展开面板切到 **聊天**，通过本机 DSH CLI 的 `headless` profile 对话；聊天会跟随当前形象，让小白、小鸡毛或两只小狗一起回应。
-- **本地模型**：点击聊天右上角的模型设置，可切换到 Strata / Ollama / LM Studio / llama.cpp 等 OpenAI 兼容接口。Strata 预设使用 `http://127.0.0.1:8080/v1`，设置里可以直接启动 Strata、调整输出长度、温度、Top-P、思考和流式输出。桌宠支持本地图片输入，Strata 的视觉编码器使用 CPU 模式以保留显存；内容只在本机流转。
+- **本地模型**：点击聊天右上角的模型设置，可切换到 Strata / Ollama / LM Studio / llama.cpp 等 OpenAI 兼容接口。Strata 是默认本地后端，使用 `http://127.0.0.1:8080/v1`，设置里可以直接按 Qwen3.6 配置启动 Strata、调整输出长度、温度、Top-P、思考和流式输出。桌宠支持本地图片输入，Strata 的视觉编码器使用 CPU 模式以保留显存；内容只在本机流转。
 - 支持多轮会话、Enter 发送、Shift+Enter 换行、清空对话；聊天记录只保存在本机 `localStorage`。
 - 自动探测 DSH CLI；也可用 `MALTESE_DSH_CLI` 指定 `dsh.cmd` 路径。
 - headless 默认用桌面端登录的账号路由（`deepseek-account` + `deepseek-flash`），不需要另外配 `DEEPSEEK_API_KEY`；之前直接报 `MISSING_CREDENTIAL` 的情况已修掉。

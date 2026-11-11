@@ -308,3 +308,32 @@
     transition: none;
   }
 }
+/* 待发送的多张图片 */
+.pet-chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px 0;
+}
+
+.pet-chat__attachments .pet-chat__attachment {
+  width: 64px;
+  height: 50px;
+}
+
+/* 消息气泡里的图片缩略图 */
+.pet-chat__thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.pet-chat__thumbs img {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(20, 24, 35, 0.12);
+  display: block;
+}

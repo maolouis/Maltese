@@ -48,8 +48,23 @@
 - Rust `src-tauri/src/local_chat.rs` 向 `POST <base>/v1/chat/completions` 发送 OpenAI 兼容请求，流式响应通过 `local-chat-stream` 事件逐段转发给前端；连接超时为 25 秒，请求超时为 180 秒。
 - 每次请求会带当前形象的桌宠 system prompt，并要求用简体中文、1 到 3 句话回答。小白的设定是安静温柔、细心、略胆小；小鸡毛的设定是活泼、贪吃、爱撒娇；选择两只一起时，模型必须分别用「小白：」和「小鸡毛：」各说一句。
 - 「测试连接」调用 `local_chat_models`，读取 `<base>/v1/models`；只用于展示模型列表，不会保存服务返回的其他内容。
-- 「启动 Strata」调用 `strata_launch`，执行 `F:\Strata\bin\strata.cmd launch --no-tui --yes`。该启动器由本机用户 PATH 提供，也会设置 Strata 的 F 盘数据目录。
+- 「启动 Strata」调用 `strata_launch`，执行带有 Qwen3.6 参数的官方启动命令：
+
+  ```text
+  F:\Strata\bin\strata.cmd launch --family qwen36 --model ud-q4_k_xl --context 8192 --vision cpu --mtp on --tune skip --access local --port 8080 --restart --no-tui --yes
+  ```
+
+  启动完成后，桌宠还会把 Strata 的共享 Chat 设置固定为关闭思考、`max_tokens=256`、`temperature=0.7`、`top_p=0.9`，避免 Strata 网页端遗留的高思考预算拖慢桌宠。该启动器也会设置 Strata 的 F 盘数据目录。
 - 接口只接受 `http` / `https`。请求从本机直接发到配置的地址，不经过 DSH 或 Maltese 的服务器。
+
+## Strata 运行路径与 GPU 调度
+
+- 控制脚本和 Python 服务位于 `E:\Maltese\work\strata-control-extract`，F 盘启动器是 `F:\Strata\bin\strata.cmd`。
+- 模型文件位于 `F:\Strata\models\qwen36-UD-Q4_K_XL`，tokenizer 位于 `F:\Strata\packs\qwen36-ud-q4_k_xl\tokenizer`，启动配置位于 `F:\Strata\Strata\launch\ud-q4_k_xl-8k.json`。
+- CUDA engine 位于 `F:\Strata\components\engine\0.1.58-windows-x86_64-cuda-cuda13\strata.exe`，视觉投影文件 `mmproj-F16.gguf` 由 CPU 视觉进程读取，避免占用专家缓存显存。
+- 当前启动参数是 `--max-context 8192 --prefill auto --mtp 2 --vision`。Qwen3.6 的 engine 会把 dense 权重和一部分热门专家放入 RTX 4070 显存，其余专家放入 pinned host memory，再由 CPU worker 与 CUDA kernel 交错处理。
+- 当前 12 GB 显卡的官方自动布局稳定地放入约 26 个专家、约 1.90 GiB 专家缓存。Qwen3.6 engine 不接受通用 `--expert-cache`，显式提高 `--expert-vram` 或 `--expert-slots` 在本机测试会触发 pinned host memory 分配失败，所以保留自动布局。
+- `/health` 当前报告上下文上限 8192，视觉服务已开启。运行日志在 `F:\Strata\Strata\launch\ud-q4_k_xl-8k.engine.log`，可用 `strata monitor --url http://127.0.0.1:8080` 查看实时状态。
 
 ## DSH 工作方式
 
