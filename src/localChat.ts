@@ -1,5 +1,29 @@
 export type ChatBackend = "dsh" | "local";
 
+/** 思考深度：关 / 浅 / 标准 / 深，映射到 reasoning_effort 与思考预算。 */
+export type ThinkingDepth = "off" | "shallow" | "normal" | "deep";
+
+export const THINKING_DEPTHS: Array<{ value: ThinkingDepth; label: string; hint: string }> = [
+  { value: "off", label: "关", hint: "不思考，最快，适合闲聊" },
+  { value: "shallow", label: "浅", hint: "轻量推理，回复快" },
+  { value: "normal", label: "标准", hint: "默认，平衡速度与质量" },
+  { value: "deep", label: "深", hint: "多花时间推理，复杂问题更稳" },
+];
+
+export function thinkingEffort(depth: ThinkingDepth): "none" | "low" | "medium" | "high" {
+  if (depth === "off") return "none";
+  if (depth === "shallow") return "low";
+  if (depth === "deep") return "high";
+  return "medium";
+}
+
+export function thinkingBudget(depth: ThinkingDepth): number {
+  if (depth === "off") return 0;
+  if (depth === "shallow") return 128;
+  if (depth === "deep") return 1536;
+  return 512;
+}
+
 export type LocalChatConfig = {
   backend: ChatBackend;
   baseUrl: string;
@@ -9,6 +33,8 @@ export type LocalChatConfig = {
   temperature: number;
   topP: number;
   enableThinking: boolean;
+  /** 思考深度；enableThinking 由它派生，保留字段兼容旧配置。 */
+  thinkingDepth: ThinkingDepth;
   stream: boolean;
 };
 
@@ -24,6 +50,7 @@ export const DEFAULT_LOCAL_CHAT: LocalChatConfig = {
   temperature: 0.7,
   topP: 0.9,
   enableThinking: false,
+  thinkingDepth: "off",
   stream: true,
 };
 
@@ -49,6 +76,14 @@ export function loadLocalChatConfig(): LocalChatConfig {
         ? Math.max(0.1, Math.min(1, parsed.topP))
         : DEFAULT_LOCAL_CHAT.topP,
       enableThinking: parsed.enableThinking === true,
+      thinkingDepth:
+        parsed.thinkingDepth === "shallow" ||
+        parsed.thinkingDepth === "normal" ||
+        parsed.thinkingDepth === "deep"
+          ? parsed.thinkingDepth
+          : parsed.enableThinking === true
+            ? "normal"
+            : "off",
       stream: parsed.stream !== false,
     };
   } catch {
@@ -65,7 +100,13 @@ export function saveLocalChatConfig(config: LocalChatConfig) {
     maxTokens: Math.max(32, Math.min(2048, Math.round(config.maxTokens || DEFAULT_LOCAL_CHAT.maxTokens))),
     temperature: Math.max(0, Math.min(2, Number(config.temperature))),
     topP: Math.max(0.1, Math.min(1, Number(config.topP))),
-    enableThinking: config.enableThinking === true,
+    enableThinking: config.thinkingDepth !== "off",
+    thinkingDepth:
+      config.thinkingDepth === "shallow" ||
+      config.thinkingDepth === "normal" ||
+      config.thinkingDepth === "deep"
+        ? config.thinkingDepth
+        : "off",
     stream: config.stream !== false,
   };
   try {

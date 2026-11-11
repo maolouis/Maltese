@@ -125,6 +125,49 @@ pub fn type_text(text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 按下几个快捷键：支持 "enter" / "ctrl+v" / "ctrl+enter" 这类组合。
+/// 自动评论用它把剪贴板里的评论粘贴出去并回车发送。
+#[tauri::command]
+pub fn press_shortcut(shortcut: String) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_RETURN, VK_V};
+    let normalized = shortcut.trim().to_lowercase();
+    let (modifiers, key): (Vec<VIRTUAL_KEY>, VIRTUAL_KEY) = match normalized.as_str() {
+        "enter" | "return" => (vec![], VK_RETURN),
+        "ctrl+v" | "control+v" => (vec![VK_CONTROL], VK_V),
+        "ctrl+enter" => (vec![VK_CONTROL], VK_RETURN),
+        _ => return Err("不支持的快捷键。".to_string()),
+    };
+    let mut inputs: Vec<INPUT> = Vec::new();
+    for modifier in &modifiers {
+        inputs.push(key_input(*modifier, false));
+    }
+    inputs.push(key_input(key, false));
+    inputs.push(key_input(key, true));
+    for modifier in modifiers.iter().rev() {
+        inputs.push(key_input(*modifier, true));
+    }
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent == 0 {
+        return Err("模拟按键失败：当前窗口不接受键盘输入。".to_string());
+    }
+    Ok(())
+}
+
+fn key_input(key: VIRTUAL_KEY, up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

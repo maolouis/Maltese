@@ -7,6 +7,7 @@ import {
   saveLocalChatConfig,
   LOCAL_CHAT_UPDATED_EVENT,
   type LocalChatConfig,
+  THINKING_DEPTHS,
 } from "./localChat";
 import "./LocalChatSettings.css";
 
@@ -230,14 +231,23 @@ export function LocalChatSettings({
                 onChange={(event) => update({ topP: Number(event.currentTarget.value) })}
               />
             </label>
-            <label className="local-chat-settings__check">
-              <input
-                type="checkbox"
-                checked={config.enableThinking}
-                onChange={(event) => update({ enableThinking: event.currentTarget.checked })}
-              />
+            <div className="local-chat-settings__row">
               <span>{t.chat.modelThinking}</span>
-            </label>
+              <div className="local-chat-settings__segments" role="group" aria-label={t.chat.modelThinking}>
+                {THINKING_DEPTHS.map((depth) => (
+                  <button
+                    key={depth.value}
+                    type="button"
+                    className={config.thinkingDepth === depth.value ? "is-active" : ""}
+                    aria-pressed={config.thinkingDepth === depth.value}
+                    title={depth.hint}
+                    onClick={() => update({ thinkingDepth: depth.value })}
+                  >
+                    {depth.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <label className="local-chat-settings__check">
               <input
                 type="checkbox"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
@@ -17,6 +17,8 @@ import { usePetCharacter } from "./petCharacters";
 import {
   loadLocalChatConfig,
   LOCAL_CHAT_UPDATED_EVENT,
+  thinkingBudget,
+  thinkingEffort,
   type LocalChatConfig,
 } from "./localChat";
 import "./PetChat.css";
@@ -123,12 +125,31 @@ export function PetChat() {
   const [customSkills] = useState(loadCustomSkills);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // 打开聊天总是停在最新一条：挂载时直接跳到底部（不要动画），
+  // 之后消息变化、窗口/面板高度变化（展开动画、聊天框高度设置）都重新贴底。
+  // 之前只在 messages 变化时滚一次，面板还在播放展开动画，scrollHeight 还没长完，
+  // 结果打开就停在上方，得手动往下翻。
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, []);
+
   useEffect(() => {
     const list = listRef.current;
-    if (list) {
-      list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
-    }
-  }, [messages, busy]);
+    if (!list) return;
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+  }, [messages, busy, streamingReply]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      list.scrollTop = list.scrollHeight;
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const sync = () => setChatConfig(loadLocalChatConfig());
@@ -189,22 +210,50 @@ export function PetChat() {
         }
         return reply.text;
       }
-      return invoke<string>("local_chat", {
-        baseUrl: chatConfig.baseUrl,
-        model: chatConfig.model,
-        apiKey: chatConfig.apiKey.trim() || null,
-        message,
-        history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
-        character,
-        images: images && images.length > 0 ? images : null,
-      });
+      // 思考深度按设置传入：关闭时不思考，深档给更多推理预算。
+      const depth = chatConfig.thinkingDepth;
+      try {
+        return await invoke<string>("local_chat_stream", {
+          requestId: createId(),
+          baseUrl: chatConfig.baseUrl,
+          model: chatConfig.model,
+          apiKey: chatConfig.apiKey.trim() || null,
+          message,
+          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          character,
+          images: images && images.length > 0 ? images : null,
+          settings: {
+            maxTokens: chatConfig.maxTokens,
+            temperature: chatConfig.temperature,
+            topP: chatConfig.topP,
+            enableThinking: depth !== "off",
+            reasoningEffort: thinkingEffort(depth),
+            reasoningBudgetTokens: thinkingBudget(depth),
+          },
+        });
+      } catch {
+        // 服务端不支持流式时退回非流式
+        return invoke<string>("local_chat", {
+          baseUrl: chatConfig.baseUrl,
+          model: chatConfig.model,
+          apiKey: chatConfig.apiKey.trim() || null,
+          message,
+          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          character,
+          images: images && images.length > 0 ? images : null,
+        });
+      }
     },
     [
       character,
       chatConfig.apiKey,
       chatConfig.backend,
       chatConfig.baseUrl,
+      chatConfig.maxTokens,
       chatConfig.model,
+      chatConfig.temperature,
+      chatConfig.thinkingDepth,
+      chatConfig.topP,
       sessionId,
     ],
   );
@@ -310,7 +359,9 @@ export function PetChat() {
               maxTokens: chatConfig.maxTokens,
               temperature: chatConfig.temperature,
               topP: chatConfig.topP,
-              enableThinking: chatConfig.enableThinking,
+                enableThinking: chatConfig.thinkingDepth !== "off",
+                reasoningEffort: thinkingEffort(chatConfig.thinkingDepth),
+                reasoningBudgetTokens: thinkingBudget(chatConfig.thinkingDepth),
             },
           };
           replyText = await invoke<string>(
@@ -363,7 +414,7 @@ export function PetChat() {
     chatConfig.apiKey,
     chatConfig.backend,
     chatConfig.baseUrl,
-    chatConfig.enableThinking,
+    chatConfig.thinkingDepth,
     chatConfig.maxTokens,
     chatConfig.model,
     chatConfig.stream,

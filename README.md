@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.3.25-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.3.26-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">

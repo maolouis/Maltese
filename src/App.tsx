@@ -2820,6 +2820,25 @@ function LayoutEditor({
           onChange={(proactiveChat) => onSettingsChange({ ...settings, proactiveChat })}
         />
         {settings.proactiveChat && (
+          <div className="appearance-mode-control">
+            <span>主动聊天自测</span>
+            <div className="appearance-mode-control__segments">
+              <button
+                type="button"
+                onClick={() => {
+                  // 手动触发一次：先收起面板，回到挂机态才能弹云朵气泡。
+                  window.dispatchEvent(new Event("maltese-collapse-panel"));
+                  window.setTimeout(() => {
+                    window.dispatchEvent(new Event("maltese-proactive-chat-now"));
+                  }, 600);
+                }}
+              >
+                立即试一句
+              </button>
+            </div>
+          </div>
+        )}
+        {settings.proactiveChat && (
           <>
             <div className="appearance-mode-control">
               <span>主动聊天方式</span>
@@ -4920,6 +4939,15 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
       return false;
     }
   });
+  // 自动发送：剪贴板里的评论直接用 Ctrl+V + Enter 发出去。
+  // 需要先把光标放进评论框（点一次），之后每轮都能自动发。
+  const [autoSendComment, setAutoSendComment] = useState(() => {
+    try {
+      return window.localStorage.getItem("maltese-video-auto-send-comment") === "on";
+    } catch {
+      return false;
+    }
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -5037,8 +5065,18 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
 
   useEffect(() => {
     if (!autoComment || !comment) return;
-    void copyComment(comment);
-  }, [autoComment, comment, copyComment]);
+    void (async () => {
+      const ok = await copyComment(comment);
+      if (!ok || !autoSendComment) return;
+      try {
+        await invoke("press_shortcut", { shortcut: "ctrl+v" });
+        await new Promise((resolve) => window.setTimeout(resolve, 220));
+        await invoke("press_shortcut", { shortcut: "enter" });
+      } catch {
+        // 光标不在评论框时按不出去，忽略
+      }
+    })();
+  }, [autoComment, autoSendComment, comment, copyComment]);
   return (
     <section className="video-automation" aria-label="自动刷视频">
       <div className="video-automation__head">
@@ -5084,6 +5122,22 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
             />
             <span>每次翻页后自动准备一句评论</span>
           </label>
+          <label className="video-automation__comment-toggle">
+            <input
+              type="checkbox"
+              checked={autoSendComment}
+              onChange={(event) => {
+                const next = event.currentTarget.checked;
+                setAutoSendComment(next);
+                try {
+                  window.localStorage.setItem("maltese-video-auto-send-comment", next ? "on" : "off");
+                } catch {
+                  // 忽略
+                }
+              }}
+            />
+            <span>自动发送（先把光标点进评论框）</span>
+          </label>
         </div>
         <textarea
           value={comment}
@@ -5125,8 +5179,55 @@ function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void
           </button>
         </div>
         <p className="video-automation__hint">
-          先用鼠标点一下网页里的评论输入框，再点「输入到评论框」；自动模式只生成并复制，不会替你发送。
+          先用鼠标点一下网页里的评论输入框，再点「输入到评论框」。勾选「自动发送」后，每轮会自动粘贴并回车；
+          光标不在评论框时不会乱发。
         </p>
+        <div className="video-automation__publish">
+          <span className="assistant-panel__label">投稿 / 开播（半自动）</span>
+          <div className="video-automation__comment-actions">
+            <button
+              type="button"
+              onClick={() =>
+                void (async () => {
+                  const title = snapshot.foregroundTitle || "";
+                  const desc = comment || "（在这里补充简介）";
+                  await invoke("set_clipboard_text", {
+                    text: `${title}\n${desc}\n\n（由 Maltese 准备的标题与简介，粘贴到投稿页即可）`,
+                  }).catch(() => undefined);
+                  await invoke("open_local_path", {
+                    path:
+                      provider === "bilibili"
+                        ? "https://member.bilibili.com/platform/upload/video/frame"
+                        : "https://creator.douyin.com/creator-micro/content/upload",
+                  }).catch(() => undefined);
+                  onNotice("已打开投稿页，标题和简介已复制，粘贴即可；发布需要你本人确认。");
+                })()
+              }
+            >
+              准备投稿
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void (async () => {
+                  await invoke("open_local_path", {
+                    path:
+                      provider === "bilibili"
+                        ? "https://link.bilibili.com/p/center/index#/user-center/my-info/live-data"
+                        : "https://creator.douyin.com/creator-micro/content/manage?enter_from=live",
+                  }).catch(() => undefined);
+                  onNotice("已打开直播中心；开播的实名认证、推流信息需要你在网页里确认。");
+                })()
+              }
+            >
+              打开直播中心
+            </button>
+          </div>
+          <p className="video-automation__hint">
+            上传视频与开播涉及实名认证、版权与平台风控，Maltese 只帮你打开官方页面并准备好文案，
+            不会代替你点发布或推流。
+          </p>
+        </div>
       </div>
       {snapshot.running && snapshot.waitingForBrowser && snapshot.foregroundTitle && (
         <p className="video-automation__hint video-automation__hint--warn">
@@ -6944,7 +7045,7 @@ function IslandApp({
       }
     };
 
-    const tick = async () => {
+    const tick = async (force = false) => {
       // 面板展开或正在聊天时先不插话，等回到挂机状态再处理。
       if (modeRef.current !== "collapsed") return;
       const now = Date.now();
@@ -6977,7 +7078,7 @@ function IslandApp({
       const clock = new Date();
       context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
 
-      if (mode_ === "state") {
+      if (!force && mode_ === "state") {
         // 情境 = 前台程序类型 + 是否在播放 + 是否离开电脑。
         const situation = `${kind}|${mediaPlaying ? "playing" : "silent"}|${idleSeconds > 600 ? "away" : "here"}`;
         const state = proactiveSituationRef.current;
@@ -6990,12 +7091,12 @@ function IslandApp({
         // 同一个情境只主动说一次，且不能突破冷却时间。
         if (state.firedFor === situation) return;
         if (now - lastProactiveChatAt.current < cooldownMs) return;
-      } else if (now - lastProactiveChatAt.current < cooldownMs) {
+      } else if (!force && now - lastProactiveChatAt.current < cooldownMs) {
         return;
       }
 
       lastProactiveChatAt.current = now;
-      if (mode_ === "state") {
+      if (!force && mode_ === "state") {
         proactiveSituationRef.current = {
           ...proactiveSituationRef.current,
           firedFor: `${kind}|${mediaPlaying ? "playing" : "silent"}|${idleSeconds > 600 ? "away" : "here"}`,
@@ -7038,10 +7139,21 @@ function IslandApp({
       const greeting = kind === "browser" || kind === "video" ? "小狗也在看" : "小狗想你了";
       showCloudBubble(greeting, line);
       appendChat(line);
+      try {
+        window.localStorage.setItem("maltese-proactive-last", String(Date.now()));
+        window.dispatchEvent(new Event("maltese-proactive-chat-done"));
+      } catch {
+        // 忽略
+      }
     };
 
     const timer = window.setInterval(() => void tick(), 30_000);
-    return () => window.clearInterval(timer);
+    const runNow = () => void tick(true);
+    window.addEventListener("maltese-proactive-chat-now", runNow);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("maltese-proactive-chat-now", runNow);
+    };
   }, [
     proactiveCharacter,
     settings.proactiveChat,

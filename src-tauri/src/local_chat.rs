@@ -42,6 +42,10 @@ pub struct LocalChatGenerationSettings {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub enable_thinking: Option<bool>,
+    /// 思考深度对应的 reasoning_effort（none / low / medium / high）。
+    pub reasoning_effort: Option<String>,
+    /// 思考预算（thinking token 上限），0 表示关闭思考。
+    pub reasoning_budget_tokens: Option<u32>,
 }
 
 fn build_messages(
@@ -106,12 +110,23 @@ fn generation_payload(
         "temperature": settings.temperature.unwrap_or(0.7),
         "top_p": settings.top_p.unwrap_or(0.9),
         "enable_thinking": settings.enable_thinking.unwrap_or(false),
-        "reasoning_budget_tokens": if settings.enable_thinking.unwrap_or(false) { 128 } else { 0 },
+        "reasoning_budget_tokens": settings
+            .reasoning_budget_tokens
+            .unwrap_or(if settings.enable_thinking.unwrap_or(false) { 128 } else { 0 }),
     });
     if let Some(object) = payload.as_object_mut() {
-        if !settings.enable_thinking.unwrap_or(false) {
-            object.insert("reasoning_effort".to_string(), Value::from("none"));
-        }
+        // 思考深度：前端传 low / medium / high；关闭思考时显式告诉服务端 none。
+        let effort = settings
+            .reasoning_effort
+            .clone()
+            .unwrap_or_else(|| {
+                if settings.enable_thinking.unwrap_or(false) {
+                    "medium".to_string()
+                } else {
+                    "none".to_string()
+                }
+            });
+        object.insert("reasoning_effort".to_string(), Value::from(effort));
         if object.get("max_tokens") == Some(&Value::from(0)) {
             object.remove("max_tokens");
         }

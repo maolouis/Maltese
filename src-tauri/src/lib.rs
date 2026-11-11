@@ -3824,6 +3824,7 @@ pub fn run() {
             actions::read_clipboard_text,
             actions::set_clipboard_text,
             actions::type_text,
+            actions::press_shortcut,
             video_automation::get_video_automation_state,
             video_automation::set_video_automation_config,
             video_automation::start_video_automation,
