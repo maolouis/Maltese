@@ -218,6 +218,14 @@ export function PetChat() {
       }
       // 思考深度按设置传入：关闭时不思考，深档给更多推理预算。
       const depth = chatConfig.thinkingDepth;
+      const ensureModel = async () => {
+        try {
+          const ready = await invoke<boolean>("ensure_local_model", { baseUrl: chatConfig.baseUrl });
+          return Boolean(ready);
+        } catch {
+          return false;
+        }
+      };
       try {
         return await invoke<string>("local_chat_stream", {
           requestId: createId(),
@@ -237,8 +245,36 @@ export function PetChat() {
             reasoningBudgetTokens: thinkingBudget(depth),
           },
         });
-      } catch {
-        // 服务端不支持流式时退回非流式
+      } catch (streamError) {
+        // 连不上：先看是不是 Strata 没开，开了再试一次；仍失败就退回非流式。
+        const text = String(streamError);
+        if (text.includes("连接不到") || text.includes("Connection")) {
+          const ready = await ensureModel();
+          if (ready) {
+            try {
+              return await invoke<string>("local_chat_stream", {
+                requestId: createId(),
+                baseUrl: chatConfig.baseUrl,
+                model: chatConfig.model,
+                apiKey: chatConfig.apiKey.trim() || null,
+                message,
+                history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+                character,
+                images: images && images.length > 0 ? images : null,
+                settings: {
+                  maxTokens: chatConfig.maxTokens,
+                  temperature: chatConfig.temperature,
+                  topP: chatConfig.topP,
+                  enableThinking: depth !== "off",
+                  reasoningEffort: thinkingEffort(depth),
+                  reasoningBudgetTokens: thinkingBudget(depth),
+                },
+              });
+            } catch {
+              // 继续走非流式
+            }
+          }
+        }
         return invoke<string>("local_chat", {
           baseUrl: chatConfig.baseUrl,
           model: chatConfig.model,

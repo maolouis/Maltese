@@ -89,6 +89,15 @@ import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
 import { loadLocalChatConfig } from "./localChat";
+import {
+  buildPrompt as buildProactivePrompt,
+  cleanTitle as cleanActivityTitle,
+  isRepeated as isRepeatedProactiveLine,
+  pickFallback as pickProactiveFallback,
+  recentLines as recentProactiveLines,
+  rememberLine as rememberProactiveLine,
+  type ProactiveContext,
+} from "./proactiveChat";
 import { playCustomSound } from "./customSound";
 import { CustomSoundControl } from "./CustomSoundControl";
 import {
@@ -5394,25 +5403,6 @@ const ACTIVITY_LINES: Record<string, string[]> = {
 
 // 用 WebAudio 合成一声很短的小狗哼唧，避免额外音频素材。
 let petAudioContext: AudioContext | null = null;
-// 主动聊天的本地兜底台词：模型没配置 / 调用失败时也要有一句，
-// 否则开关打开了却永远看不到气泡。
-function proactiveFallbackLine(now: Date): string {
-  const hour = now.getHours();
-  const lines =
-    hour < 6
-      ? ["这么晚还没睡呀，我陪着你", "眼睛酸了就眯一会儿吧", "要不要先喝口热水"]
-      : hour < 11
-        ? ["早上好，今天也慢慢来", "先吃早饭再忙吧", "伸个懒腰再开始"]
-        : hour < 14
-          ? ["到饭点啦，别忙过了头", "吃完再干活，我等你", "中午记得休息一下"]
-          : hour < 18
-            ? ["下午了，喝口水吧", "坐久了站起来走两步", "我在这儿陪着你"]
-            : hour < 23
-              ? ["今天辛苦了，歇一会儿吧", "晚上别熬太晚", "要不要听首歌放松下"]
-              : ["夜深了，早点睡吧", "明天再做也不迟"];
-  return lines[Math.floor(Math.random() * lines.length)] ?? "";
-}
-
 function playPetChirp(kind: "soft" | "happy" = "soft") {
   // 用户配置了自定义音效就优先播放它，失败再回落到合成音。
   if (playCustomSound()) {
@@ -7012,6 +7002,8 @@ function IslandApp({
   const mediaRef = useRef(mediaState);
   mediaRef.current = mediaState;
   // 状态模式用：上一次的情境、情境开始时间、上次说过的情境。
+  // 同类活动从什么时候开始，用来算「忙了多久」。
+  const proactiveStreakRef = useRef<{ kind: string; since: number }>({ kind: "", since: 0 });
   const proactiveSituationRef = useRef<{ key: string; since: number; firedFor: string }>({
     key: "",
     since: 0,
@@ -7022,6 +7014,22 @@ function IslandApp({
     if (!isTauri() || !settings.proactiveChat) {
       return;
     }
+    // 最近发生过什么（待办开始/完成、摸头等），让主动关心的内容有据可依。
+    const recentDiaryTexts = (count: number): string[] => {
+      try {
+        const raw = window.localStorage.getItem("focusd-island-diary-events");
+        if (!raw) return [];
+        const parsed = JSON.parse(raw) as Array<{ text?: string; at?: number }>;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+          .filter((item) => typeof item.text === "string" && item.text.trim())
+          .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
+          .slice(0, count)
+          .map((item) => String(item.text).trim().slice(0, 24));
+      } catch {
+        return [];
+      }
+    };
     const minutes = Math.max(5, settings.proactiveChatMinutes);
     const cooldownMs = minutes * 60_000;
     const mode_ = settings.proactiveChatMode;
@@ -7050,33 +7058,39 @@ function IslandApp({
       if (modeRef.current !== "collapsed") return;
       const now = Date.now();
 
-      const context: string[] = [];
-      let kind = "";
+      let kind = "other";
+      let windowTitle = "";
       try {
         const activity = await invoke<{ kind: string; process: string; title: string }>(
           "get_active_activity",
         );
-        kind = activity?.kind ?? "";
-        if (activity?.process) {
-          context.push(`前台程序：${activity.title || activity.process}`);
-        }
+        kind = activity?.kind || "other";
+        windowTitle = cleanActivityTitle(activity?.title ?? "");
       } catch {
         // 忽略
       }
       const media = mediaRef.current;
       const mediaPlaying = media.playbackStatus === "playing" && Boolean(media.title);
-      if (media.title) {
-        context.push(`正在播放：${media.title}${media.artist ? ` - ${media.artist}` : ""}`);
-      }
       let idleSeconds = 0;
       try {
         idleSeconds = await invoke<number>("get_system_idle_seconds");
-        if (idleSeconds > 60) context.push(`已经 ${Math.round(idleSeconds / 60)} 分钟没操作`);
       } catch {
         // 忽略
       }
-      const clock = new Date();
-      context.push(`现在 ${clock.getHours()}:${String(clock.getMinutes()).padStart(2, "0")}`);
+      // 同一类活动持续多久：用来判断「是不是忙太久了」。
+      if (proactiveStreakRef.current.kind !== kind) {
+        proactiveStreakRef.current = { kind, since: now };
+      }
+      const streakMinutes = Math.max(0, Math.round((now - proactiveStreakRef.current.since) / 60_000));
+      const observe: ProactiveContext = {
+        kind,
+        title: windowTitle,
+        mediaTitle: mediaPlaying ? `${media.title}${media.artist ? ` - ${media.artist}` : ""}` : "",
+        idleSeconds,
+        now: new Date(),
+        streakMinutes,
+        recentEvents: recentDiaryTexts(3),
+      };
 
       if (!force && mode_ === "state") {
         // 情境 = 前台程序类型 + 是否在播放 + 是否离开电脑。
@@ -7103,40 +7117,78 @@ function IslandApp({
         };
       }
 
-      const prompt =
-        mode_ === "state"
-          ? `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`
-          : `你现在是桌宠，请结合这些本地状态，用简体中文主动关心主人一句，不超过 30 个字，不要连续提问：${context.join("；")}。`;
-      let line = "";
-      try {
+      // 把最近说过的话带进提示词，并要求换角度；模型不听话时再重试一次。
+      const avoid = recentProactiveLines();
+      const askOnce = async (extra: string) => {
+        const prompt = buildProactivePrompt(observe, avoid) + extra;
         const config = loadLocalChatConfig();
         if (config.backend === "local" && config.model) {
-          line = await invoke<string>("local_chat", {
+          return invoke<string>("local_chat", {
             baseUrl: config.baseUrl,
             model: config.model,
             apiKey: config.apiKey.trim() || null,
             message: prompt,
             history: [],
-          });
-        } else {
-          const reply = await invoke<{ text: string }>("dsh_chat", {
-            message: prompt,
-            sessionId: null,
             character: proactiveCharacter,
+            images: null,
           });
-          line = reply.text;
         }
+        const reply = await invoke<{ text: string }>("dsh_chat", {
+          message: prompt,
+          sessionId: null,
+          character: proactiveCharacter,
+        });
+        return reply.text;
+      };
+      let line = "";
+      try {
+        // 本地模型没启动时先拉起 Strata，否则会一路退化成模板台词。
+        const config = loadLocalChatConfig();
+        if (config.backend === "local" && config.model) {
+          const readyAt = Number(window.localStorage.getItem("maltese-local-model-ready") || 0);
+          if (Date.now() - readyAt > 10 * 60_000) {
+            const ready = await invoke<boolean>("ensure_local_model", {
+              baseUrl: config.baseUrl,
+            }).catch(() => false);
+            if (ready) {
+              window.localStorage.setItem("maltese-local-model-ready", String(Date.now()));
+            }
+          }
+        }
+        line = (await askOnce("")) ?? "";
       } catch {
-        // 模型不可用时用本地兜底台词，保证气泡照常出现
+        line = "";
       }
-      line = (line ?? "").trim();
-      if (!line) {
-        line = proactiveFallbackLine(clock);
+      line = line.trim().replace(/^["「『]|["」』]$/g, "");
+      if (line && isRepeatedProactiveLine(line, avoid)) {
+        // 说法撞车了：再要一句，明确要求换角度
+        try {
+          const retry = (await askOnce("\n\n刚才那句太重复了，换一个完全不同的说法和角度。")) ?? "";
+          const cleaned = retry.trim().replace(/^["「『]|["」』]$/g, "");
+          if (cleaned && !isRepeatedProactiveLine(cleaned, avoid)) {
+            line = cleaned;
+          }
+        } catch {
+          // 保留第一句
+        }
+      }
+      if (!line || isRepeatedProactiveLine(line, avoid)) {
+        line = pickProactiveFallback(observe, avoid);
       }
       if (!line) return;
+      rememberProactiveLine(line);
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
-      const greeting = kind === "browser" || kind === "video" ? "小狗也在看" : "小狗想你了";
+      // 标题也给点变化，不要永远是「小狗想你了」。
+      const greetingPool =
+        kind === "code"
+          ? ["小狗在旁边", "偷偷看你写代码", "小狗想搭把手"]
+          : kind === "video" || kind === "browser"
+            ? ["小狗也在看", "凑过来一起看", "小狗探头"]
+            : kind === "meeting"
+              ? ["陪你开会", "小狗安静陪着"]
+              : ["小狗想你了", "小狗探头", "突然想起你"];
+      const greeting = greetingPool[Math.floor(Math.random() * greetingPool.length)];
       showCloudBubble(greeting, line);
       appendChat(line);
       try {

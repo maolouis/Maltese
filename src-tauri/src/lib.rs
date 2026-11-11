@@ -3730,6 +3730,7 @@ pub fn run() {
             local_chat::local_chat_stream,
             local_chat::local_chat_models,
             local_chat::strata_launch,
+            local_chat::ensure_local_model,
             wechat_reminders::open_wechat,
             qq_notifications::get_qq_notification_state,
             qq_notifications::set_qq_notifications_enabled,

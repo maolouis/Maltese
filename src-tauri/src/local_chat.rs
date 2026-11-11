@@ -328,6 +328,40 @@ fn extract_reasoning_delta(value: &Value) -> Option<String> {
     None
 }
 
+/// 确保本机模型（F:\Strata 里的 Strata 服务）已经在跑。
+/// 主动聊天、聊天发送前调用：服务没起来就顺手拉起，避免一路退化成模板台词。
+#[tauri::command]
+pub async fn ensure_local_model(base_url: String) -> Result<bool, String> {
+    let endpoint = match Url::parse(&base_url) {
+        Ok(url) => url,
+        Err(_) => return Ok(false),
+    };
+    // 只对 Strata 的默认本地地址做自动启动，别去拉起别人的服务。
+    let host = endpoint.host_str().unwrap_or("");
+    let port = endpoint.port_or_known_default().unwrap_or(0);
+    if !(host == "127.0.0.1" || host == "localhost") || port != 8080 {
+        return Ok(true);
+    }
+    let health = format!("{}://{host}:{port}/v1/models", endpoint.scheme());
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(4))
+        .build()
+        .map_err(|error| error.to_string())?;
+    if client.get(&health).send().await.map(|response| response.status().is_success()).unwrap_or(false) {
+        return Ok(true);
+    }
+    // 没在跑：拉起 Strata，最多等 120 秒。
+    strata_launch().await?;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if client.get(&health).send().await.map(|response| response.status().is_success()).unwrap_or(false) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[tauri::command]
 pub async fn strata_launch() -> Result<(), String> {
     let launcher = std::path::Path::new(STRATA_LAUNCHER);
