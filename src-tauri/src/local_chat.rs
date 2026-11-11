@@ -272,6 +272,10 @@ pub async fn local_chat_stream(
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            // 思考内容单独发一类事件，前端折叠展示；正文照旧按 delta 累积。
+            if let Some(reasoning) = extract_reasoning_delta(&value) {
+                emit_stream_event(&app, &request_id, "reasoning", &reasoning);
+            }
             if let Some(delta) = extract_delta(&value) {
                 full_text.push_str(&delta);
                 emit_stream_delta(&app, &request_id, &delta);
@@ -302,10 +306,26 @@ fn emit_stream_event(app: &AppHandle, request_id: &str, kind: &str, text: &str) 
 fn extract_delta(value: &Value) -> Option<String> {
     value
         .pointer("/choices/0/delta/content")
-        .or_else(|| value.pointer("/choices/0/delta/reasoning_content"))
         .or_else(|| value.pointer("/choices/0/text"))
         .or_else(|| value.pointer("/message/content"))
         .and_then(content_to_string)
+}
+
+/// 思考过程：兼容各家字段名（reasoning_content / reasoning / thinking）。
+fn extract_reasoning_delta(value: &Value) -> Option<String> {
+    for pointer in [
+        "/choices/0/delta/reasoning_content",
+        "/choices/0/delta/reasoning",
+        "/choices/0/delta/thinking",
+        "/choices/0/message/reasoning_content",
+    ] {
+        if let Some(text) = value.pointer(pointer).and_then(content_to_string) {
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]

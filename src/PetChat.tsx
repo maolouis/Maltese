@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
+import { Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
 import { PetSkillsSettings } from "./PetSkillsSettings";
 import { ChatText } from "./ChatText";
+import { ChatReasoning } from "./ChatReasoning";
 import {
   loadCustomSkills,
   loadEnabledSkills,
@@ -35,11 +36,13 @@ type ChatMessage = {
   thumbnails?: string[];
   /** 小狗实际执行了什么动作（例如记待办），显示成一条小提示。 */
   toolNote?: string;
+  /** 模型的思考过程（折叠展示）。 */
+  reasoning?: string;
 };
 
 type LocalChatStreamEvent = {
   requestId: string;
-  kind: "delta" | "done" | "error";
+  kind: "delta" | "done" | "error" | "reasoning";
   text: string;
 };
 
@@ -109,9 +112,12 @@ export function PetChat() {
     thumb: string;
   }[]>([]);
   const [streamingReply, setStreamingReply] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatConfig, setChatConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
+  // 是否展示思考过程：模型设置里的开关，默认展示但折叠。
+  const showThinking = chatConfig.showThinking !== false;
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [agentEnabled, setAgentEnabled] = useState(() => {
@@ -290,6 +296,7 @@ export function PetChat() {
     setError(null);
     setBusy(true);
     setStreamingReply("");
+    setStreamingReasoning("");
     try {
       let replyText: string;
       // 「动手」流程：先让模型决定要不要调用本机技能，执行后再让它总结成人话。
@@ -337,6 +344,8 @@ export function PetChat() {
             if (event.payload.requestId !== requestId) return;
             if (event.payload.kind === "delta") {
               setStreamingReply((current) => current + event.payload.text);
+            } else if (event.payload.kind === "reasoning") {
+              setStreamingReasoning((current) => current + event.payload.text);
             } else if (event.payload.kind === "error") {
               setError(event.payload.text);
             }
@@ -393,6 +402,7 @@ export function PetChat() {
         }
         replyText = reply.text;
       }
+      const reasoningText = streamingReasoning.trim().slice(0, 4000);
       persist([
         ...next,
         {
@@ -400,9 +410,11 @@ export function PetChat() {
           role: "assistant",
           text: replyText,
           at: Date.now(),
+          reasoning: reasoningText ? reasoningText : undefined,
         },
       ]);
       setStreamingReply("");
+      setStreamingReasoning("");
     } catch (reason) {
       setError(String(reason));
       setStreamingReply("");
@@ -537,21 +549,46 @@ export function PetChat() {
                 ))}
               </div>
             )}
+            {showThinking && message.reasoning ? (
+              <ChatReasoning text={message.reasoning} />
+            ) : null}
             {message.text && <ChatText text={message.text} />}
             {message.toolNote ? (
               <small className="pet-chat__tool-note">{message.toolNote}</small>
             ) : null}
-            <time dateTime={new Date(message.at).toISOString()}>
-              {new Date(message.at).toLocaleTimeString(t.localeTag, {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </time>
+            <div className="pet-chat__meta">
+              <time dateTime={new Date(message.at).toISOString()}>
+                {new Date(message.at).toLocaleTimeString(t.localeTag, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </time>
+              <button
+                type="button"
+                className="pet-chat__copy"
+                title="复制这条消息"
+                aria-label="复制这条消息"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await navigator.clipboard.writeText(message.text);
+                    } catch {
+                      await invoke("set_clipboard_text", { text: message.text }).catch(() => undefined);
+                    }
+                  })();
+                }}
+              >
+                <Copy size={11} strokeWidth={2} />
+              </button>
+            </div>
           </div>
         ))}
-        {busy && streamingReply && (
+        {busy && (streamingReasoning || streamingReply) && (
           <div className="pet-chat__bubble pet-chat__bubble--assistant">
-            <ChatText text={streamingReply} />
+            {showThinking && streamingReasoning ? (
+              <ChatReasoning text={streamingReasoning} streaming />
+            ) : null}
+            {streamingReply ? <ChatText text={streamingReply} /> : null}
           </div>
         )}
         {busy && (

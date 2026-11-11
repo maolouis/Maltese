@@ -1,0 +1,54 @@
+.chat-reasoning {
+  margin: 0 0 6px;
+  border: 1px solid rgba(20, 24, 35, 0.1);
+  border-radius: 9px;
+  background: rgba(20, 24, 35, 0.035);
+  overflow: hidden;
+}
+
+.chat-reasoning__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: #6d7480;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-reasoning__head:hover {
+  background: rgba(20, 24, 35, 0.04);
+}
+
+.chat-reasoning__head small {
+  margin-left: auto;
+  color: #9aa0ab;
+  font-size: 9.5px;
+}
+
+.chat-reasoning__chevron {
+  transition: transform 140ms ease;
+  flex: 0 0 auto;
+}
+
+.chat-reasoning--open .chat-reasoning__chevron {
+  transform: rotate(90deg);
+}
+
+.chat-reasoning__body {
+  margin: 0;
+  padding: 0 8px 7px 20px;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #6d7480;
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.6;
+}

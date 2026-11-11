@@ -256,6 +256,14 @@ export function LocalChatSettings({
               />
               <span>{t.chat.modelStream}</span>
             </label>
+            <label className="local-chat-settings__check">
+              <input
+                type="checkbox"
+                checked={config.showThinking}
+                onChange={(event) => update({ showThinking: event.currentTarget.checked })}
+              />
+              <span>展示思考过程（默认折叠，可点开）</span>
+            </label>
             <p className="local-chat-settings__hint">{t.chat.modelVision}</p>
           </fieldset>
           <div className="local-chat-settings__actions">

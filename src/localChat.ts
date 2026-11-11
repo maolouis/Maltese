@@ -35,6 +35,8 @@ export type LocalChatConfig = {
   enableThinking: boolean;
   /** 思考深度；enableThinking 由它派生，保留字段兼容旧配置。 */
   thinkingDepth: ThinkingDepth;
+  /** 是否在聊天里展示思考过程（默认折叠，可展开）。 */
+  showThinking: boolean;
   stream: boolean;
 };
 
@@ -51,6 +53,7 @@ export const DEFAULT_LOCAL_CHAT: LocalChatConfig = {
   topP: 0.9,
   enableThinking: false,
   thinkingDepth: "off",
+  showThinking: true,
   stream: true,
 };
 
@@ -84,6 +87,7 @@ export function loadLocalChatConfig(): LocalChatConfig {
           : parsed.enableThinking === true
             ? "normal"
             : "off",
+      showThinking: parsed.showThinking !== false,
       stream: parsed.stream !== false,
     };
   } catch {
@@ -107,6 +111,7 @@ export function saveLocalChatConfig(config: LocalChatConfig) {
       config.thinkingDepth === "deep"
         ? config.thinkingDepth
         : "off",
+    showThinking: config.showThinking !== false,
     stream: config.stream !== false,
   };
   try {
