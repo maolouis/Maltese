@@ -146,6 +146,7 @@ pub async fn local_chat(
     history: Option<Vec<LocalChatTurn>>,
     character: String,
     images: Option<Vec<String>>,
+    settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -159,8 +160,11 @@ pub async fn local_chat(
         return Err("还没有填写本地模型名称。请先在聊天右上角的设置里选择模型。".into());
     }
     let endpoint = chat_endpoint(&base_url)?;
-    let settings = LocalChatGenerationSettings::default();
+    let settings = settings.unwrap_or_default();
     // 非流式也要支持图片（复选框里没开流式时，粘贴的图片同样要发给模型）。
+    // 思考吃光预算时要重试，所以这两份数据先克隆留底。
+    let retry_history = history.clone();
+    let retry_images = images.clone();
     let messages = build_messages(&message, history, &character, images);
 
     let client = Client::builder()
@@ -195,7 +199,41 @@ pub async fn local_chat(
     }
     let value: Value = serde_json::from_str(&body)
         .map_err(|error| format!("本地模型返回的不是有效 JSON：{error}"))?;
-    extract_content(&value)
+    if let Some(text) = extract_content(&value) {
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            return Ok(text);
+        }
+    }
+
+    // 只拿到思考、正文是空的：多半是思考把 token 预算吃光了（finish_reason=length）。
+    // 主动聊天这类短句场景必须关掉思考重试一次，否则每次都退化成模板台词。
+    let retry_settings = LocalChatGenerationSettings {
+        max_tokens: Some(settings.max_tokens.unwrap_or(256).max(512)),
+        temperature: settings.temperature,
+        top_p: settings.top_p,
+        enable_thinking: Some(false),
+        reasoning_effort: Some("none".to_string()),
+        reasoning_budget_tokens: Some(0),
+    };
+    let retry_messages = build_messages(&message, retry_history, &character, retry_images);
+    let mut retry_request = client
+        .post(endpoint)
+        .json(&generation_payload(&model, retry_messages, &retry_settings, false));
+    if let Some(key) = api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        retry_request = retry_request.bearer_auth(key);
+    }
+    let retry_response = retry_request
+        .send()
+        .await
+        .map_err(|error| format!("本地模型重试失败：{error}"))?;
+    let retry_body = retry_response
+        .text()
+        .await
+        .map_err(|error| format!("读取本地模型响应失败：{error}"))?;
+    let retry_value: Value = serde_json::from_str(&retry_body)
+        .map_err(|error| format!("本地模型返回的不是有效 JSON：{error}"))?;
+    extract_content(&retry_value)
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
         .ok_or_else(|| "本地模型没有返回文字。请检查模型名称是否正确。".to_string())

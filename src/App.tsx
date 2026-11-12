@@ -7124,6 +7124,8 @@ function IslandApp({
         const prompt = buildProactivePrompt(observe, avoid) + extra;
         const config = loadLocalChatConfig();
         if (config.backend === "local" && config.model) {
+          // 主动聊天只要一句短话：显式关掉思考、给足 256 token，
+          // 避免思考把预算吃光导致正文为空、退化成模板台词。
           return invoke<string>("local_chat", {
             baseUrl: config.baseUrl,
             model: config.model,
@@ -7132,6 +7134,14 @@ function IslandApp({
             history: [],
             character: proactiveCharacter,
             images: null,
+            settings: {
+              maxTokens: 256,
+              temperature: 0.85,
+              topP: 0.9,
+              enableThinking: false,
+              reasoningEffort: "none",
+              reasoningBudgetTokens: 0,
+            },
           });
         }
         const reply = await invoke<{ text: string }>("dsh_chat", {
