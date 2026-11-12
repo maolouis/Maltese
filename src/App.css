@@ -6196,3 +6196,34 @@ html.maltese-page-opening .island__collapsed {
   font-size: 12px;
   line-height: 1.5;
 }
+/* 气泡面板里的「固定到桌面」：比普通链接更醒目，悬停变色 + 上浮 */
+.pet-bubble-panel__pin {
+  display: block;
+  width: 100%;
+  margin: 6px 0 2px;
+  padding: 7px 12px;
+  border: 1px solid rgba(13, 148, 136, 0.45);
+  border-radius: 10px;
+  background: rgba(45, 212, 191, 0.16);
+  color: #0f766e;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.pet-bubble-panel__pin:hover {
+  background: rgba(45, 212, 191, 0.32);
+  border-color: rgba(13, 148, 136, 0.85);
+  color: #115e59;
+  transform: translateY(-1px);
+}
+
+.pet-bubble-panel__pin:active {
+  transform: translateY(0) scale(0.98);
+}

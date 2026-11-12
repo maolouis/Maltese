@@ -1,15 +1,15 @@
 {
-  "version": "1.3.40",
-  "notes": "# Maltese v1.3.40\n\n## 右键气泡新增「📌 固定当前标签到桌面」\n\n右键小狗弹出的气泡里多了一个按钮，点一下就能把**当前标签页**从桌宠身上\"摘\"下来，变成桌面上一个一直存在的窗口。\n\n- 入口：右键小狗 →「📌 固定当前标签到桌面」；\n- 固定窗口置顶、可拖动（拖标题栏）、可缩放（最小 320×360），关闭后不影响桌宠；\n- 第一次弹出会落在工作区右下角，不会挡住小狗；\n- 顶部有徽章「已固定在桌面 · 聊天」和「取消固定」按钮，取消后窗口收回；\n- 窗口显示在任务栏（`skipTaskbar: false`），不会\"藏起来找不到\"；\n- 固定的标签会记住（`maltese-pinned-page`），下次固定直接是同一页。\n\n目前支持固定**聊天**标签（聊天记录和主面板共用一份 localStorage 数据）；如果当前停在别的标签，\n固定窗口会说明\"该标签暂不支持固定\"，并提示先切到聊天。\n\n## 实现\n\n- 新增窗口 `pinned`（`index.html?window=pinned`，透明、无边框、置顶、可缩放、默认隐藏）；\n- 新增 `src/PinnedPanel.tsx` + `PinnedPanel.css`：头部（徽章 + 取消固定 + 关闭，`data-tauri-drag-region` 支持拖动）+ 内容区；\n- 新增原生命令 `pin_page_to_desktop(page)` / `unpin_page_from_desktop()`：定位到右下角、置顶、显示并广播 `maltese-pinned-page`；\n- 右键菜单在 `src/PetBubble.tsx`，通过 `maltese-pin-current-page` 事件通知主窗口，主窗口按当前 `page` 调固定命令。\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- `scripts/verify-build.mjs` 全部检查通过（窗口配置可被正确解析，共 12 个窗口）。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.40，已构建、安装到本机。**本次仍只本地提交，未推送远端。**",
-  "pub_date": "2026-11-12T10:00:49Z",
+  "version": "1.3.41",
+  "notes": "# Maltese v1.3.41\n\n## 修：「固定到桌面」按钮找不到\n\n上一版只把按钮加在了 `PetBubble` 那个独立气泡窗口的菜单里，但**右键小狗其实是直接打开聊天页**\n（`onContextMenu → onOpenPage(\"chat\")`），根本没走那个菜单，所以看不到按钮。\n\n这一版把入口放到了用户真正会看到的地方：\n\n| 位置 | 什么时候能看到 | 文案 |\n| --- | --- | --- |\n| 鼠标悬停气泡面板 | 鼠标移到小狗身上 | 📌 固定「聊天」到桌面（显示当前标签名） |\n| 聊天页头部 | 右键小狗 → 打开聊天后 | 📌 固定到桌面 |\n\n- 悬停面板里的按钮按当前标签命名（聊天 / 待办 / 音乐 / 剪贴板 / 消息 / 快捷…），点完直接把气泡收起来；\n- 聊天页头部的按钮固定的是聊天标签，点完在桌面右下角出现固定窗口；\n- 固定窗口里不再显示这个按钮，避免\"窗口里再固定一个窗口\"；\n- 两个按钮都是 12.5px 加粗、青色底，悬停变亮 + 上浮，符合上一版定的可读性规则。\n\n## 验证\n\n- `tsc --noEmit`、`vite build` 通过。\n- `scripts/verify-build.mjs` 全部检查通过。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.41，已构建、安装到本机。**只本地提交，未推送远端。**",
+  "pub_date": "2026-11-12T10:24:52Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09FNzB3MDdJb3lZWkF6QnJXcnJZTGRvRTNxdjZwbXhIN3p4OWx2NGc5c1RRY2cvemxaU0JHeDZkMTN6NjFEQTk0aEJDS0lRQkVFOGNIZjMvVGxXVlEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc3NjQzCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQwX3g2NC1zZXR1cC5leGUKenhlVC9GRzVERGhVWG10LzhvK3VBSzZzc2ZNbm5iSVNkcVVGTkFtZUNZRWxQQ2ZHaDhLVTJlcXMxSnE1RW9XczhUSEF5TG0zN24zZDFoN1RPUWhHQ2c9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.40/Maltese-1.3.40-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xVOTV3ekxDY2d3TzJLMER6Z0ZEUWRkWDJnMktxeDV2dlhZYXNxSVRHeTlqMmQ0TFZ3VFpJVmVDYkRmckMrY2N6a2Npekp0NHNKc1orNE5hM2RNbWdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc5MDg2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQxX3g2NC1zZXR1cC5leGUKV0RsQlQ2TmZjblJvcmtzUk5IbmIrbFFLUWorelZPQ1pyOGV6U3BzelN6ckNIMWVsWFdDN0hQRHZYUzVFS3NYUDJ1bEVxWnp6bjhiYW13Um5jd3Y4RHc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.41/Maltese-1.3.41-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09FNzB3MDdJb3lZWkF6QnJXcnJZTGRvRTNxdjZwbXhIN3p4OWx2NGc5c1RRY2cvemxaU0JHeDZkMTN6NjFEQTk0aEJDS0lRQkVFOGNIZjMvVGxXVlEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc3NjQzCWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQwX3g2NC1zZXR1cC5leGUKenhlVC9GRzVERGhVWG10LzhvK3VBSzZzc2ZNbm5iSVNkcVVGTkFtZUNZRWxQQ2ZHaDhLVTJlcXMxSnE1RW9XczhUSEF5TG0zN24zZDFoN1RPUWhHQ2c9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.40/Maltese-1.3.40-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xVOTV3ekxDY2d3TzJLMER6Z0ZEUWRkWDJnMktxeDV2dlhZYXNxSVRHeTlqMmQ0TFZ3VFpJVmVDYkRmckMrY2N6a2Npekp0NHNKc1orNE5hM2RNbWdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc5MDg2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQxX3g2NC1zZXR1cC5leGUKV0RsQlQ2TmZjblJvcmtzUk5IbmIrbFFLUWorelZPQ1pyOGV6U3BzelN6ckNIMWVsWFdDN0hQRHZYUzVFS3NYUDJ1bEVxWnp6bjhiYW13Um5jd3Y4RHc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.41/Maltese-1.3.41-x64-setup.exe"
     }
   }
 }

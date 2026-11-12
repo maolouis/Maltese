@@ -1919,6 +1919,17 @@ export function IslandShell({
                   </div>
                   <button
                     type="button"
+                    className="pet-bubble-panel__pin"
+                    title="把这个标签页固定在桌面上，随时能看"
+                    onClick={() => {
+                      void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+                      onOverlayClose();
+                    }}
+                  >
+                    📌 固定「{PAGE_LABELS[page] ?? "当前标签"}」到桌面
+                  </button>
+                  <button
+                    type="button"
                     className="pet-bubble-panel__sleep"
                     onClick={() => onPetAction("sleeping")}
                   >
@@ -5336,6 +5347,16 @@ const CUSTOM_SHORTCUTS_KEY = "maltese-custom-shortcuts";
 const HIDDEN_SHORTCUTS_KEY = "maltese-hidden-shortcuts";
 const HIDDEN_SHORTCUT_ACTIONS_KEY = "maltese-hidden-shortcut-actions";
 
+const PAGE_LABELS: Record<string, string> = {
+  chat: "聊天",
+  todo: "待办",
+  music: "音乐",
+  clipboard: "剪贴板",
+  video: "看视频",
+  qq: "消息",
+  assistant: "快捷",
+  layout: "设置",
+};
 function shortcutPathKey(path: string): string {
   return path
     .replace(/\//g, "\\")
