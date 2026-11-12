@@ -184,17 +184,34 @@ try {
   }
   console.log("[verify] ✓ 快捷方式自动识别开关/扫描目录与插件 hover 浮窗正常");
 
+  // 脚本必须按「双击」语义启动：ShellExecuteW 才会给控制台程序创建带正确
+  // 标准句柄的窗口（Command + CREATE_NO_WINDOW 会让脚本没有控制台，
+  // echo/pause 全失效，表现为「点了没反应」）。
+  const scriptLauncher = nativeSource.slice(
+    nativeSource.indexOf("fn launch_script"),
+    nativeSource.indexOf("fn launch_script") + 2000,
+  );
   if (
     !nativeSource.includes("fn launch_script") ||
-    !nativeSource.includes('args(["/d", "/c", "call"])') ||
-    !nativeSource.includes('Command::new("powershell.exe")') ||
-    !nativeSource.includes('Command::new("py.exe")') ||
-    !nativeSource.includes('Command::new("python.exe")') ||
-    !nativeSource.includes("current_dir(directory)")
+    !nativeSource.includes("fn shell_execute_program") ||
+    !nativeSource.includes("ShellExecuteW(") ||
+    !scriptLauncher.includes('"/d /c call')
+      ? true
+      : false
   ) {
     fail("脚本入口没有统一使用对应解释器、工作目录和 cmd call 启动");
+  } else if (
+    !scriptLauncher.includes('"powershell.exe"') ||
+    !scriptLauncher.includes('"py.exe"') ||
+    !scriptLauncher.includes('"python.exe"') ||
+    !scriptLauncher.includes("working_directory")
+  ) {
+    fail("脚本入口没有统一使用对应解释器、工作目录和 cmd call 启动");
+  } else if (scriptLauncher.includes("CREATE_NO_WINDOW") || scriptLauncher.includes("CREATE_NEW_CONSOLE")) {
+    // 这两个 flag 都会让脚本失去可用的控制台，属于已修过的回归。
+    fail("脚本入口又用回了会吞掉控制台的 creation flags");
   } else {
-    console.log("[verify] ✓ cmd/bat/ps1/py 脚本启动路径已接入统一启动器");
+    console.log("[verify] ✓ cmd/bat/ps1/py 脚本启动路径已接入统一启动器（ShellExecute 双击语义）");
   }
 } catch (error) {
   fail(`快捷方式目录/插件说明检查失败：${error}`);

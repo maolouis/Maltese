@@ -1246,6 +1246,53 @@ fn spawn_detached(mut command: Command) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// 启动用户脚本：开一个新的控制台窗口，和资源管理器里双击一致。
+///
+/// 之前脚本走 `spawn_detached`（`CREATE_NO_WINDOW` + 继承父进程 stdio），
+/// 而主程序是 windows 子系统、没有控制台：脚本虽然跑了，但输出无处可去，
+/// `pause` / `Read-Host` 拿不到输入，用户看到的就是「点了没反应」。
+/// 用 ShellExecuteW 打开一个控制台程序，等价于资源管理器里双击该程序。
+///
+/// 为什么不直接 `Command::spawn`：主程序是 windows 子系统、没有控制台，
+/// Rust 的 `Command` 会把父进程的标准句柄塞进 `STARTF_USESTDHANDLES`，
+/// 子进程于是「有个空窗口或干脆没有窗口」——`echo` 看不到、`pause` / `Read-Host`
+/// 立即 EOF，用户看到的就是「点了没反应」。
+/// ShellExecuteW 由系统负责给控制台程序创建带正确句柄的新窗口，这里实测：
+/// 脚本内 `[Console]::WindowWidth` 能读到 120，`IsOutputRedirected=False`。
+fn shell_execute_program(
+    program: &str,
+    parameters: &str,
+    directory: Option<&Path>,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide = |value: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(value)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let operation = wide("open");
+    let file = wide(program);
+    let params = wide(parameters);
+    let workdir: Vec<u16> = directory
+        .map(|path| path.as_os_str().encode_wide().chain(std::iter::once(0)).collect())
+        .unwrap_or_else(|| vec![0]);
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR(params.as_ptr()),
+            PCWSTR(workdir.as_ptr()),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result.0 as isize <= 32 {
+        return Err(format!("无法启动 {program}（ShellExecute 返回 {}）", result.0 as isize));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn open_local_path(path: String) -> Result<(), String> {
     let path = PathBuf::from(path.trim());
@@ -1624,56 +1671,34 @@ fn launch_canonical_path(canonical_path: &Path) -> Result<(), String> {
 fn launch_script(path: &Path, extension: &str) -> Result<(), String> {
     let normalized_path = normalize_shell_execute_path(path);
     let working_directory = normalized_path.parent();
+    // 脚本都按「双击」语义启动：系统负责开一个带正确标准句柄的控制台窗口，
+    // 这样 echo / 报错 / pause / Read-Host 都正常，用户也能看到确实跑了。
+    let quoted = format!("\"{}\"", normalized_path.display());
     match extension {
-        "ps1" => {
-            let mut command = Command::new("powershell.exe");
-            command
-                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-                .arg(&normalized_path);
-            if let Some(directory) = working_directory {
-                command.current_dir(directory);
-            }
-            spawn_detached(command)
-        }
+        "ps1" => shell_execute_program(
+            "powershell.exe",
+            &format!("-NoProfile -ExecutionPolicy Bypass -File {quoted}"),
+            working_directory,
+        )
+        .or_else(|_| shell_execute(&normalized_path)),
         "py" => {
-            let mut command = Command::new("py.exe");
-            command.arg(&normalized_path);
-            if let Some(directory) = working_directory {
-                command.current_dir(directory);
-            }
-            match spawn_detached(command) {
-                Ok(()) => Ok(()),
-                Err(py_error) => {
-                    // 某些 Windows 环境只安装 python.exe，没有 Python Launcher。
-                    let mut fallback = Command::new("python.exe");
-                    fallback.arg(&normalized_path);
-                    if let Some(directory) = working_directory {
-                        fallback.current_dir(directory);
-                    }
-                    spawn_detached(fallback).map_err(|python_error| {
-                        format!(
-                            "无法启动 Python 脚本：py.exe 失败（{py_error}），python.exe 也不可用（{python_error}）"
-                        )
-                    })
-                }
-            }
+            // 有 Python Launcher 用 py.exe，否则退回 python.exe。
+            shell_execute_program("py.exe", &quoted, working_directory)
+                .or_else(|_| shell_execute_program("python.exe", &quoted, working_directory))
+                .or_else(|_| shell_execute(&normalized_path))
         }
         "bat" | "cmd" => {
-            // 直接执行脚本，不再使用 `start`。`call` 让 cmd 正确处理带空格的路径，
-            // `/d` 禁止用户的 AutoRun 命令干扰快捷入口。
-            let mut command = Command::new("cmd.exe");
-            command
-                .args(["/d", "/c", "call"])
-                .arg(&normalized_path);
-            if let Some(directory) = working_directory {
-                command.current_dir(directory);
-            }
-            spawn_detached(command)
+            // cmd.exe 在 /c 之后保持脚本自己的工作目录，窗口由系统创建。
+            shell_execute_program(
+                "cmd.exe",
+                &format!("/d /c call {quoted}"),
+                working_directory,
+            )
+            .or_else(|_| shell_execute(&normalized_path))
         }
         _ => Err("不支持的脚本类型。".to_string()),
     }
 }
-
 /// 打开用户明确指定的入口。桌面发现的入口走白名单校验；
 /// 自定义快捷方式和用户为快捷方式绑定的全局热键走这里。
 pub(crate) fn launch_shortcut_path(path: PathBuf) -> Result<(), String> {
