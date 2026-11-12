@@ -1314,6 +1314,8 @@ fn open_billiards_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn close_billiards_window(app: AppHandle) -> Result<(), String> {
+    // 退出台球一定要把真实桌面图标放回去。
+    let _ = desktop_icons::desktop_icons_restore();
     if let Some(window) = app.get_webview_window("billiards") {
         let _ = window.hide();
     }
@@ -3771,6 +3773,8 @@ pub fn run() {
             if let Err(error) = clipboard_history::init(app.handle()) {
                 eprintln!("failed to initialize clipboard history: {error}");
             }
+            // 上次台球若没正常退出，先把桌面图标位置改回来。
+            desktop_icons::restore_desktop_on_startup();
             wake_shortcut::init(app.handle());
             shortcut_hotkeys::init(app.handle());
             collapse_shortcut::init(app.handle());
@@ -3840,7 +3844,9 @@ pub fn run() {
             lyrics::fetch_lyrics,
             icons::get_shortcut_icon,
             desktop_extras::sync_desktop_extras,
-            desktop_icons::desktop_icon_layout,
+            desktop_icons::desktop_icons_begin_game,
+            desktop_icons::desktop_icons_move,
+            desktop_icons::desktop_icons_restore,
             desktop_icons::desktop_icons_available,
             open_billiards_window,
             desktop_extras::get_pressed_keys,

@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.3.35-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-1.3.36-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -47,7 +47,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **隐藏一起收**：用显示 / 隐藏快捷键、托盘隐藏或面板上的收起按钮隐藏桌宠时，Bongo、陪伴狗和跟随鼠标的小狗会一起消失；重新显示时按原配置一并放回来。
 - **收起面板快捷键**：另一个可录制全局快捷键，默认 `Ctrl+Alt+Shift+C`，展开面板时按一下直接收回成小狗；在设置窗口「互动」里改键，被占用时会回滚提示，并会后台重试；和「显示 / 隐藏桌宠」用同一个组合键会被拦下。
 - **桌面图标开关**：设置页「其他」里可一键隐藏 / 恢复桌面图标（当前桌面图标为隐藏状态时也能直接点回来）。
-- **桌面图标台球**：插件页里点「和小狗开一局」，把桌面图标当成台球——拉杆蓄力、松手击球、碰撞入袋，小狗在旁边跟着白球加油。玩法参考开源项目 [desktop-icon-billiards](https://github.com/liuxiaogang-com/desktop-icon-billiards)（作者 GitHub@liuxiaogang-com，MIT）；为安全起见只画不搬，桌面图标不会被移动。
+- **桌面图标台球**：插件页里点「和小狗开一局」，把桌面图标当成台球——拉杆蓄力、松手击球、碰撞入袋，小狗在旁边跟着白球加油。玩法参考开源项目 [desktop-icon-billiards](https://github.com/liuxiaogang-com/desktop-icon-billiards)（作者 GitHub@liuxiaogang-com，MIT）；真实图标会被摆成三角球阵并在桌面上滚动、入袋，退出后自动恢复原位置。
 - **主动程度可调（0–100）**：一个滑块同时决定冷却时间、每小时上限、状态模式稳定时长与免打扰时段，设置里实时显示「大约每 X 分钟最多一次、每小时不超过 Y 次」。- **自动更新（OTA）**：启动后自动检查新版本并每 4 小时复查；发现更新时收起态弹气泡、展开态显示更新条，点击即可下载签名安装包、安装并重启。设置页保留手动检查入口。
 
 ### 快捷面板

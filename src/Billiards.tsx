@@ -1,14 +1,12 @@
-// 桌面图标台球（和线条小狗轮流打一杆）。
+// 桌面图标台球：真实的桌面快捷方式图标就是球。
 //
-// 玩法参考开源项目 desktop-icon-billiards（GitHub@liuxiaogang-com，MIT）：
-// 桌面图标当球、三角摆球、六个球洞、拉杆蓄力击球。
+// 参照开源项目 desktop-icon-billiards（GitHub@liuxiaogang-com，MIT）：
+// 开局把桌面图标摆成三角球阵，瞄准蓄力击球，图标会在桌面上滚动、碰撞、入袋，
+// 退出时恢复原位置。
 //
-// Maltese 的做法：不真的移动桌面图标（跨进程写 explorer 的图标位置，进程异常
-// 退出会把桌面留在乱序状态），而是在透明覆盖层里把「桌面图标数」摆成三角球阵、
-// 在覆盖层里做完整物理与入袋。桌面本身保持原样。
-//
-// 对战规则：你打一杆 → 小狗打一杆，交替进行。小狗会调用本机模型（本地 LLM 或 DSH）
-// 来决定打哪颗球、用多大力；模型不可用时退回几何最优解。
+// 这里由 Maltese 负责物理与渲染（覆盖层只画白球 / 球洞 / 瞄准线 / 小狗 / 顶部条），
+// 真实图标位置通过 `desktop_icons_move` 批量搬动；桌面原位置在开局时备份，
+// 退出、关窗、甚至上次异常退出后再次启动都会恢复。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -16,58 +14,44 @@ import { X } from "lucide-react";
 import { loadLocalChatConfig } from "./localChat";
 import "./Billiards.css";
 
-type DesktopIconLayout = { visible: boolean; cells: unknown[]; error: string | null };
+type DesktopIconCell = { index: number; x: number; y: number; w: number; h: number };
+type DesktopIconLayout = {
+  visible: boolean;
+  areaX: number;
+  areaY: number;
+  areaW: number;
+  areaH: number;
+  cells: DesktopIconCell[];
+  error: string | null;
+};
 
 type Ball = {
+  index: number;
   x: number;
   y: number;
   vx: number;
   vy: number;
   r: number;
-  index: number;
   pocketed: boolean;
-  fade: number;
+  /** 上一次同步给桌面的位置，用来减少消息量 */
+  sentX: number;
+  sentY: number;
 };
 
 type Pocket = { x: number; y: number; r: number };
-
 type Turn = "you" | "dog";
 type Phase = "aiming" | "rolling" | "dog-thinking" | "cleared";
 
 const CUE_RADIUS = 15;
 const FRICTION = 0.988;
-const MIN_SPEED = 0.06;
-const MAX_POWER = 27;
+const MIN_SPEED = 0.05;
+const MAX_POWER = 26;
 const WALL_BOUNCE = 0.74;
-const POCKET_RADIUS = 24;
-
-function formatTime(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-
-/** 用三角形摆球：第 1 行 1 颗，第 2 行 2 颗…… */
-function rackPositions(count: number, width: number, top: number, radius: number) {
-  const positions: Array<{ x: number; y: number }> = [];
-  const gapX = radius * 2.12;
-  const gapY = radius * 1.87;
-  let row = 0;
-  while (positions.length < count) {
-    const inRow = Math.min(row + 1, count - positions.length);
-    const rowWidth = (row + inRow) / 2;
-    const startX = width / 2 - (inRow - 1) * gapX / 2;
-    for (let i = 0; i < inRow; i += 1) {
-      positions.push({ x: startX + i * gapX, y: top + row * gapY });
-    }
-    row += 1;
-    if (rowWidth > 8) break;
-  }
-  return positions;
-}
-
+const POCKET_RADIUS = 26;
+/** 图标左上角到球心的偏移：图标格子的中心就是球心 */
 export default function Billiards() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [iconCount, setIconCount] = useState(0);
+  const [count, setCount] = useState(0);
   const [phase, setPhase] = useState<Phase>("aiming");
   const [turn, setTurn] = useState<Turn>("you");
   const [youScore, setYouScore] = useState(0);
@@ -76,6 +60,7 @@ export default function Billiards() {
   const [elapsed, setElapsed] = useState(0);
   const [tip, setTip] = useState("按住左键往后拉，松手击球");
   const [dogLine, setDogLine] = useState("");
+  const [errorText, setErrorText] = useState("");
 
   const ballsRef = useRef<Ball[]>([]);
   const cueRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
@@ -85,23 +70,28 @@ export default function Billiards() {
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
   const phaseRef = useRef<Phase>("aiming");
   const turnRef = useRef<Turn>("you");
-  const pottedThisShot = useRef(0);
+  const pottedRef = useRef(0);
+  const foulRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
+  const syncAtRef = useRef(0);
+  const runningRef = useRef(false);
 
   phaseRef.current = phase;
   turnRef.current = turn;
 
-  /** 重置整局：读桌面图标数，摆三角。 */
-  const reset = useCallback(async () => {
+  /** 把图标摆成三角球阵（屏幕坐标），并记录原始位置用于恢复。 */
+  const start = useCallback(async () => {
     if (!isTauri()) {
-      setTip("需要在桌面应用里玩。");
+      setErrorText("需要在桌面应用里玩。");
       return;
     }
+    setErrorText("");
     try {
-      const layout = await invoke<DesktopIconLayout>("desktop_icon_layout");
+      const layout = await invoke<DesktopIconLayout>("desktop_icons_begin_game");
       if (!layout.visible) {
-        setTip(layout.error ?? "没有读到桌面图标（图标可能被隐藏了）");
-        setIconCount(0);
+        setErrorText(layout.error ?? "没有读到桌面图标（图标可能被隐藏了）");
+        setCount(0);
+        setRemaining(0);
         return;
       }
       const canvas = canvasRef.current;
@@ -109,24 +99,45 @@ export default function Billiards() {
       const height = canvas?.clientHeight ?? window.innerHeight;
       sizeRef.current = { w: width, h: height, dpr: window.devicePixelRatio || 1 };
 
-      const count = Math.max(0, Math.min(45, layout.cells.length));
-      setIconCount(count);
-      const radius = Math.max(12, Math.min(17, width / 46));
-      const positions = rackPositions(count, width, height * 0.2, radius);
-      ballsRef.current = positions.map((position, index) => ({
-        x: position.x,
-        y: position.y,
-        vx: 0,
-        vy: 0,
-        r: radius,
-        index,
-        pocketed: false,
-        fade: 1,
-      }));
-      setRemaining(count);
+      const windowPos = { x: layout.areaX, y: layout.areaY };
+      const cells = layout.cells.slice(0, 45);
+      const total = cells.length;
+      setCount(total);
+      setRemaining(total);
 
-      // 六洞：四角 + 两个中袋
-      const inset = 10;
+      // 三角摆球：以窗口内坐标计算，再换算成屏幕坐标。
+      const radius = Math.max(16, Math.min(26, width / 42));
+      const gapX = radius * 2.16;
+      const gapY = radius * 1.9;
+      const rackTop = height * 0.22;
+      const positions: Array<{ x: number; y: number }> = [];
+      let row = 0;
+      while (positions.length < total) {
+        const inRow = Math.min(row + 1, total - positions.length);
+        const startX = width / 2 - (inRow - 1) * gapX / 2;
+        for (let i = 0; i < inRow; i += 1) {
+          positions.push({ x: startX + i * gapX, y: rackTop + row * gapY });
+        }
+        row += 1;
+      }
+
+      ballsRef.current = cells.map((cell, i) => {
+        const target = positions[i] ?? { x: width / 2, y: rackTop };
+        return {
+          index: cell.index,
+          x: target.x,
+          y: target.y,
+          vx: 0,
+          vy: 0,
+          r: radius,
+          pocketed: false,
+          sentX: Number.NaN,
+          sentY: Number.NaN,
+        };
+      });
+
+      // 六洞
+      const inset = 8;
       pocketsRef.current = [
         { x: inset, y: inset, r: POCKET_RADIUS },
         { x: width / 2, y: inset, r: POCKET_RADIUS },
@@ -136,31 +147,68 @@ export default function Billiards() {
         { x: width - inset, y: height - inset, r: POCKET_RADIUS },
       ];
 
-      cueRef.current = { x: width / 2, y: height - 110, vx: 0, vy: 0 };
-      dogRef.current = { x: width / 2 + 60, y: height - 60, t: 0, happy: 0 };
+      cueRef.current = { x: width / 2, y: height * 0.72, vx: 0, vy: 0 };
+      dogRef.current = { x: width / 2 + 70, y: height * 0.82, t: 0, happy: 0 };
+
+      // 立刻把真实图标摆到三角位置（图标左上角 = 球心 - 半个格子）
+      const half = { x: (cells[0]?.w ?? 48) / 2, y: (cells[0]?.h ?? 48) / 2 };
+      await invoke("desktop_icons_move", {
+        moves: ballsRef.current.map((ball) => ({
+          index: ball.index,
+          x: Math.round(windowPos.x + ball.x - half.x),
+          y: Math.round(windowPos.y + ball.y - half.y),
+        })),
+      });
+
       setYouScore(0);
       setDogScore(0);
       setTurn("you");
       setPhase("aiming");
       setDogLine("");
-      setTip(count > 0 ? "按住左键往后拉，松手击球" : "桌面上没有图标可玩");
+      setTip("按住左键往后拉，松手击球");
       startedAtRef.current = null;
       setElapsed(0);
+      runningRef.current = true;
     } catch (error) {
-      setTip(`读取桌面图标失败：${String(error)}`);
+      setErrorText(`开局失败：${String(error)}`);
+    }
+  }, []);
+
+  /** 退出：恢复桌面图标 */
+  const quit = useCallback(async () => {
+    runningRef.current = false;
+    try {
+      await invoke("close_billiards_window");
+    } catch {
+      // 忽略
     }
   }, []);
 
   useEffect(() => {
-    void reset();
+    void start();
     let unlisten: (() => void) | null = null;
     void listen("maltese-billiards-start", () => {
-      void reset();
+      void start();
     }).then((cleanup) => {
       unlisten = cleanup;
     });
-    return () => unlisten?.();
-  }, [reset]);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") void quit();
+      if (event.key.toLowerCase() === "r") void start();
+    };
+    window.addEventListener("keydown", onKey);
+    // 关掉窗口时也要恢复（标题栏关闭 / Alt+F4 / 系统关闭）
+    const onUnload = () => {
+      void invoke("desktop_icons_restore").catch(() => undefined);
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      unlisten?.();
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("beforeunload", onUnload);
+      void invoke("desktop_icons_restore").catch(() => undefined);
+    };
+  }, [quit, start]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -169,56 +217,37 @@ export default function Billiards() {
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") void invoke("close_billiards_window").catch(() => undefined);
-      if (event.key.toLowerCase() === "r") void reset();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [reset]);
-
-  // ---------- 小狗的一杆：让模型决定打哪颗、多大力 ----------
+  // ---------- 小狗的一杆：让模型决定打哪颗、多大力度 ----------
   const planDogShot = useCallback(async () => {
     const balls = ballsRef.current.filter((ball) => !ball.pocketed);
     const cue = cueRef.current;
     const pockets = pocketsRef.current;
     if (balls.length === 0) return null;
 
-    // 几何兜底：挑「离洞最近、且白球能直线打到」的一颗。
     const geometric = () => {
       let best: { ball: Ball; pocket: Pocket; score: number } | null = null;
       for (const ball of balls) {
         for (const pocket of pockets) {
-          const toPocket = Math.hypot(pocket.x - ball.x, pocket.y - ball.y);
-          const toBall = Math.hypot(ball.x - cue.x, ball.y - cue.y);
-          const score = toPocket + toBall * 0.6;
+          const score = Math.hypot(pocket.x - ball.x, pocket.y - ball.y) + Math.hypot(ball.x - cue.x, ball.y - cue.y) * 0.6;
           if (!best || score < best.score) best = { ball, pocket, score };
         }
       }
       return best;
     };
 
-    let chosenIndex: number | null = null;
+    let targetBall: Ball | null = null;
     let power = 0.75;
-    let comment = "";
 
-    // 先问模型（本地 LLM / DSH），只让它挑编号和力度，物理仍由本地算。
     try {
       const config = loadLocalChatConfig();
-      const pocketsText = pockets
-        .map((pocket, index) => `洞${index + 1}(${Math.round(pocket.x)},${Math.round(pocket.y)})`)
-        .join(" ");
-      const ballsText = balls
-        .slice(0, 15)
-        .map((ball) => `#${ball.index}(${Math.round(ball.x)},${Math.round(ball.y)})`)
-        .join(" ");
+      const { w, h } = sizeRef.current;
       const prompt = [
-        "你在和主人打桌面台球。画面坐标：左上角(0,0)，右下角约(1600,900)。",
+        "你在和主人打桌面台球，帮自己算这一杆。",
+        `台面坐标：左上(0,0)，右下(${Math.round(w)},${Math.round(h)})，单位像素。`,
         `白球在(${Math.round(cue.x)},${Math.round(cue.y)})。`,
-        `球洞：${pocketsText}。`,
-        `剩余目标球：${ballsText}。`,
-        "请选择这一杆要打的球和力度，只输出一行 JSON：{\"target\": 编号, \"power\": 0.3~1}。不要解释。",
+        `球洞：${pockets.map((p, i) => `洞${i + 1}(${Math.round(p.x)},${Math.round(p.y)})`).join(" ")}。`,
+        `剩余目标球：${balls.slice(0, 15).map((b) => `#${b.index}(${Math.round(b.x)},${Math.round(b.y)})`).join(" ")}。`,
+        "只输出一行 JSON：{\"target\": 球的编号, \"power\": 0.3到1之间的力度}。不要解释。",
       ].join("\n");
       let reply = "";
       if (config.backend === "local" && config.model) {
@@ -250,26 +279,22 @@ export default function Billiards() {
       const match = reply.match(/\{[\s\S]*\}/);
       if (match) {
         const parsed = JSON.parse(match[0]) as { target?: number; power?: number };
-        if (typeof parsed.target === "number" && balls.some((ball) => ball.index === parsed.target)) {
-          chosenIndex = parsed.target;
+        if (typeof parsed.target === "number") {
+          targetBall = balls.find((ball) => ball.index === parsed.target) ?? null;
         }
-        if (typeof parsed.power === "number") {
-          power = Math.min(1, Math.max(0.3, parsed.power));
-        }
+        if (typeof parsed.power === "number") power = Math.min(1, Math.max(0.3, parsed.power));
       }
     } catch {
-      // 模型不可用就用几何解
+      // 模型不可用 → 几何兜底
     }
 
-    let targetBall = chosenIndex !== null ? balls.find((ball) => ball.index === chosenIndex) ?? null : null;
-    let pocket = pockets[0];
+    let pocket: Pocket;
     if (!targetBall) {
       const best = geometric();
       if (!best) return null;
       targetBall = best.ball;
       pocket = best.pocket;
     } else {
-      // 模型只给了球，洞挑最近的
       pocket = pockets.reduce((closest, current) =>
         Math.hypot(current.x - targetBall!.x, current.y - targetBall!.y) <
         Math.hypot(closest.x - targetBall!.x, closest.y - targetBall!.y)
@@ -278,7 +303,7 @@ export default function Billiards() {
       );
     }
 
-    // 打「幽灵球」：白球要撞到目标球指向球洞的反向延长点
+    // 幽灵球瞄准
     const dx = pocket.x - targetBall.x;
     const dy = pocket.y - targetBall.y;
     const distance = Math.hypot(dx, dy) || 1;
@@ -288,35 +313,35 @@ export default function Billiards() {
     const aimY = ghostY - cue.y;
     const aimDistance = Math.hypot(aimX, aimY) || 1;
     const speed = MAX_POWER * power;
-    comment = `小狗瞄准了 #${targetBall.index + 1} 号球`;
     return {
       vx: (aimX / aimDistance) * speed,
       vy: (aimY / aimDistance) * speed,
-      comment,
+      comment: `小狗盯上了 ${targetBall.index + 1} 号图标`,
     };
   }, []);
 
   const fireDogShot = useCallback(async () => {
     if (phaseRef.current === "rolling") return;
     setPhase("dog-thinking");
-    setTip("小狗在想这一杆怎么打…");
+    setTip("小狗在想这一杆…");
     const shot = await planDogShot();
     if (!shot) {
       setPhase("aiming");
       setTurn("you");
-      setTip("没有可打的球了");
+      setTip("这一局打完了");
       return;
     }
     setDogLine(shot.comment);
     startedAtRef.current = startedAtRef.current ?? Date.now();
-    pottedThisShot.current = 0;
+    pottedRef.current = 0;
+    foulRef.current = false;
     cueRef.current.vx = shot.vx;
     cueRef.current.vy = shot.vy;
     setPhase("rolling");
     setDogLine("");
   }, [planDogShot]);
 
-  // ---------- 物理 + 绘制 ----------
+  // ---------- 物理 + 把真实图标搬到球的位置 ----------
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -326,11 +351,11 @@ export default function Billiards() {
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      sizeRef.current = { w: width, h: height, dpr };
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      sizeRef.current = { w, h, dpr };
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
@@ -355,24 +380,19 @@ export default function Billiards() {
       if (cue.x + CUE_RADIUS > w) { cue.x = w - CUE_RADIUS; cue.vx = -Math.abs(cue.vx) * WALL_BOUNCE; }
       if (cue.y - CUE_RADIUS < 0) { cue.y = CUE_RADIUS; cue.vy = Math.abs(cue.vy) * WALL_BOUNCE; }
       if (cue.y + CUE_RADIUS > h) { cue.y = h - CUE_RADIUS; cue.vy = -Math.abs(cue.vy) * WALL_BOUNCE; }
-
-      // 白球落袋：回到开球点，不算分
       for (const pocket of pockets) {
         if (Math.hypot(cue.x - pocket.x, cue.y - pocket.y) < pocket.r) {
           cue.x = w / 2;
-          cue.y = h - 110;
+          cue.y = h * 0.72;
           cue.vx = 0;
           cue.vy = 0;
-          pottedThisShot.current += 100; // 标记本杆有犯规，不计分
+          foulRef.current = true;
         }
       }
 
       // 目标球
       for (const ball of balls) {
-        if (ball.pocketed) {
-          ball.fade = Math.max(0, ball.fade - 0.04);
-          continue;
-        }
+        if (ball.pocketed) continue;
         ball.x += ball.vx;
         ball.y += ball.vy;
         ball.vx *= FRICTION;
@@ -385,18 +405,18 @@ export default function Billiards() {
         if (ball.x + ball.r > w) { ball.x = w - ball.r; ball.vx = -Math.abs(ball.vx) * WALL_BOUNCE; }
         if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy) * WALL_BOUNCE; }
         if (ball.y + ball.r > h) { ball.y = h - ball.r; ball.vy = -Math.abs(ball.vy) * WALL_BOUNCE; }
-
-        // 落袋
         for (const pocket of pockets) {
           if (Math.hypot(ball.x - pocket.x, ball.y - pocket.y) < pocket.r) {
             ball.pocketed = true;
-            pottedThisShot.current += 1;
+            ball.vx = 0;
+            ball.vy = 0;
+            pottedRef.current += 1;
             break;
           }
         }
       }
 
-      // 白球撞目标球
+      // 碰撞：白球 × 目标球
       for (const ball of balls) {
         if (ball.pocketed) continue;
         const dx = ball.x - cue.x;
@@ -410,14 +430,13 @@ export default function Billiards() {
           const overlap = minDistance - distance;
           ball.x += nx * overlap;
           ball.y += ny * overlap;
-          cue.vx = -nx * speed * 0.42;
-          cue.vy = -ny * speed * 0.42;
-          ball.vx += nx * speed * 0.85;
-          ball.vy += ny * speed * 0.85;
+          cue.vx = -nx * speed * 0.4;
+          cue.vy = -ny * speed * 0.4;
+          ball.vx += nx * speed * 0.9;
+          ball.vy += ny * speed * 0.9;
         }
       }
-
-      // 球与球
+      // 目标球 × 目标球
       for (let i = 0; i < balls.length; i += 1) {
         const a = balls[i];
         if (a.pocketed) continue;
@@ -438,7 +457,7 @@ export default function Billiards() {
             b.y += ny * overlap;
             const relative = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
             if (relative < 0) continue;
-            const impulse = relative * 0.78;
+            const impulse = relative * 0.8;
             a.vx += nx * impulse;
             a.vy += ny * impulse;
             b.vx -= nx * impulse;
@@ -447,105 +466,92 @@ export default function Billiards() {
         }
       }
 
+      // 把真实图标搬到球的位置（每秒约 25 次，避免刷爆消息）
+      const now = performance.now();
+      if (runningRef.current && now - syncAtRef.current > 40) {
+        syncAtRef.current = now;
+        const layout = ballsRef.current;
+        const moves = layout.map((ball) => ({
+          index: ball.index,
+          x: Math.round(window.screenX + ball.x - ball.r),
+          y: Math.round(window.screenY + ball.y - ball.r * 0.92),
+        }));
+        void invoke("desktop_icons_move", { moves }).catch(() => undefined);
+        for (const ball of layout) {
+          ball.sentX = ball.x;
+          ball.sentY = ball.y;
+        }
+      }
+
       // 停止 → 结算
       const moving =
         Math.hypot(cue.vx, cue.vy) > 0 ||
         balls.some((ball) => !ball.pocketed && Math.hypot(ball.vx, ball.vy) > 0);
       if (!moving && phaseRef.current === "rolling") {
-        const potted = pottedThisShot.current;
-        const foul = potted >= 100;
-        const scored = foul ? 0 : potted;
-        pottedThisShot.current = 0;
+        const scored = foulRef.current ? 0 : pottedRef.current;
+        pottedRef.current = 0;
+        foulRef.current = false;
         const left = balls.filter((ball) => !ball.pocketed).length;
+        setRemaining(left);
         if (turnRef.current === "you") {
           if (scored > 0) setYouScore((value) => value + scored);
-          setRemaining(left);
           if (left === 0) {
             setPhase("cleared");
             dogRef.current.happy = 1;
-            return;
+          } else {
+            setTurn("dog");
+            setTip("轮到小狗了…");
+            setPhase("dog-thinking");
+            window.setTimeout(() => void fireDogShot(), 520);
           }
-          setTurn("dog");
-          setTip("轮到小狗了…");
-          setPhase("dog-thinking");
-          // 让小狗接着打
-          window.setTimeout(() => {
-            void fireDogShot();
-          }, 550);
         } else {
           if (scored > 0) setDogScore((value) => value + scored);
-          setRemaining(left);
           if (left === 0) {
             setPhase("cleared");
             dogRef.current.happy = 1;
-            return;
+          } else {
+            setTurn("you");
+            setTip("轮到你了：按住左键往后拉，松手击球");
+            setPhase("aiming");
           }
-          setTurn("you");
-          setTip("轮到你了：按住左键往后拉，松手击球");
-          setPhase("aiming");
         }
         setDogLine("");
       }
 
-      // 小狗跟着白球
+      // 小狗
       const dog = dogRef.current;
       dog.t += 0.05;
       if (dog.happy > 0) dog.happy = Math.max(0, dog.happy - 0.01);
-      const targetX = cue.x + 52;
-      const targetY = Math.min(h - 44, Math.max(h * 0.6, cue.y + 66));
-      dog.x += (targetX - dog.x) * 0.06;
-      dog.y += (targetY - dog.y) * 0.06;
+      dog.x += (cue.x + 60 - dog.x) * 0.06;
+      dog.y += (Math.min(h - 40, Math.max(h * 0.62, cue.y + 70)) - dog.y) * 0.06;
 
-      // ---------- 绘制 ----------
+      // ---------- 绘制（只有白球、洞、瞄线、小狗、边框；图标是桌面上的真实图标） ----------
       context.clearRect(0, 0, w, h);
-
-      // 台面
-      const margin = 16;
+      const margin = 10;
       context.beginPath();
-      context.roundRect(margin, margin, w - margin * 2, h - margin * 2, 18);
-      context.fillStyle = "rgba(14, 116, 90, 0.16)";
-      context.fill();
+      context.roundRect(margin, margin, w - margin * 2, h - margin * 2, 20);
+      context.strokeStyle = "rgba(45, 212, 191, 0.35)";
       context.lineWidth = 2;
-      context.strokeStyle = "rgba(45, 212, 191, 0.45)";
       context.stroke();
 
-      // 球洞
       for (const pocket of pockets) {
         context.beginPath();
         context.arc(pocket.x, pocket.y, pocket.r, 0, Math.PI * 2);
-        context.fillStyle = "rgba(2, 6, 23, 0.62)";
+        context.fillStyle = "rgba(2, 6, 23, 0.55)";
         context.fill();
+        context.strokeStyle = "rgba(45, 212, 191, 0.45)";
         context.lineWidth = 2;
-        context.strokeStyle = "rgba(45, 212, 191, 0.5)";
         context.stroke();
       }
 
-      // 目标球
-      for (const ball of balls) {
-        if (ball.fade <= 0) continue;
-        context.beginPath();
-        context.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
-        context.fillStyle = `rgba(250, 250, 252, ${0.92 * ball.fade})`;
-        context.fill();
-        context.lineWidth = 2;
-        context.strokeStyle = `rgba(56, 189, 248, ${0.85 * ball.fade})`;
-        context.stroke();
-        context.beginPath();
-        context.arc(ball.x, ball.y, ball.r * 0.34, 0, Math.PI * 2);
-        context.fillStyle = `rgba(56, 189, 248, ${0.55 * ball.fade})`;
-        context.fill();
-      }
-
-      // 白球
       context.beginPath();
       context.arc(cue.x, cue.y, CUE_RADIUS, 0, Math.PI * 2);
       context.fillStyle = "rgba(255, 255, 255, 0.96)";
       context.fill();
-      context.lineWidth = 2;
       context.strokeStyle = "rgba(148, 163, 184, 0.9)";
+      context.lineWidth = 2;
       context.stroke();
 
-      // 瞄准线与力度
       if (aimRef.current.active && phaseRef.current === "aiming") {
         const aim = aimRef.current;
         const dx = cue.x - aim.x;
@@ -554,7 +560,7 @@ export default function Billiards() {
         if (distance > 4) {
           const nx = dx / distance;
           const ny = dy / distance;
-          const length = Math.min(460, distance * 1.7);
+          const length = Math.min(520, distance * 1.8);
           context.beginPath();
           context.setLineDash([10, 8]);
           context.moveTo(cue.x, cue.y);
@@ -571,7 +577,6 @@ export default function Billiards() {
         }
       }
 
-      // 小狗
       const bob = Math.sin(dog.t) * (dog.happy > 0 ? 7 : 2);
       context.save();
       context.translate(dog.x, dog.y + bob);
@@ -583,8 +588,8 @@ export default function Billiards() {
       context.ellipse(0, 0, 17, 12, 0, 0, Math.PI * 2);
       context.fillStyle = "rgba(255, 255, 255, 0.96)";
       context.fill();
-      context.lineWidth = 2;
       context.strokeStyle = "rgba(100, 116, 139, 0.85)";
+      context.lineWidth = 2;
       context.stroke();
       for (const [ex, rotation] of [[-11, -0.4], [11, 0.4]] as const) {
         context.beginPath();
@@ -619,24 +624,24 @@ export default function Billiards() {
     };
   }, [dogLine, fireDogShot]);
 
-  const pointerPosition = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const pointOf = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 || phaseRef.current !== "aiming" || turnRef.current !== "you") return;
-    aimRef.current = { active: true, ...pointerPosition(event) };
+    aimRef.current = { active: true, ...pointOf(event) };
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!aimRef.current.active) return;
-    aimRef.current = { active: true, ...pointerPosition(event) };
+    aimRef.current = { active: true, ...pointOf(event) };
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!aimRef.current.active) return;
-    const point = pointerPosition(event);
+    const point = pointOf(event);
     aimRef.current.active = false;
     const cue = cueRef.current;
     const dx = cue.x - point.x;
@@ -645,7 +650,8 @@ export default function Billiards() {
     if (distance < 12) return;
     const power = Math.min(1, distance / 260) * MAX_POWER;
     startedAtRef.current = startedAtRef.current ?? Date.now();
-    pottedThisShot.current = 0;
+    pottedRef.current = 0;
+    foulRef.current = false;
     cue.vx = (dx / distance) * power;
     cue.vy = (dy / distance) * power;
     setTip("球在滚…");
@@ -676,24 +682,20 @@ export default function Billiards() {
           你 {youScore} : {dogScore} 小狗
         </span>
         <span>剩余 {remaining}</span>
-        <span>{formatTime(elapsed)}</span>
-        <button type="button" className="billiards__btn" onClick={() => void reset()} title="重开（R）">
+        <span>{Math.floor(elapsed / 1000)}s</span>
+        <button type="button" className="billiards__btn" onClick={() => void start()} title="重开（R）">
           重开
         </button>
-        <button
-          type="button"
-          className="billiards__btn"
-          onClick={() => void invoke("close_billiards_window").catch(() => undefined)}
-          title="退出（Esc）"
-        >
+        <button type="button" className="billiards__btn" onClick={() => void quit()} title="退出并恢复桌面（Esc）">
           <X size={13} /> 退出
         </button>
       </div>
 
       <p className="billiards__tip">
-        {phase === "cleared"
-          ? `清台完成：你 ${youScore} 分，小狗 ${dogScore} 分`
-          : tip + (iconCount > 0 ? `（桌面 ${iconCount} 个图标）` : "")}
+        {errorText ||
+          (phase === "cleared"
+            ? `清台完成：你 ${youScore} 分，小狗 ${dogScore} 分（退出后桌面自动恢复）`
+            : `${tip}${count > 0 ? ` · 桌面 ${count} 个图标就是 ${count} 颗球` : ""}`)}
       </p>
 
       <p className="billiards__credit">玩法参考 desktop-icon-billiards · GitHub@liuxiaogang-com（MIT）</p>
