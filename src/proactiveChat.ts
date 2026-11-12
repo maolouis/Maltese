@@ -459,3 +459,109 @@ export function pickFallback(
   const best = candidates.filter((item) => item.used === leastUsed);
   return best[Math.floor(Math.random() * best.length)].line;
 }
+// ---------- 主动程度（0–100）----------
+// 一个滑块控制四个量：冷却时间、每小时上限、状态模式的稳定时长、免打扰时段。
+// 这样「主动一点/安静一点」是可解释的，而不是玄学。
+
+export type ProactivePlan = {
+  level: number;
+  /** 两次主动说话至少间隔多少分钟 */
+  cooldownMinutes: number;
+  /** 每小时最多说几次 */
+  maxPerHour: number;
+  /** 跟随状态模式下，情境要稳定多少分钟才开口 */
+  stabilityMinutes: number;
+  /** 免打扰时段（含起点、不含终点），空数组表示不静默 */
+  quietHours: [number, number] | null;
+  /** 模型不可用时是否允许用备用台词（很高主动程度时才关掉，避免话变多但变生硬） */
+  allowFallback: boolean;
+};
+
+const LEVEL_KEY = "maltese-proactive-level";
+export const DEFAULT_PROACTIVE_LEVEL = 50;
+
+export function loadProactiveLevel(): number {
+  try {
+    const raw = window.localStorage.getItem(LEVEL_KEY);
+    if (!raw) return DEFAULT_PROACTIVE_LEVEL;
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : DEFAULT_PROACTIVE_LEVEL;
+  } catch {
+    return DEFAULT_PROACTIVE_LEVEL;
+  }
+}
+
+export function saveProactiveLevel(level: number) {
+  const clamped = Math.min(100, Math.max(0, Math.round(level)));
+  try {
+    window.localStorage.setItem(LEVEL_KEY, String(clamped));
+  } catch {
+    // 忽略
+  }
+  return clamped;
+}
+
+/** 把 0–100 的主动程度换算成可执行的节奏参数。 */
+export function proactivePlan(level: number): ProactivePlan {
+  const value = Math.min(100, Math.max(0, Math.round(level)));
+  // 冷却：100 档约 8 分钟，50 档约 1.5 小时，0 档基本不说话。
+  const cooldownMinutes = Math.max(8, Math.round(240 * Math.pow(1 - value / 100, 1.4)));
+  const maxPerHour = value < 20 ? 1 : value < 45 ? 2 : value < 70 ? 4 : value < 90 ? 6 : 8;
+  const stabilityMinutes = value < 30 ? 6 : value < 60 ? 3 : value < 85 ? 2 : 1;
+  const quietHours: [number, number] | null =
+    value < 70 ? [0, 7] : value < 90 ? [1, 6] : null;
+  return {
+    level: value,
+    cooldownMinutes,
+    maxPerHour,
+    stabilityMinutes,
+    quietHours,
+    allowFallback: true,
+  };
+}
+
+/** 一句话解释当前档位，直接显示在设置里。 */
+export function describeProactivePlan(plan: ProactivePlan): string {
+  const quiet = plan.quietHours
+    ? `，${plan.quietHours[0]}–${plan.quietHours[1]} 点不打扰`
+    : "，全天都可以说话";
+  return `大约每 ${plan.cooldownMinutes} 分钟最多一次，每小时不超过 ${plan.maxPerHour} 次${quiet}`;
+}
+
+const TIMES_KEY = "maltese-proactive-times";
+
+function readSpeakTimes(): number[] {
+  try {
+    const raw = window.localStorage.getItem(TIMES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    return parsed.filter((item): item is number => typeof item === "number" && item > cutoff);
+  } catch {
+    return [];
+  }
+}
+
+export function recordSpeakTime(at = Date.now()) {
+  const times = [at, ...readSpeakTimes()].slice(0, 200);
+  try {
+    window.localStorage.setItem(TIMES_KEY, JSON.stringify(times));
+  } catch {
+    // 忽略
+  }
+}
+
+/** 当前是否已经超过每小时上限。 */
+export function overHourlyLimit(plan: ProactivePlan, now = Date.now()): boolean {
+  const recent = readSpeakTimes().filter((time) => now - time < 60 * 60 * 1000);
+  return recent.length >= plan.maxPerHour;
+}
+
+/** 当前是否落在免打扰时段。 */
+export function inQuietHours(plan: ProactivePlan, now = new Date()): boolean {
+  if (!plan.quietHours) return false;
+  const [start, end] = plan.quietHours;
+  const hour = now.getHours();
+  return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+}

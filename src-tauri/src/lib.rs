@@ -2,6 +2,7 @@ mod activity;
 mod clipboard_history;
 mod netease;
 mod desktop_extras;
+mod desktop_icons;
 mod dsh_api;
 mod dsh_chat;
 mod local_chat;
@@ -1289,6 +1290,32 @@ fn shell_execute_program(
     };
     if result.0 as isize <= 32 {
         return Err(format!("无法启动 {program}（ShellExecute 返回 {}）", result.0 as isize));
+    }
+    Ok(())
+}
+
+// 「和小狗打台球」：开一个覆盖桌面工作区的透明窗口（不移动真实图标）。
+#[tauri::command]
+fn open_billiards_window(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("billiards")
+        .ok_or_else(|| "台球窗口未注册".to_string())?;
+    // 铺满主显示器的工作区（避开任务栏）。
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let area = monitor.work_area();
+        let _ = window.set_position(tauri::PhysicalPosition::new(area.position.x, area.position.y));
+        let _ = window.set_size(tauri::PhysicalSize::new(area.size.width, area.size.height));
+    }
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    let _ = window.emit("maltese-billiards-start", serde_json::json!({}));
+    Ok(())
+}
+
+#[tauri::command]
+fn close_billiards_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("billiards") {
+        let _ = window.hide();
     }
     Ok(())
 }
@@ -3804,6 +3831,7 @@ pub fn run() {
             show_ready_island,
             show_island_no_focus,
             open_settings_window,
+            close_billiards_window,
             set_island_overlay,
             plan_island_overlay,
             roam_island_step,
@@ -3812,6 +3840,9 @@ pub fn run() {
             lyrics::fetch_lyrics,
             icons::get_shortcut_icon,
             desktop_extras::sync_desktop_extras,
+            desktop_icons::desktop_icon_layout,
+            desktop_icons::desktop_icons_available,
+            open_billiards_window,
             desktop_extras::get_pressed_keys,
             show_pet_bubble,
             resize_pet_bubble,

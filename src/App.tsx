@@ -92,8 +92,15 @@ import { loadLocalChatConfig } from "./localChat";
 import {
   buildPrompt as buildProactivePrompt,
   cleanTitle as cleanActivityTitle,
+  describeProactivePlan,
+  inQuietHours,
   isRepeated as isRepeatedProactiveLine,
+  loadProactiveLevel,
+  overHourlyLimit,
   pickAngle as pickProactiveAngle,
+  proactivePlan,
+  recordSpeakTime,
+  saveProactiveLevel,
   pickFallback as pickProactiveFallback,
   recentLines as recentProactiveLines,
   rememberLine as rememberProactiveLine,
@@ -362,6 +369,8 @@ type IslandSettings = {
   proactiveChatMinutes: number;
   /** 主动聊天方式：定时（interval）或跟随状态变化（state）。 */
   proactiveChatMode: ProactiveChatMode;
+  /** 主动程度 0–100：同时决定冷却、每小时上限、稳定时长与免打扰时段。 */
+  proactiveLevel: number;
   petFlipY: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -602,6 +611,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   proactiveChat: false,
   proactiveChatMinutes: 30,
   proactiveChatMode: "interval",
+  proactiveLevel: 50,
   petFlipY: false,
   roam: false,
   sleepAfterSeconds: 150,
@@ -901,6 +911,11 @@ function normalizeSettings(
       240,
     ),
     proactiveChatMode: settings?.proactiveChatMode === "state" ? "state" : "interval",
+    proactiveLevel: clamp(
+      Math.round(Number(settings?.proactiveLevel ?? loadProactiveLevel())),
+      0,
+      100,
+    ),
     petFlipY: settings?.petFlipY === true,
     roam: settings?.roam === true,
     clickSquash: settings?.clickSquash !== false,
@@ -2889,14 +2904,22 @@ function LayoutEditor({
               </div>
             </div>
             <SliderControl
-              label={settings.proactiveChatMode === "state" ? "最短间隔（状态模式下两次之间的冷却）" : "主动聊天间隔"}
-              value={settings.proactiveChatMinutes}
-              min={5}
-              max={240}
+              label="主动程度"
+              value={settings.proactiveLevel}
+              min={0}
+              max={100}
               step={5}
-              suffix="分钟"
-              onChange={(proactiveChatMinutes) => onSettingsChange({ ...settings, proactiveChatMinutes })}
+              suffix="%"
+              onChange={(proactiveLevel) => {
+                saveProactiveLevel(proactiveLevel);
+                onSettingsChange({ ...settings, proactiveLevel });
+              }}
             />
+            <p className="settings-hint">
+              {settings.proactiveLevel === 0
+                ? "0% —— 小狗不会主动开口，只在被叫到时说话。"
+                : `${settings.proactiveLevel}% —— ${describeProactivePlan(proactivePlan(settings.proactiveLevel))}`}
+            </p>
           </>
         )}
         <SliderControl
@@ -7048,8 +7071,9 @@ function IslandApp({
         return [];
       }
     };
-    const minutes = Math.max(5, settings.proactiveChatMinutes);
-    const cooldownMs = minutes * 60_000;
+    // 主动程度 → 冷却 / 每小时上限 / 稳定时长 / 免打扰，四件事一起生效。
+    const plan = proactivePlan(settings.proactiveLevel);
+    const cooldownMs = plan.cooldownMinutes * 60_000;
     const mode_ = settings.proactiveChatMode;
     if (lastProactiveChatAt.current === 0) {
       lastProactiveChatAt.current = Date.now();
@@ -7075,6 +7099,9 @@ function IslandApp({
       // 面板展开或正在聊天时先不插话，等回到挂机状态再处理。
       if (modeRef.current !== "collapsed") return;
       const now = Date.now();
+      // 免打扰时段与每小时上限：手动「立即试一句」也遵守上限，但不吃静默时段。
+      if (inQuietHours(plan) && !force) return;
+      if (overHourlyLimit(plan, now)) return;
 
       let kind = "other";
       let windowTitle = "";
@@ -7120,7 +7147,7 @@ function IslandApp({
           return;
         }
         // 情境要稳定 3 分钟以上才说话，避免频繁切换应用时不停打扰。
-        if (now - state.since < 3 * 60_000) return;
+        if (now - state.since < plan.stabilityMinutes * 60_000) return;
         // 同一个情境只主动说一次，且不能突破冷却时间。
         if (state.firedFor === situation) return;
         if (now - lastProactiveChatAt.current < cooldownMs) return;
@@ -7255,6 +7282,7 @@ function IslandApp({
       }
       if (!line) return;
       rememberProactiveLine(line, { kind: observe.kind, angle });
+      recordSpeakTime(Date.now());
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
       if (onFirstTextRef.fired) {

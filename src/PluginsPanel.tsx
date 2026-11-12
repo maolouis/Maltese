@@ -68,6 +68,8 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
   const [disabled, setDisabled] = useState<string[]>(loadDisabledPlugins);
   const [notice, setNotice] = useState("");
   const [help, setHelp] = useState<{ plugin: PluginInfo; left: number; top: number } | null>(null);
+  const [billiardsNotice, setBilliardsNotice] = useState("");
+  const [iconsAvailable, setIconsAvailable] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -82,6 +84,23 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 台球要读桌面图标位置：图标被隐藏时先提示，别让用户点了没反应。
+  useEffect(() => {
+    if (!isTauri()) return;
+    void invoke<boolean>("desktop_icons_available")
+      .then(setIconsAvailable)
+      .catch(() => setIconsAvailable(null));
+  }, []);
+
+  const openBilliards = async () => {
+    setBilliardsNotice("");
+    try {
+      await invoke("open_billiards_window");
+    } catch (error) {
+      setBilliardsNotice("打开台球失败：" + String(error));
+    }
+  };
 
   useEffect(() => {
     if (!removeArmed) return;
@@ -172,6 +191,34 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
           </button>
         </div>
       </div>
+
+      <article className="plugin-card plugin-card--builtin plugin-billiards">
+        <div className="plugin-card__head">
+          <div className="plugin-card__title">
+            <strong>桌面图标台球</strong>
+            <span className="plugin-card__badge">{t.plugins.builtin}</span>
+          </div>
+          <div className="plugin-card__head-actions">
+            <button type="button" onClick={() => void openBilliards()}>
+              和小狗开一局
+            </button>
+          </div>
+        </div>
+        <p className="plugin-billiards__desc">
+          把桌面图标当成台球：按住左键拉杆蓄力，松手击球，小狗会在旁边帮你加油。桌面图标保持原样，退出即恢复。
+        </p>
+        <p className="plugin-billiards__credit">
+          玩法参考开源项目{" "}
+          <a href="https://github.com/liuxiaogang-com/desktop-icon-billiards" target="_blank" rel="noreferrer">
+            desktop-icon-billiards
+          </a>{" "}
+          · 作者 GitHub@liuxiaogang-com（MIT）
+        </p>
+        {iconsAvailable === false && (
+          <p className="plugin-billiards__warn">桌面图标当前是隐藏的，先在设置里把它们显示出来再玩。</p>
+        )}
+        {billiardsNotice && <p className="plugin-billiards__warn">{billiardsNotice}</p>}
+      </article>
 
       <div className="plugins-panel__install">
         <input

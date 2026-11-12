@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
+import { describeProactivePlan, proactivePlan } from "./proactiveChat";
 import { isLocaleCode, LOCALE_CODES, LOCALE_STORAGE_KEY, loadLocale, saveLocale } from "./i18n";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { LocalChatSettings } from "./LocalChatSettings";
@@ -65,6 +66,8 @@ type PetSettings = {
   proactiveChat: boolean;
   proactiveChatMinutes: number;
   proactiveChatMode: "interval" | "state";
+  /** 主动程度 0–100 */
+  proactiveLevel: number;
   clipboardBubble: boolean;
   roam: boolean;
   sleepAfterSeconds: number;
@@ -108,6 +111,7 @@ const DEFAULTS: PetSettings = {
   proactiveChat: false,
   proactiveChatMinutes: 30,
   proactiveChatMode: "interval",
+  proactiveLevel: 50,
   clipboardBubble: true,
   roam: false,
   sleepAfterSeconds: 150,
@@ -537,14 +541,19 @@ export default function SettingsWindow() {
               onChange={(value) => update("proactiveChatMode", value === "state" ? "state" : "interval")}
             />
             <Slider
-              label={settings.proactiveChatMode === "state" ? "最短间隔" : "主动聊天间隔"}
-              value={settings.proactiveChatMinutes}
-              min={5}
-              max={240}
+              label="主动程度"
+              value={settings.proactiveLevel}
+              min={0}
+              max={100}
               step={5}
-              suffix="分钟"
-              onChange={(value) => update("proactiveChatMinutes", value)}
+              suffix="%"
+              onChange={(value) => update("proactiveLevel", value)}
             />
+            <p className="sw-hint">
+              {settings.proactiveLevel === 0
+                ? "0% —— 小狗不会主动开口。"
+                : `${settings.proactiveLevel}% —— ${describeProactivePlan(proactivePlan(settings.proactiveLevel))}`}
+            </p>
           </>
         )}
         <Slider label="多久没动静就趴下睡" value={settings.sleepAfterSeconds} min={30} max={900} step={15} suffix="s" onChange={(value) => update("sleepAfterSeconds", value)} />

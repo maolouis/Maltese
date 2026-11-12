@@ -7,6 +7,7 @@ import SettingsWindow from "./SettingsWindow";
 import CompanionPet from "./CompanionPet";
 import CursorPet from "./CursorPet";
 import BongoPet from "./BongoPet";
+import Billiards from "./Billiards";
 import { I18nProvider } from "./i18n";
 
 const windowKind = new URLSearchParams(window.location.search).get("window");
@@ -23,7 +24,9 @@ const RootComponent =
             ? CursorPet
             : windowKind === "bongo"
               ? BongoPet
-              : App;
+              : windowKind === "billiards"
+                ? Billiards
+                : App;
 
 window.addEventListener(
   "pointerdown",

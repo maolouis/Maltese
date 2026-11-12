@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Maltese 线条小狗桌面助手",
-  "version": "1.3.33",
+  "version": "1.3.34",
   "identifier": "com.maltese.desktop-assistant",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -155,6 +155,20 @@
         "resizable": false,
         "visible": false,
         "focusable": false,
+        "shadow": false
+      },
+      {
+        "label": "billiards",
+        "title": "和小狗打台球",
+        "url": "index.html?window=billiards",
+        "width": 1280,
+        "height": 800,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
         "shadow": false
       }
     ],

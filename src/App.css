@@ -6176,3 +6176,10 @@ html.maltese-page-opening .island__collapsed {
   /* 让点击反馈不露出方块边界 */
   border-radius: 42%;
 }
+/* 设置项下方的一句说明（例如「主动程度 50% —— 大约每 91 分钟最多一次…」） */
+.settings-hint {
+  margin: 2px 0 6px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  line-height: 1.5;
+}
