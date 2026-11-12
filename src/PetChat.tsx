@@ -203,7 +203,12 @@ export function PetChat() {
 
   // 非流式的模型调用：给「先决定动作、再总结」这类两步流程用。
   const askModel = useCallback(
-    async (message: string, history: ChatMessage[], images: string[] | null) => {
+    async (
+      message: string,
+      history: ChatMessage[],
+      images: string[] | null,
+      options?: { maxTokens?: number; temperature?: number },
+    ) => {
       if (chatConfig.backend === "dsh") {
         const reply = await invoke<DshChatReply>("dsh_chat", {
           message,
@@ -237,12 +242,13 @@ export function PetChat() {
           character,
           images: images && images.length > 0 ? images : null,
           settings: {
-            maxTokens: chatConfig.maxTokens,
-            temperature: chatConfig.temperature,
+            maxTokens: options?.maxTokens ?? chatConfig.maxTokens,
+            temperature: options?.temperature ?? chatConfig.temperature,
             topP: chatConfig.topP,
-            enableThinking: depth !== "off",
-            reasoningEffort: thinkingEffort(depth),
-            reasoningBudgetTokens: thinkingBudget(depth),
+            // 判断/总结这类短调用一律关掉思考，否则会被思考吃光预算。
+            enableThinking: options ? false : depth !== "off",
+            reasoningEffort: options ? "none" : thinkingEffort(depth),
+            reasoningBudgetTokens: options ? 0 : thinkingBudget(depth),
           },
         });
       } catch (streamError) {
@@ -262,12 +268,12 @@ export function PetChat() {
                 character,
                 images: images && images.length > 0 ? images : null,
                 settings: {
-                  maxTokens: chatConfig.maxTokens,
-                  temperature: chatConfig.temperature,
+                  maxTokens: options?.maxTokens ?? chatConfig.maxTokens,
+                  temperature: options?.temperature ?? chatConfig.temperature,
                   topP: chatConfig.topP,
-                  enableThinking: depth !== "off",
-                  reasoningEffort: thinkingEffort(depth),
-                  reasoningBudgetTokens: thinkingBudget(depth),
+                  enableThinking: options ? false : depth !== "off",
+                  reasoningEffort: options ? "none" : thinkingEffort(depth),
+                  reasoningBudgetTokens: options ? 0 : thinkingBudget(depth),
                 },
               });
             } catch {
@@ -297,6 +303,70 @@ export function PetChat() {
       chatConfig.thinkingDepth,
       chatConfig.topP,
       sessionId,
+    ],
+  );
+  // 带界面的流式回复：边生成边把字显示出来，并把最终文本返回给调用方。
+  const streamLocalReply = useCallback(
+    async (message: string, history: ChatMessage[], images: string[]) => {
+      const requestId = createId();
+      const unlisten = chatConfig.stream
+        ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
+          if (event.payload.requestId !== requestId) return;
+          if (event.payload.kind === "delta") {
+            setStreamingReply((current) => current + event.payload.text);
+          } else if (event.payload.kind === "reasoning") {
+            setStreamingReasoning((current) => current + event.payload.text);
+          } else if (event.payload.kind === "error") {
+            setError(event.payload.text);
+          }
+        })
+        : null;
+      try {
+        const depth = chatConfig.thinkingDepth;
+        const payload = {
+          requestId,
+          baseUrl: chatConfig.baseUrl,
+          model: chatConfig.model,
+          apiKey: chatConfig.apiKey.trim() || null,
+          message,
+          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          character,
+          images: images.length > 0 ? images : null,
+          settings: {
+            maxTokens: chatConfig.maxTokens,
+            temperature: chatConfig.temperature,
+            topP: chatConfig.topP,
+            enableThinking: depth !== "off",
+            reasoningEffort: thinkingEffort(depth),
+            reasoningBudgetTokens: thinkingBudget(depth),
+          },
+        };
+        if (chatConfig.stream) {
+          return await invoke<string>("local_chat_stream", payload);
+        }
+        return await invoke<string>("local_chat", {
+          baseUrl: payload.baseUrl,
+          model: payload.model,
+          apiKey: payload.apiKey,
+          message: payload.message,
+          history: payload.history,
+          character: payload.character,
+          images: payload.images,
+        });
+      } finally {
+        unlisten?.();
+      }
+    },
+    [
+      character,
+      chatConfig.apiKey,
+      chatConfig.baseUrl,
+      chatConfig.maxTokens,
+      chatConfig.model,
+      chatConfig.stream,
+      chatConfig.temperature,
+      chatConfig.thinkingDepth,
+      chatConfig.topP,
     ],
   );
   const send = useCallback(async () => {
@@ -334,14 +404,17 @@ export function PetChat() {
     setStreamingReply("");
     setStreamingReasoning("");
     try {
-      let replyText: string;
-      // 「动手」流程：先让模型决定要不要调用本机技能，执行后再让它总结成人话。
-      // 只在本机模型 + 没有图片时走，DSH 后端自己就能用工具。
+      let replyText: string | undefined;
+      // 「动手」流程：先让模型判断要不要调用本机技能。
+      // 关键是这一步必须“短”：只给紧凑的技能清单、关思考、限 96 token，
+      // 判断完再走正常的流式回复。之前把完整聊天历史 + 长提示词都塞进去，
+      // 每句话都要等两轮完整生成才开始出字，看起来就是「回话很慢」。
       if (agentEnabled && chatConfig.backend === "local" && sendImages.length === 0) {
         const decision = await askModel(
           `${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`,
-          messages,
+          [],
           null,
+          { maxTokens: 128, temperature: 0.1 },
         );
         const call = parseSkillCall(decision);
         if (call) {
@@ -353,6 +426,7 @@ export function PetChat() {
               `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用一句不超过 30 字的中文口语回复主人，不要输出 JSON，也不要重复格式。`,
               [],
               null,
+              { maxTokens: 96, temperature: 0.8 },
             );
           } catch {
             summary = "";
@@ -372,60 +446,11 @@ export function PetChat() {
           setBusy(false);
           return;
         }
-        replyText = decision.trim();
-      } else if (chatConfig.backend === "local") {
-        const requestId = createId();
-        const unlisten = chatConfig.stream
-          ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
-            if (event.payload.requestId !== requestId) return;
-            if (event.payload.kind === "delta") {
-              setStreamingReply((current) => current + event.payload.text);
-            } else if (event.payload.kind === "reasoning") {
-              setStreamingReasoning((current) => current + event.payload.text);
-            } else if (event.payload.kind === "error") {
-              setError(event.payload.text);
-            }
-          })
-          : null;
-        try {
-          const localPayload = {
-            requestId,
-            baseUrl: chatConfig.baseUrl,
-            model: chatConfig.model,
-            apiKey: chatConfig.apiKey.trim() || null,
-            message: text,
-            history: messages.slice(-16).map((message) => ({
-              role: message.role,
-              content: message.text,
-            })),
-            character,
-            images: sendImages.length > 0 ? sendImages : null,
-            settings: {
-              maxTokens: chatConfig.maxTokens,
-              temperature: chatConfig.temperature,
-              topP: chatConfig.topP,
-                enableThinking: chatConfig.thinkingDepth !== "off",
-                reasoningEffort: thinkingEffort(chatConfig.thinkingDepth),
-                reasoningBudgetTokens: thinkingBudget(chatConfig.thinkingDepth),
-            },
-          };
-          replyText = await invoke<string>(
-            chatConfig.stream ? "local_chat_stream" : "local_chat",
-            chatConfig.stream
-              ? localPayload
-              : {
-                baseUrl: localPayload.baseUrl,
-                model: localPayload.model,
-                apiKey: localPayload.apiKey,
-                message: localPayload.message,
-                history: localPayload.history,
-                character: localPayload.character,
-                images: localPayload.images,
-              },
-          );
-        } finally {
-          unlisten?.();
-        }
+        // 不需要动手：丢掉这次判断结果，继续走正常流式回复，
+        // 让用户第一秒就能看到字，而不是等决策那句话变成长回复。
+      }
+      if (chatConfig.backend === "local") {
+        replyText = await streamLocalReply(text, messages, sendImages);
       } else {
         const reply = await invoke<DshChatReply>("dsh_chat", {
           message: text,

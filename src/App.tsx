@@ -7120,29 +7120,68 @@ function IslandApp({
 
       // 把最近说过的话带进提示词，并要求换角度；模型不听话时再重试一次。
       const avoid = recentProactiveLines();
+      // 流式生成：一有开头就把气泡弹出来，边生成边更新正文。
+      // 之前是等整句生成完才弹，本机大模型要好几秒，看起来就是「回话后很久才冒出气泡」。
+      const onFirstTextRef = { fired: false };
+      const bubbleTitle =
+        observe.kind === "code"
+          ? "小狗在旁边"
+          : observe.kind === "video" || observe.kind === "browser"
+            ? "小狗也在看"
+            : observe.kind === "meeting"
+              ? "陪你开会"
+              : "小狗想你了";
       const askOnce = async (extra: string) => {
         const prompt = buildProactivePrompt(observe, avoid) + extra;
         const config = loadLocalChatConfig();
         if (config.backend === "local" && config.model) {
-          // 主动聊天只要一句短话：显式关掉思考、给足 256 token，
-          // 避免思考把预算吃光导致正文为空、退化成模板台词。
-          return invoke<string>("local_chat", {
-            baseUrl: config.baseUrl,
-            model: config.model,
-            apiKey: config.apiKey.trim() || null,
-            message: prompt,
-            history: [],
-            character: proactiveCharacter,
-            images: null,
-            settings: {
-              maxTokens: 256,
-              temperature: 0.85,
-              topP: 0.9,
-              enableThinking: false,
-              reasoningEffort: "none",
-              reasoningBudgetTokens: 0,
+          const requestId = `proactive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          let streamed = "";
+          // 先把监听装好，保证第一个字就能拿到。
+          const unlisten = await listen<{ requestId: string; kind: string; text: string }>(
+            "local-chat-stream",
+            (event) => {
+              if (event.payload.requestId !== requestId) return;
+              if (event.payload.kind !== "delta") return;
+              streamed += event.payload.text;
+              // 够 6 个字就先把气泡弹出来（标题按场景），后面继续补全。
+              if (!onFirstTextRef.fired && streamed.trim().length >= 6) {
+                onFirstTextRef.fired = true;
+                const partial = streamed.trim().replace(/^["「『]/, "");
+                showCloudBubble(bubbleTitle, partial);
+              } else if (onFirstTextRef.fired) {
+                const partial = streamed.trim().replace(/^["「『]/, "");
+                if (partial) {
+                  // 同一个 mode 只更新 DOM，不会反复调整窗口。
+                  applyPetOverlay({ mode: "cloud", title: bubbleTitle, body: partial });
+                }
+              }
             },
-          });
+          );
+          try {
+            const text = await invoke<string>("local_chat_stream", {
+              requestId,
+              baseUrl: config.baseUrl,
+              model: config.model,
+              apiKey: config.apiKey.trim() || null,
+              message: prompt,
+              history: [],
+              character: proactiveCharacter,
+              images: null,
+              settings: {
+                // 只要一句 12–30 字的话，128 token 足够；给太多反而拖慢。
+                maxTokens: 128,
+                temperature: 0.85,
+                topP: 0.9,
+                enableThinking: false,
+                reasoningEffort: "none",
+                reasoningBudgetTokens: 0,
+              },
+            });
+            return text;
+          } finally {
+            unlisten();
+          }
         }
         const reply = await invoke<{ text: string }>("dsh_chat", {
           message: prompt,
@@ -7190,6 +7229,18 @@ function IslandApp({
       rememberProactiveLine(line);
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
+      if (onFirstTextRef.fired) {
+        // 气泡已经在流式阶段弹出来了，这里只把正文补成最终版本（不重复弹窗）。
+        applyPetOverlay({ mode: "cloud", title: bubbleTitle, body: line });
+        appendChat(line);
+        try {
+          window.localStorage.setItem("maltese-proactive-last", String(Date.now()));
+          window.dispatchEvent(new Event("maltese-proactive-chat-done"));
+        } catch {
+          // 忽略
+        }
+        return;
+      }
       // 标题也给点变化，不要永远是「小狗想你了」。
       const greetingPool =
         kind === "code"
