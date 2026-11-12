@@ -1312,6 +1312,43 @@ fn open_billiards_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// 「固定标签页在桌面」：把当前标签页放到一个独立的置顶窗口里。
+#[tauri::command]
+fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window("pinned")
+        .ok_or_else(|| "固定窗口未注册".to_string())?;
+    // 第一次固定时放在右下角，避免挡住桌宠和面板。
+    if let Ok(position) = window.outer_position() {
+        if position.x == 0 && position.y == 0 {
+            if let Ok(Some(monitor)) = window.current_monitor() {
+                let area = monitor.work_area();
+                let size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(420, 560));
+                let x = area.position.x + area.size.width as i32 - size.width as i32 - 32;
+                let y = area.position.y + area.size.height as i32 - size.height as i32 - 48;
+                let _ = window.set_position(tauri::PhysicalPosition::new(x.max(0), y.max(0)));
+            }
+        }
+    }
+    let _ = window.set_always_on_top(true);
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    let _ = window.emit(
+        "maltese-pinned-page",
+        serde_json::json!({ "page": page }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn unpin_page_from_desktop(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("pinned") {
+        let _ = window.hide();
+    }
+    let _ = app.emit("maltese-unpinned-page", serde_json::json!({}));
+    Ok(())
+}
+
 #[tauri::command]
 fn close_billiards_window(app: AppHandle) -> Result<(), String> {
     // 退出台球一定要把真实桌面图标放回去。
@@ -3874,6 +3911,8 @@ pub fn run() {
             show_island_no_focus,
             open_settings_window,
             close_billiards_window,
+            pin_page_to_desktop,
+            unpin_page_from_desktop,
             set_island_overlay,
             plan_island_overlay,
             roam_island_step,

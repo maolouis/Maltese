@@ -1,0 +1,105 @@
+/* 固定在桌面的标签页窗口：不透明卡片，方便长时间阅读聊天。 */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+}
+
+.pinned-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(250, 251, 253, 0.97);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+  font-family: "Fusion Pixel 12px Proportional", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.pinned-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(236, 253, 245, 0.95), rgba(224, 250, 240, 0.75));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  /* 拖动窗口：WebView2 里用 data-tauri-drag-region 属性，cursor 只是提示 */
+  cursor: grab;
+}
+
+.pinned-panel__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.pinned-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.pinned-panel__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: 1px solid rgba(13, 148, 136, 0.4);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f766e;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.pinned-panel__btn:hover {
+  background: rgba(45, 212, 191, 0.22);
+  border-color: rgba(13, 148, 136, 0.75);
+  transform: translateY(-1px);
+}
+
+.pinned-panel__btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.pinned-panel__btn--ghost {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #475569;
+}
+
+.pinned-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pinned-panel__empty {
+  margin: auto;
+  padding: 20px;
+  text-align: center;
+  color: #475569;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.pinned-panel__empty p {
+  margin: 0 0 8px;
+}

@@ -8,6 +8,7 @@ import CompanionPet from "./CompanionPet";
 import CursorPet from "./CursorPet";
 import BongoPet from "./BongoPet";
 import Billiards from "./Billiards";
+import PinnedPanel from "./PinnedPanel";
 import { I18nProvider } from "./i18n";
 
 const windowKind = new URLSearchParams(window.location.search).get("window");
@@ -26,7 +27,9 @@ const RootComponent =
               ? BongoPet
               : windowKind === "billiards"
                 ? Billiards
-                : App;
+                : windowKind === "pinned"
+                  ? PinnedPanel
+                  : App;
 
 window.addEventListener(
   "pointerdown",

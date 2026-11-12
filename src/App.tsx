@@ -1346,6 +1346,16 @@ export function IslandShell({
 }: IslandShellProps) {
   const t = useTranslation();
   const glassFrameRef = useRef<number | null>(null);
+  // 右键小狗 →「固定当前标签到桌面」：把当前页交给 pinned 窗口。
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void listen("maltese-pin-current-page", () => {
+      void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+    return () => unlisten?.();
+  }, [page]);
   const didDragRef = useRef(false);
   const clickTimerRef = useRef<number | null>(null);
   const lastClickAtRef = useRef(0);

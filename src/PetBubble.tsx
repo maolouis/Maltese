@@ -171,6 +171,16 @@ export default function PetBubble() {
             配置桌宠
           </button>
           <button type="button" onClick={() => openPage("assistant")}>快捷入口</button>
+          <button
+            type="button"
+            onClick={() => {
+              // 让主窗口把「当前标签」固定到桌面（主窗口才知道当前是哪一页）。
+              void emit("maltese-pin-current-page");
+              void invoke("hide_pet_bubble").catch(() => undefined);
+            }}
+          >
+            📌 固定当前标签到桌面
+          </button>
           <button type="button" onClick={() => petAction("sleeping")}>让小狗睡觉</button>
           <button
             type="button"
