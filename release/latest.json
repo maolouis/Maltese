@@ -1,15 +1,15 @@
 {
-  "version": "1.3.37",
-  "notes": "# Maltese v1.3.37\n\n## 台球插件文字看不清 → 全面加大 + 提高对比\n\n上一版状态条 12px、提示 11px、署名 10px，压在壁纸上基本读不清。这一版：\n\n| 元素 | 之前 | 现在 |\n| --- | --- | --- |\n| 顶部状态条 | 12px，底衬 70% | **14px**，底衬 88% + 细边框 + 背景模糊 |\n| 比分 | 12px | **15px 白色加粗** |\n| 回合徽章 | 12px | **13px 加粗**，绿/蓝区分 |\n| 按钮 | 11px / padding 3px 9px | **13px 加粗 / padding 6px 14px** |\n| 提示行 | 11px 无底衬 | **14px + 半透明胶囊底衬** |\n| 署名 | 10px 淡灰 | **12px + 半透明底衬** |\n| 插件卡片正文 | 10.5px / 42% | **12.5px / 86%** |\n| 插件卡片署名 | 9.5px / 42% | **11.5px / 75%，链接加粗下划线** |\n| 卡片主按钮 | 与其它按钮同款 | **13px 加粗、青底高亮** |\n\n## 交互不再靠小字：改用悬停变色 + 动效\n\n- 台球状态条按钮：悬停 → 青绿高亮 + 上浮 1px；按下 → 回弹 0.97；键盘聚焦 → 青色描边；\n- 插件卡片按钮（含台球「和小狗开一局」）：悬停 → 换色 + 上浮，按下回弹；\n- 卡片整体悬停时描边变亮，鼠标划过就知道能点；\n- 卡片标题 15px，比说明文字更醒目，形成层次而不是\"一堆小字\"。\n\n## 验证\n\n- `tsc --noEmit`、`vite build` 通过。\n- `scripts/verify-build.mjs` 全部检查通过。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.37，已构建、安装到本机，并推送到远程仓库与 GitHub Release。\n台球玩法仍是 v1.3.36 的「真实桌面图标当球」，本次只改可读性与交互观感。",
-  "pub_date": "2026-11-12T09:38:57Z",
+  "version": "1.3.38",
+  "notes": "# Maltese v1.3.38\n\n## GIF 设置栏可以收起来了\n\n「表情轮播」那一栏以前一展开就是几十张缩略图，设置窗口被撑得很长。现在：\n\n- 标题右侧多了一个「展开（N 张）/ 收起」按钮，点一下整块淡出收起，只留标题和当前形象；\n- **默认收起**，想看再展开；\n- 展开状态会记住（`maltese-gif-settings-expanded`），下次打开设置保持你上次的选择；\n- 按钮悬停会变色 + 上浮，箭头 180° 旋转，收放方向一眼看得出来；\n- 收起时也会显示张数，不用展开就知道当前形象配了多少张。\n\n表情选择下拉框挪到了标题同一行，收起状态下依然可以直接换表情。\n\n## 验证\n\n- `tsc --noEmit`、`vite build` 通过。\n- `scripts/verify-build.mjs` 全部检查通过。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.38，已构建、安装到本机。\n\n**本次只做本地提交，未推送远端、未创建 Release**（按你的要求）。",
+  "pub_date": "2026-11-12T09:47:04Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM1BBOCsvcjJUVkRrZzV2b2VvR3dYUXVad2V5amFZcmVaWDBUNHlkc3VEVEhWcml0RUNwNzJMZDBXTnRFdy95YXFKd3RoWEVpU3JCcDBRZ0kzZjFrRFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc2MzI5CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjM3X3g2NC1zZXR1cC5leGUKa0wvNnVnL1JLd1FLSnNNU2dGN3RtY1dPWjJSVzhNU0FaYlZKYXlnYU8xdjBweHBoMEV6dXhqN1BBdERJbFU1UXpnaG94akMzLzEyTDVTL2lHZklBRHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.37/Maltese-1.3.37-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09FN2E1a0JDOHAvZmN4OUtrRUx2R2xtbW14MER3K2E0T1pWMDhwbDRudnhHVzB3RVM3TUczeUQrSllScHpEOXZJUjlMeXM0QVc0aE9laXl6dUZnZmdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc2ODE3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjM4X3g2NC1zZXR1cC5leGUKZmg3U2NnSnBlUmFYbTBvWTNUSkFqK2h5aXlXWVdlTlpWY29nZUJGZ1Z5SWoxSmVqbkdyMGJObGVVb3pvMWYvTUNSZnk1MXAxQW84ZG5kbm5TaWZVQnc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.38/Maltese-1.3.38-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM1BBOCsvcjJUVkRrZzV2b2VvR3dYUXVad2V5amFZcmVaWDBUNHlkc3VEVEhWcml0RUNwNzJMZDBXTnRFdy95YXFKd3RoWEVpU3JCcDBRZ0kzZjFrRFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc2MzI5CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjM3X3g2NC1zZXR1cC5leGUKa0wvNnVnL1JLd1FLSnNNU2dGN3RtY1dPWjJSVzhNU0FaYlZKYXlnYU8xdjBweHBoMEV6dXhqN1BBdERJbFU1UXpnaG94akMzLzEyTDVTL2lHZklBRHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.37/Maltese-1.3.37-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM09FN2E1a0JDOHAvZmN4OUtrRUx2R2xtbW14MER3K2E0T1pWMDhwbDRudnhHVzB3RVM3TUczeUQrSllScHpEOXZJUjlMeXM0QVc0aE9laXl6dUZnZmdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc2ODE3CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjM4X3g2NC1zZXR1cC5leGUKZmg3U2NnSnBlUmFYbTBvWTNUSkFqK2h5aXlXWVdlTlpWY29nZUJGZ1Z5SWoxSmVqbkdyMGJObGVVb3pvMWYvTUNSZnk1MXAxQW84ZG5kbm5TaWZVQnc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.38/Maltese-1.3.38-x64-setup.exe"
     }
   }
 }
