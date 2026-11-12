@@ -195,7 +195,7 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
       <article className="plugin-card plugin-card--builtin plugin-billiards">
         <div className="plugin-card__head">
           <div className="plugin-card__title">
-            <strong>桌面图标台球</strong>
+            <strong className="plugin-billiards__title">桌面图标台球</strong>
             <span className="plugin-card__badge">{t.plugins.builtin}</span>
           </div>
           <div className="plugin-card__head-actions">

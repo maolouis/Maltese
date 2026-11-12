@@ -1,4 +1,5 @@
-/* 桌面图标台球：整窗透明，只有球桌、球和小狗画在 canvas 上。 */
+/* 桌面图标台球：整窗透明，只有白球 / 球洞 / 瞄准线 / 小狗 / 状态条。
+   交互只用「大一点的文字 + 悬停变色 + 轻微位移」，不靠小字提示。 */
 html,
 body,
 #root {
@@ -15,7 +16,7 @@ body,
   height: 100vh;
   background: transparent;
   font-family: "Fusion Pixel 12px Proportional", "Microsoft YaHei", system-ui, sans-serif;
-  color: #e2e8f0;
+  color: #f1f5f9;
   user-select: none;
 }
 
@@ -32,79 +33,110 @@ body,
   cursor: crosshair;
 }
 
-/* 顶部单行条：回合 / 比分 / 剩余 / 用时 / 按钮，只有这一条 */
+/* 顶部状态条：字号 14px 起，底色加深保证在浅色壁纸上也看得清 */
 .billiards__bar {
   position: absolute;
   left: 50%;
-  top: 26px;
+  top: 28px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 14px;
+  gap: 14px;
+  padding: 9px 18px;
   border-radius: 999px;
-  background: rgba(9, 14, 24, 0.7);
-  box-shadow: 0 4px 14px rgba(2, 6, 23, 0.35);
-  font-size: 12px;
+  background: rgba(6, 11, 20, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 8px 22px rgba(2, 6, 23, 0.5);
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  backdrop-filter: blur(6px);
 }
 
 .billiards__turn {
-  padding: 2px 9px;
+  padding: 3px 12px;
   border-radius: 999px;
-  background: rgba(56, 189, 248, 0.18);
-  color: rgba(125, 211, 252, 0.95);
-  font-weight: 600;
+  background: rgba(56, 189, 248, 0.22);
+  color: #bae6fd;
+  font-weight: 700;
+  font-size: 13px;
 }
 
 .billiards__turn--you {
-  background: rgba(74, 222, 128, 0.18);
-  color: rgba(134, 239, 172, 0.98);
+  background: rgba(74, 222, 128, 0.24);
+  color: #bbf7d0;
 }
 
 .billiards__score {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 15px;
   letter-spacing: 0.02em;
+  color: #ffffff;
 }
 
 .billiards__btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 9px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
+  gap: 5px;
+  padding: 6px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
   border-radius: 999px;
-  background: rgba(30, 41, 59, 0.8);
+  background: rgba(30, 41, 59, 0.9);
   color: #e2e8f0;
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
 }
 
+/* 悬停：变色 + 上浮，替代小字说明 */
 .billiards__btn:hover {
-  background: rgba(51, 65, 85, 0.95);
+  background: rgba(45, 212, 191, 0.22);
+  border-color: rgba(45, 212, 191, 0.75);
+  color: #ffffff;
+  transform: translateY(-1px);
 }
 
-/* 一句话提示，贴在条下面 */
+.billiards__btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.billiards__btn:focus-visible {
+  outline: 2px solid rgba(45, 212, 191, 0.85);
+  outline-offset: 2px;
+}
+
+/* 提示行：14px + 半透明底衬，压在任何壁纸上都能读 */
 .billiards__tip {
   position: absolute;
   left: 50%;
-  top: 62px;
+  top: 84px;
   transform: translateX(-50%);
   margin: 0;
-  font-size: 11px;
-  color: rgba(203, 213, 225, 0.82);
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(6, 11, 20, 0.72);
+  font-size: 14px;
+  font-weight: 500;
+  color: #e2e8f0;
   pointer-events: none;
-  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.6);
+  white-space: nowrap;
 }
 
 .billiards__credit {
   position: absolute;
-  right: 16px;
-  bottom: 12px;
+  right: 18px;
+  bottom: 14px;
   margin: 0;
-  font-size: 10px;
-  color: rgba(148, 163, 184, 0.55);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(6, 11, 20, 0.55);
+  font-size: 12px;
+  color: #cbd5e1;
   pointer-events: none;
 }

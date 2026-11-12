@@ -458,25 +458,32 @@
 /* ---------- 内置插件：桌面图标台球 ---------- */
 .plugin-billiards {
   margin: 8px 0 10px;
+  border-color: rgba(45, 212, 191, 0.35);
+}
+
+.plugin-billiards:hover {
+  border-color: rgba(45, 212, 191, 0.6);
 }
 
 .plugin-billiards__desc {
-  margin: 6px 0 4px;
-  color: rgba(255, 255, 255, 0.66);
-  font-size: 10.5px;
-  line-height: 1.55;
+  margin: 8px 0 6px;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .plugin-billiards__credit {
   margin: 0 0 4px;
-  color: rgba(255, 255, 255, 0.42);
-  font-size: 9.5px;
+  color: rgba(203, 213, 225, 0.75);
+  font-size: 11.5px;
   line-height: 1.5;
 }
 
 .plugin-billiards__credit a {
-  color: rgba(147, 197, 253, 0.9);
-  text-decoration: none;
+  color: rgba(147, 197, 253, 0.98);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .plugin-billiards__credit a:hover {
@@ -485,6 +492,52 @@
 
 .plugin-billiards__warn {
   margin: 4px 0 0;
-  color: rgba(250, 204, 21, 0.85);
-  font-size: 10px;
+  color: rgba(253, 224, 71, 0.95);
+  font-size: 12px;
+}
+/* 插件卡片按钮：不靠小字，靠悬停变色 + 轻微上浮表达可点 */
+.plugin-card__head-actions button,
+.plugin-card__actions button {
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.plugin-card__head-actions button:hover,
+.plugin-card__actions button:hover {
+  background: rgba(45, 212, 191, 0.22);
+  border-color: rgba(45, 212, 191, 0.7);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.plugin-card__head-actions button:active,
+.plugin-card__actions button:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.plugin-billiards .plugin-card__head-actions button {
+  font-size: 13px;
+  padding: 5px 12px;
+}
+.plugin-billiards__title {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+/* 主按钮：实心底 + 悬停提亮，比小字更容易发现 */
+.plugin-billiards__cta {
+  font-size: 13px !important;
+  font-weight: 700;
+  padding: 6px 14px !important;
+  border-color: rgba(45, 212, 191, 0.65) !important;
+  background: rgba(45, 212, 191, 0.18) !important;
+  color: #ccfbf1 !important;
+}
+
+.plugin-billiards__cta:hover {
+  background: rgba(45, 212, 191, 0.34) !important;
+  color: #ffffff !important;
 }
