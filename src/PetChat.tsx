@@ -114,10 +114,21 @@ export function PetChat() {
   const [streamingReply, setStreamingReply] = useState("");
   const [streamingReasoning, setStreamingReasoning] = useState("");
   const [busy, setBusy] = useState(false);
+  // 模型「开思考」时首字会晚很多，用计时器让用户看到确实在工作。
+  const [waitSeconds, setWaitSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [chatConfig, setChatConfig] = useState<LocalChatConfig>(loadLocalChatConfig);
   // 是否展示思考过程：模型设置里的开关，默认展示但折叠。
   const showThinking = chatConfig.showThinking !== false;
+  const thinkingOn = chatConfig.thinkingDepth !== "off";
+  const thinkingLabel =
+    chatConfig.thinkingDepth === "shallow"
+      ? "浅"
+      : chatConfig.thinkingDepth === "deep"
+        ? "深"
+        : chatConfig.thinkingDepth === "normal"
+          ? "标准"
+          : "关";
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [agentEnabled, setAgentEnabled] = useState(() => {
@@ -156,6 +167,19 @@ export function PetChat() {
     observer.observe(list);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!busy) {
+      setWaitSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setWaitSeconds(0);
+    const timer = window.setInterval(() => {
+      setWaitSeconds(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   useEffect(() => {
     const sync = () => setChatConfig(loadLocalChatConfig());
@@ -655,8 +679,16 @@ export function PetChat() {
         {busy && (
           <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
             <LoaderCircle size={15} className="pet-chat__spin" />
-            <span>{t.chat.thinking}</span>
+            <span>
+              {thinkingOn ? "小狗正在思考…" : t.chat.thinking}
+              {waitSeconds >= 1 ? `（${waitSeconds}s）` : ""}
+            </span>
           </div>
+        )}
+        {busy && thinkingOn && waitSeconds >= 3 && !streamingReasoning && (
+          <p className="pet-chat__hint">
+            思考深度：{thinkingLabel}，模型在推理；深度越大首字越慢，可在设置里调到「关」或「浅」加快回复。
+          </p>
         )}
       </div>
 

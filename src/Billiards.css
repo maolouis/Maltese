@@ -1,4 +1,4 @@
-/* 桌面图标台球：整窗透明，只有球、瞄准线和小狗画在 canvas 上。 */
+/* 桌面图标台球：整窗透明，只有球桌、球和小狗画在 canvas 上。 */
 html,
 body,
 #root {
@@ -24,25 +24,48 @@ body,
   inset: 0;
   width: 100%;
   height: 100%;
-  cursor: crosshair;
+  cursor: default;
   touch-action: none;
 }
 
-.billiards__hud {
+.billiards__canvas--ready {
+  cursor: crosshair;
+}
+
+/* 顶部单行条：回合 / 比分 / 剩余 / 用时 / 按钮，只有这一条 */
+.billiards__bar {
   position: absolute;
   left: 50%;
-  top: 14px;
+  top: 26px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 7px 14px;
+  gap: 12px;
+  padding: 6px 14px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.72);
-  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.35);
+  background: rgba(9, 14, 24, 0.7);
+  box-shadow: 0 4px 14px rgba(2, 6, 23, 0.35);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.billiards__turn {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.18);
+  color: rgba(125, 211, 252, 0.95);
+  font-weight: 600;
+}
+
+.billiards__turn--you {
+  background: rgba(74, 222, 128, 0.18);
+  color: rgba(134, 239, 172, 0.98);
+}
+
+.billiards__score {
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .billiards__btn {
@@ -50,9 +73,9 @@ body,
   align-items: center;
   gap: 4px;
   padding: 3px 9px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.4);
   border-radius: 999px;
-  background: rgba(30, 41, 59, 0.85);
+  background: rgba(30, 41, 59, 0.8);
   color: #e2e8f0;
   font: inherit;
   font-size: 11px;
@@ -63,26 +86,25 @@ body,
   background: rgba(51, 65, 85, 0.95);
 }
 
-.billiards__notice {
+/* 一句话提示，贴在条下面 */
+.billiards__tip {
   position: absolute;
   left: 50%;
-  bottom: 26px;
+  top: 62px;
   transform: translateX(-50%);
   margin: 0;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.66);
   font-size: 11px;
-  color: rgba(226, 232, 240, 0.9);
+  color: rgba(203, 213, 225, 0.82);
   pointer-events: none;
+  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.6);
 }
 
 .billiards__credit {
   position: absolute;
-  right: 14px;
-  bottom: 10px;
+  right: 16px;
+  bottom: 12px;
   margin: 0;
   font-size: 10px;
-  color: rgba(148, 163, 184, 0.75);
+  color: rgba(148, 163, 184, 0.55);
   pointer-events: none;
 }

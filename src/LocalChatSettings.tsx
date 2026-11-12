@@ -241,13 +241,28 @@ export function LocalChatSettings({
                     className={config.thinkingDepth === depth.value ? "is-active" : ""}
                     aria-pressed={config.thinkingDepth === depth.value}
                     title={depth.hint}
-                    onClick={() => update({ thinkingDepth: depth.value })}
+                    onClick={() => {
+                      update({ thinkingDepth: depth.value });
+                      // 点完立刻给一句确认：以前只有按钮变色，用户看不出到底开没开。
+                      setTestStatus({
+                        ok: true,
+                        text:
+                          depth.value === "off"
+                            ? "思考已关闭：不推理，回复最快。"
+                            : `思考已开启（${depth.label}）：首字会慢一点，聊天里会显示等待秒数。`,
+                      });
+                    }}
                   >
                     {depth.label}
                   </button>
                 ))}
               </div>
             </div>
+              <p className="local-chat-settings__hint">
+                {config.thinkingDepth === "off"
+                  ? "当前：关 —— 不推理，回复最快。"
+                  : `当前：${THINKING_DEPTHS.find((item) => item.value === config.thinkingDepth)?.label ?? "标准"} —— 先推理再回答；等待时聊天里显示「小狗正在思考…（Ns）」。`}
+              </p>
             <label className="local-chat-settings__check">
               <input
                 type="checkbox"

@@ -9,11 +9,14 @@ import "./ChatReasoning.css";
 export function ChatReasoning({
   text,
   streaming = false,
+  defaultOpen = false,
 }: {
   text: string;
   streaming?: boolean;
+  /** 流式思考时默认展开，用户能直接看到模型在输出（否则像没反应）。 */
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const trimmed = text.trim();
   if (!trimmed) return null;
   const lines = trimmed.split(/\n+/).filter(Boolean).length;

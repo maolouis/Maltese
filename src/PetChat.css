@@ -387,3 +387,13 @@
   background: rgba(20, 24, 35, 0.08);
   color: #5b6170;
 }
+/* 思考深度提示：告诉用户为什么慢、去哪里调 */
+.pet-chat__hint {
+  margin: 2px 0 4px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.1);
+  color: #4b7f9c;
+  font-size: 10px;
+  line-height: 1.5;
+}
