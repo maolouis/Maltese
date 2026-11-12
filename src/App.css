@@ -6139,3 +6139,40 @@ html.maltese-page-opening .island__collapsed {
   opacity: 0.5;
   cursor: default;
 }
+/* ---------- 只让「看得见的狗」响应鼠标 ----------
+   抠位（--pet-slot-*）约 148×128，而图片只有 112×112，GIF 里还有一圈透明留白
+   （实测多张素材可见区域中位数仅 66%×54%），于是抠位里大部分空白也能点，
+   经常误触「切表情 / 双击开面板 / 拖动」。
+   现在把可见像素范围量出来（petHitBox.ts），只让那块矩形接收事件。 */
+.maltese-pet {
+  pointer-events: none;
+}
+
+.maltese-pet__stage {
+  position: relative;
+  display: block;
+  line-height: 0;
+  pointer-events: none;
+  /* 舞台尺寸 = 图片尺寸，命中层按它的百分比定位。 */
+  width: calc(112px * var(--pet-scale, 1));
+  height: calc(112px * var(--pet-scale, 1));
+  /* GIF 自带留白：整块舞台下移一点，让脚 / 趴卧线贴住窗口底边（原来的 img top: 8px）。 */
+  top: calc(8px * var(--pet-scale, 1));
+}
+
+.island--collapsed .island__collapsed--pet-only .maltese-pet__stage img,
+.island__collapsed--pet-only .maltese-pet__stage img {
+  /* 尺寸交给舞台，图片 100% 铺满，位移也交给舞台。 */
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.maltese-pet__hit {
+  position: absolute;
+  z-index: 3;
+  pointer-events: auto;
+  cursor: pointer;
+  /* 让点击反馈不露出方块边界 */
+  border-radius: 42%;
+}

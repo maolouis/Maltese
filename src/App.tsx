@@ -102,6 +102,7 @@ import {
 } from "./proactiveChat";
 import { playCustomSound } from "./customSound";
 import { CustomSoundControl } from "./CustomSoundControl";
+import { usePetHitBox } from "./petHitBox";
 import {
   loadShortcutAutoDetect,
   loadShortcutScanDir,
@@ -1455,6 +1456,8 @@ export function IslandShell({
   const [clickedFrame, setClickedFrame] = useState<string | null>(null);
   const basePetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
   const displayedPetGifSrc = clickedFrame ?? basePetGifSrc;
+  // 只让「真正看得见的狗」接收鼠标事件，抠位里的空白处不再误触。
+  const petHitBox = usePetHitBox(displayedPetGifSrc);
   const playNextExpression = () => {
     if (carouselFrames.length === 0) return;
     const current = carouselFrames.indexOf(displayedPetGifSrc);
@@ -1737,85 +1740,98 @@ export function IslandShell({
             tabIndex={0}
             aria-label={collapsedLabel}
             title="单击切换下一张表情，双击打开互动面板，按住左键拖动换位置"
-            onPointerDown={(event) => {
-              wakePet();
-              prepareWindowDrag(event);
-            }}
-            onPointerMove={(event) => {
-              handleWindowDragMove(event);
-            }}
-            onPointerUp={cancelWindowDrag}
-            onPointerCancel={cancelWindowDrag}
-            onMouseEnter={() => {
-              // 鼠标一靠近就醒（LineDogPet 的 wake 行为）
-              wakePet();
-            }}
-            onMouseLeave={onPetHoverEnd}
-            onClick={(event) => {
-              event.stopPropagation();
-              wakePet();
-              if (!mouseInteractions || didDragRef.current) {
-                return;
-              }
-              // 自己按时间间隔判定双击：系统 dblclick 和拖动/指针捕获打架，
-              // 这里用两次点击的间隔更可靠，也能在确认双击前不切表情。
-              const now = Date.now();
-              if (now - lastClickAtRef.current < 320) {
-                lastClickAtRef.current = 0;
+            data-pet-hit-box={`${petHitBox.x},${petHitBox.y},${petHitBox.w},${petHitBox.h}`}
+          >
+            <span className="maltese-pet__stage">
+              <img
+                src={displayedPetGifSrc}
+                alt=""
+                draggable={false}
+                className={showingSleepPose ? "maltese-pet__rest" : ""}
+                onError={(event) => {
+                  // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
+                  event.currentTarget.src =
+                    characterFramesForState(petCharacter, petState)[0] ?? resolvePetGif(petState);
+                }}
+              />
+              {/* 只有这块（GIF 的可见像素范围）接鼠标事件，四周留白不再误触。 */}
+              <span
+                className="maltese-pet__hit"
+                onPointerDown={(event) => {
+                wakePet();
+                prepareWindowDrag(event);
+              }}
+              onPointerMove={(event) => {
+                handleWindowDragMove(event);
+              }}
+              onPointerUp={cancelWindowDrag}
+              onPointerCancel={cancelWindowDrag}
+              onMouseEnter={() => {
+                // 鼠标一靠近就醒（LineDogPet 的 wake 行为）
+                wakePet();
+              }}
+              onMouseLeave={onPetHoverEnd}
+              onClick={(event) => {
+                event.stopPropagation();
+                wakePet();
+                if (!mouseInteractions || didDragRef.current) {
+                  return;
+                }
+                // 自己按时间间隔判定双击：系统 dblclick 和拖动/指针捕获打架，
+                // 这里用两次点击的间隔更可靠，也能在确认双击前不切表情。
+                const now = Date.now();
+                if (now - lastClickAtRef.current < 320) {
+                  lastClickAtRef.current = 0;
+                  if (clickTimerRef.current !== null) {
+                    window.clearTimeout(clickTimerRef.current);
+                    clickTimerRef.current = null;
+                  }
+                  onPetHoverStart();
+                  return;
+                }
+                lastClickAtRef.current = now;
+                if (clickTimerRef.current !== null) {
+                  window.clearTimeout(clickTimerRef.current);
+                }
+                clickTimerRef.current = window.setTimeout(() => {
+                  clickTimerRef.current = null;
+                  if (clickSquash) {
+                    setPetSquash(true);
+                    window.setTimeout(() => setPetSquash(false), 240);
+                  }
+                  playNextExpression();
+                }, 340);
+              }}
+              onDoubleClick={(event) => {
+                // 兜底：系统 dblclick 能触发时也走同一个入口（重复调用只会刷新内容，不会反复改窗口）。
+                event.stopPropagation();
+                if (!mouseInteractions) {
+                  return;
+                }
                 if (clickTimerRef.current !== null) {
                   window.clearTimeout(clickTimerRef.current);
                   clickTimerRef.current = null;
                 }
+                lastClickAtRef.current = 0;
                 onPetHoverStart();
-                return;
-              }
-              lastClickAtRef.current = now;
-              if (clickTimerRef.current !== null) {
-                window.clearTimeout(clickTimerRef.current);
-              }
-              clickTimerRef.current = window.setTimeout(() => {
-                clickTimerRef.current = null;
-                if (clickSquash) {
-                  setPetSquash(true);
-                  window.setTimeout(() => setPetSquash(false), 240);
-                }
-                playNextExpression();
-              }, 340);
-            }}
-            onDoubleClick={(event) => {
-              // 兜底：系统 dblclick 能触发时也走同一个入口（重复调用只会刷新内容，不会反复改窗口）。
-              event.stopPropagation();
-              if (!mouseInteractions) {
-                return;
-              }
-              if (clickTimerRef.current !== null) {
-                window.clearTimeout(clickTimerRef.current);
-                clickTimerRef.current = null;
-              }
-              lastClickAtRef.current = 0;
-              onPetHoverStart();
-            }}
-            onContextMenu={(event) => {
-              // 右键小狗直接打开聊天；配置/隐藏到托盘在任务栏托盘菜单，
-              // 睡觉在鼠标悬停面板，避免再弹一层菜单。
-              event.preventDefault();
-              event.stopPropagation();
-              if (mouseInteractions) {
-                onOpenPage("chat");
-              }
-            }}
-          >
-            <img
-              src={displayedPetGifSrc}
-              alt=""
-              draggable={false}
-              className={showingSleepPose ? "maltese-pet__rest" : ""}
-              onError={(event) => {
-                // 自定义 GIF 被手动删除时不要让小狗变成破图，退回内置素材。
-                event.currentTarget.src =
-                  characterFramesForState(petCharacter, petState)[0] ?? resolvePetGif(petState);
               }}
-            />
+                onContextMenu={(event) => {
+                  // 右键小狗直接打开聊天；配置/隐藏到托盘在任务栏托盘菜单，
+                  // 睡觉在鼠标悬停面板，避免再弹一层菜单。
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (mouseInteractions) {
+                    onOpenPage("chat");
+                  }
+                }}
+                style={{
+                  left: `${petHitBox.x * 100}%`,
+                  top: `${petHitBox.y * 100}%`,
+                  width: `${petHitBox.w * 100}%`,
+                  height: `${petHitBox.h * 100}%`,
+                }}
+              />
+            </span>
           </span>
         </div>
 
