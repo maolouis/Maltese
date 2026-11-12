@@ -6183,3 +6183,16 @@ html.maltese-page-opening .island__collapsed {
   font-size: 10px;
   line-height: 1.5;
 }
+/* 快捷方式路径输入：格式错误时输入框变红，并在下面给出具体原因 */
+.assistant-panel__add-input.is-error {
+  border-color: rgba(248, 113, 113, 0.85) !important;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.18);
+}
+
+.assistant-panel__add-error {
+  flex: 1 0 100%;
+  margin: 4px 0 0;
+  color: #fca5a5;
+  font-size: 12px;
+  line-height: 1.5;
+}

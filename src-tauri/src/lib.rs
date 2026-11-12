@@ -1322,6 +1322,44 @@ fn close_billiards_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 快捷方式路径检查：告诉前端「文件在不在 / 是文件还是文件夹」。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PathCheckResult {
+    exists: bool,
+    is_file: bool,
+    is_dir: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn check_local_path(path: String) -> PathCheckResult {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return PathCheckResult {
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            error: Some("路径为空".to_string()),
+        };
+    }
+    let candidate = PathBuf::from(trimmed);
+    match std::fs::metadata(&candidate) {
+        Ok(metadata) => PathCheckResult {
+            exists: true,
+            is_file: metadata.is_file(),
+            is_dir: metadata.is_dir(),
+            error: None,
+        },
+        Err(error) => PathCheckResult {
+            exists: false,
+            is_file: false,
+            is_dir: false,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
 #[tauri::command]
 fn open_local_path(path: String) -> Result<(), String> {
     let path = PathBuf::from(path.trim());
@@ -3859,6 +3897,7 @@ pub fn run() {
             get_launch_at_startup,
             set_launch_at_startup,
             open_local_path,
+            check_local_path,
             launch_tool,
             discover_shortcuts,
             discover_installed_apps,

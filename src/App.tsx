@@ -88,6 +88,7 @@ import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./Onboard
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
+import { checkShortcutPath, missingPathMessage } from "./shortcutPath";
 import { loadLocalChatConfig } from "./localChat";
 import {
   buildPrompt as buildProactivePrompt,
@@ -5489,6 +5490,8 @@ function AssistantPanel() {
   const [launchingKey, setLaunchingKey] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState("");
   const [draftPath, setDraftPath] = useState("");
+  // 路径格式错误时直接显示在输入框下面，而不是只在角落闪一句提示。
+  const [draftPathError, setDraftPathError] = useState("");
   const [clearAllArmed, setClearAllArmed] = useState(false);
   const [panelHotkey, setPanelHotkey] = useState(loadShortcutPanelHotkey);
   const [recordingPanelHotkey, setRecordingPanelHotkey] = useState(false);
@@ -5700,16 +5703,42 @@ function AssistantPanel() {
     setNotice("已恢复被隐藏的快捷方式");
   };
 
-  const addCustomShortcut = () => {
-    const path = draftPath.trim();
-    if (!path) {
-      setNotice("请填写程序或脚本路径");
+  const addCustomShortcut = async () => {
+    // 先校验路径格式：错在哪、该写成什么样，都直接显示在输入框下面。
+    const check = checkShortcutPath(draftPath);
+    if (!check.ok) {
+      setDraftPathError(check.message);
       return;
+    }
+    const path = check.normalized;
+    if (customShortcuts.some((shortcut) => shortcutPathKey(shortcut.path) === shortcutPathKey(path))) {
+      setDraftPathError("这个路径已经在快捷入口里了。");
+      return;
+    }
+    // 再确认文件真的在：格式对但路径写错是最常见的情况。
+    try {
+      const result = await invoke<{
+        exists: boolean;
+        isFile: boolean;
+        isDir: boolean;
+        error: string | null;
+      }>("check_local_path", { path });
+      if (!result.exists) {
+        setDraftPathError(missingPathMessage(path));
+        return;
+      }
+      if (result.isDir) {
+        setDraftPathError("这是一个文件夹，请填到具体的程序文件（例如 .exe / .lnk / .bat）。");
+        return;
+      }
+    } catch {
+      // 检查命令不可用时放行，避免挡住用户
     }
     const fallbackLabel = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
     persistCustomShortcuts([...customShortcuts, { label: draftLabel.trim() || fallbackLabel, path }].slice(0, 24));
     setDraftLabel("");
     setDraftPath("");
+    setDraftPathError("");
     setAdding(false);
     setNotice("已添加快捷方式");
   };
@@ -6093,10 +6122,24 @@ function AssistantPanel() {
             />
             <input
               value={draftPath}
-              onChange={(event) => setDraftPath(event.currentTarget.value)}
+              className={draftPathError ? "assistant-panel__add-input is-error" : "assistant-panel__add-input"}
+              aria-invalid={Boolean(draftPathError)}
+              aria-describedby={draftPathError ? "shortcut-path-error" : undefined}
+              onChange={(event) => {
+                setDraftPath(event.currentTarget.value);
+                if (draftPathError) setDraftPathError("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void addCustomShortcut();
+              }}
               placeholder="程序或脚本路径，例如 C:\\Tools\\tool.exe"
             />
-            <button type="button" onClick={addCustomShortcut}>添加</button>
+            <button type="button" onClick={() => void addCustomShortcut()}>添加</button>
+            {draftPathError && (
+              <p className="assistant-panel__add-error" id="shortcut-path-error" role="alert">
+                {draftPathError}
+              </p>
+            )}
           </div>
         )}
         <div className="assistant-panel__panel-hotkey">
