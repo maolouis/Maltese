@@ -93,9 +93,11 @@ import {
   buildPrompt as buildProactivePrompt,
   cleanTitle as cleanActivityTitle,
   isRepeated as isRepeatedProactiveLine,
+  pickAngle as pickProactiveAngle,
   pickFallback as pickProactiveFallback,
   recentLines as recentProactiveLines,
   rememberLine as rememberProactiveLine,
+  type ProactiveAngle,
   type ProactiveContext,
 } from "./proactiveChat";
 import { playCustomSound } from "./customSound";
@@ -7118,8 +7120,10 @@ function IslandApp({
         };
       }
 
-      // 把最近说过的话带进提示词，并要求换角度；模型不听话时再重试一次。
+      // 把最近说过的话带进提示词，并要求换角度；模型不听话时再重试。
       const avoid = recentProactiveLines();
+      // 每次挑一个最近最少用过的角度，避免老在「心疼你」这一套里打转。
+      const angle: ProactiveAngle = pickProactiveAngle();
       // 流式生成：一有开头就把气泡弹出来，边生成边更新正文。
       // 之前是等整句生成完才弹，本机大模型要好几秒，看起来就是「回话后很久才冒出气泡」。
       const onFirstTextRef = { fired: false };
@@ -7131,8 +7135,8 @@ function IslandApp({
             : observe.kind === "meeting"
               ? "陪你开会"
               : "小狗想你了";
-      const askOnce = async (extra: string) => {
-        const prompt = buildProactivePrompt(observe, avoid) + extra;
+      const askOnce = async (extra: string, silent = false) => {
+        const prompt = buildProactivePrompt(observe, avoid, angle) + extra;
         const config = loadLocalChatConfig();
         if (config.backend === "local" && config.model) {
           const requestId = `proactive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -7144,6 +7148,7 @@ function IslandApp({
               if (event.payload.requestId !== requestId) return;
               if (event.payload.kind !== "delta") return;
               streamed += event.payload.text;
+              if (silent) return;
               // 够 6 个字就先把气泡弹出来（标题按场景），后面继续补全。
               if (!onFirstTextRef.fired && streamed.trim().length >= 6) {
                 onFirstTextRef.fired = true;
@@ -7171,7 +7176,8 @@ function IslandApp({
               settings: {
                 // 只要一句 12–30 字的话，128 token 足够；给太多反而拖慢。
                 maxTokens: 128,
-                temperature: 0.85,
+                // 重试时把温度拉高，逼模型换一种说法。
+                temperature: silent ? 1 : 0.85,
                 topP: 0.9,
                 enableThinking: false,
                 reasoningEffort: "none",
@@ -7211,22 +7217,28 @@ function IslandApp({
       }
       line = line.trim().replace(/^["「『]|["」』]$/g, "");
       if (line && isRepeatedProactiveLine(line, avoid)) {
-        // 说法撞车了：再要一句，明确要求换角度
-        try {
-          const retry = (await askOnce("\n\n刚才那句太重复了，换一个完全不同的说法和角度。")) ?? "";
-          const cleaned = retry.trim().replace(/^["「『]|["」』]$/g, "");
-          if (cleaned && !isRepeatedProactiveLine(cleaned, avoid)) {
-            line = cleaned;
+        // 撞车了：连续要两次，措辞一次比一次强硬，温度也更高。
+        for (const hint of [
+          "\n\n刚才那句和以前太像了，换一个完全不同的角度和开头。",
+          `\n\n还是太像了。不要再用这些开头：${avoid.slice(0, 5).map((item) => item.slice(0, 4)).join(" / ")}。换一个更具体、更有画面感的说法。`,
+        ]) {
+          try {
+            const retry = (await askOnce(hint, true)) ?? "";
+            const cleaned = retry.trim().replace(/^["「『]|["」』]$/g, "");
+            if (cleaned && !isRepeatedProactiveLine(cleaned, avoid)) {
+              line = cleaned;
+              break;
+            }
+          } catch {
+            // 保留当前这句
           }
-        } catch {
-          // 保留第一句
         }
       }
       if (!line || isRepeatedProactiveLine(line, avoid)) {
-        line = pickProactiveFallback(observe, avoid);
+        line = pickProactiveFallback(observe, avoid, angle);
       }
       if (!line) return;
-      rememberProactiveLine(line);
+      rememberProactiveLine(line, { kind: observe.kind, angle });
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
       if (onFirstTextRef.fired) {
@@ -7250,7 +7262,18 @@ function IslandApp({
             : kind === "meeting"
               ? ["陪你开会", "小狗安静陪着"]
               : ["小狗想你了", "小狗探头", "突然想起你"];
-      const greeting = greetingPool[Math.floor(Math.random() * greetingPool.length)];
+      // 上次用过的标题不再连着用，避免「小狗想你了」刷屏。
+      let greeting = greetingPool[Math.floor(Math.random() * greetingPool.length)];
+      try {
+        const lastTitle = window.localStorage.getItem("maltese-proactive-last-title") || "";
+        const alternatives = greetingPool.filter((item) => item !== lastTitle);
+        if (alternatives.length > 0) {
+          greeting = alternatives[Math.floor(Math.random() * alternatives.length)];
+        }
+        window.localStorage.setItem("maltese-proactive-last-title", greeting);
+      } catch {
+        // 忽略
+      }
       showCloudBubble(greeting, line);
       appendChat(line);
       try {

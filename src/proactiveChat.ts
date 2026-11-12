@@ -23,49 +23,158 @@ export type ProactiveContext = {
 };
 
 const HISTORY_KEY = "maltese-proactive-history";
-const HISTORY_LIMIT = 12;
+// 记录最近说过的句子、角度和时间。48 条大约能用几天，
+// 再配合「按角度轮换 + 相似度判定」把重复率压下去。
+const HISTORY_LIMIT = 48;
+const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-function readHistory(): string[] {
+/** 说话的角度：换角度比换措辞更能避免「听起来都一样」。 */
+export type ProactiveAngle =
+  | "care"
+  | "curious"
+  | "clingy"
+  | "tease"
+  | "empathy"
+  | "detail"
+  | "recall"
+  | "self";
+
+const ANGLES: Array<{ id: ProactiveAngle; hint: string }> = [
+  { id: "care", hint: "心疼主人累不累、身体舒不舒服" },
+  { id: "curious", hint: "对主人正在做的事表示好奇" },
+  { id: "clingy", hint: "撒娇、想被注意到" },
+  { id: "tease", hint: "轻轻调侃、开玩笑" },
+  { id: "empathy", hint: "站在主人这边，共情他的状态" },
+  { id: "detail", hint: "抓住一个具体细节（时长、标题、歌名）说" },
+  { id: "recall", hint: "提起刚才他做过的事" },
+  { id: "self", hint: "说说小狗自己在干什么" },
+];
+
+type HistoryEntry = { text: string; at: number; kind?: string; angle?: ProactiveAngle };
+
+function readHistoryEntries(): HistoryEntry[] {
   try {
     const raw = window.localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .map((item): HistoryEntry | null => {
+        // 兼容旧版：早期只存了字符串数组。
+        if (typeof item === "string") return { text: item, at: now };
+        if (item && typeof item === "object") {
+          const entry = item as Partial<HistoryEntry>;
+          if (typeof entry.text === "string") {
+            return { text: entry.text, at: entry.at ?? now, kind: entry.kind, angle: entry.angle };
+          }
+        }
+        return null;
+      })
+      .filter((entry): entry is HistoryEntry => Boolean(entry))
+      .filter((entry) => now - entry.at < HISTORY_MAX_AGE_MS)
+      .slice(0, HISTORY_LIMIT);
   } catch {
     return [];
   }
 }
 
-export function rememberLine(line: string) {
-  const next = [normalize(line), ...readHistory()].slice(0, HISTORY_LIMIT);
+function writeHistory(entries: HistoryEntry[]) {
   try {
-    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, HISTORY_LIMIT)));
   } catch {
     // 忽略
   }
 }
 
+export function rememberLine(
+  line: string,
+  meta: { kind?: string; angle?: ProactiveAngle } = {},
+) {
+  const entries = readHistoryEntries();
+  entries.unshift({ text: normalize(line), at: Date.now(), kind: meta.kind, angle: meta.angle });
+  writeHistory(entries);
+}
+
 export function recentLines(): string[] {
-  return readHistory();
+  return readHistoryEntries().map((entry) => entry.text);
 }
 
 export function normalize(text: string): string {
-  return text.replace(/[\s，。！？、,.!?~～…"'「」]/g, "");
+  return text
+    .replace(/[，。！？、,.!?~～…"'「」【】（）()]/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
 }
 
-/** 和最近说过的话太像，就算重复。 */
-export function isRepeated(line: string, history = readHistory()): boolean {
+/** 二元字组集合，用来做相似度判断（中文按字切比按词稳）。 */
+function bigrams(text: string): Set<string> {
+  const set = new Set<string>();
+  for (let i = 0; i < text.length - 1; i += 1) set.add(text.slice(i, i + 2));
+  return set;
+}
+
+function similarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const setA = bigrams(a);
+  const setB = bigrams(b);
+  if (setA.size === 0 || setB.size === 0) return a === b ? 1 : 0;
+  let shared = 0;
+  for (const gram of setA) if (setB.has(gram)) shared += 1;
+  return shared / (setA.size + setB.size - shared);
+}
+
+/**
+ * 和说过的话太像就算重复：
+ * - 归一化后完全相同；
+ * - 开头 6 个字相同（「看你又在写代码…」换后半句也算）；
+ * - 二元字组相似度 ≥ 0.5（换个说法但骨架一样）。
+ * 最近的几句话用更严格的 0.45，早期的话放宽到 0.6。
+ */
+export function isRepeated(line: string, history = recentLines()): boolean {
   const target = normalize(line);
   if (!target) return true;
-  return history.some((previous) => {
+  return history.some((previous, index) => {
     const candidate = normalize(previous);
     if (!candidate) return false;
     if (candidate === target) return true;
-    // 前 10 个字一样也当作重复，避免「看你又在写代码」换了后半句
-    return target.length >= 10 && candidate.length >= 10 && candidate.slice(0, 10) === target.slice(0, 10);
+    if (target.length >= 8 && candidate.length >= 8 && candidate.slice(0, 6) === target.slice(0, 6)) {
+      return true;
+    }
+    const threshold = index < 10 ? 0.45 : 0.6;
+    return similarity(candidate, target) >= threshold;
   });
 }
 
+/** 选一个最近最少用过的角度，避免每次都是「心疼你」那一套。 */
+export function pickAngle(history = readHistoryEntries()): ProactiveAngle {
+  const lastUsed = new Map<ProactiveAngle, number>();
+  for (const entry of history) {
+    if (entry.angle && !lastUsed.has(entry.angle)) lastUsed.set(entry.angle, entry.at);
+  }
+  const unused = ANGLES.filter((angle) => !lastUsed.has(angle.id));
+  if (unused.length > 0) {
+    return unused[Math.floor(Math.random() * unused.length)].id;
+  }
+  const sorted = [...ANGLES].sort(
+    (a, b) => (lastUsed.get(a.id) ?? 0) - (lastUsed.get(b.id) ?? 0),
+  );
+  // 在最早用过的三个里随机，避免完全固定顺序。
+  return sorted[Math.floor(Math.random() * Math.min(3, sorted.length))].id;
+}
+
+export function angleHint(angle: ProactiveAngle): string {
+  return ANGLES.find((item) => item.id === angle)?.hint ?? "";
+}
+
+/** 最近几句的开头，用来明确告诉模型「别这样起头」。 */
+export function recentOpenings(limit = 6): string[] {
+  return readHistoryEntries()
+    .map((entry) => entry.text.slice(0, 4))
+    .filter(Boolean)
+    .slice(0, limit);
+}
 function timeBucket(now: Date): "dawn" | "morning" | "noon" | "afternoon" | "evening" | "night" {
   const hour = now.getHours();
   if (hour < 6) return "dawn";
@@ -133,7 +242,11 @@ function storyGuidance(character: string): string[] {
   }
 }
 
-export function buildPrompt(context: ProactiveContext, avoid: string[]): string {
+export function buildPrompt(
+  context: ProactiveContext,
+  avoid: string[],
+  angle: ProactiveAngle = "care",
+): string {
   const bucket = timeBucket(context.now);
   const clock = `${context.now.getHours()}:${String(context.now.getMinutes()).padStart(2, "0")}`;
   const facts: string[] = [];
@@ -158,13 +271,19 @@ export function buildPrompt(context: ProactiveContext, avoid: string[]): string 
     "1. 只说一句话，12–30 个汉字，像熟人随口开口，不要客服腔、不要「您好」「很高兴为您服务」。",
     "2. 必须结合上面的具体信息（比如具体在做什么、坐了多久、在听什么），让人感觉你真的看见了。",
     "3. 可以有情绪：心疼、撒娇、好奇、调侃都行，但要有分寸，不要说教、不要连续发问。",
-    "4. 不要每次都用「记得喝水」「注意休息」这种万能句；换着角度说。",
-    "5. 不要加引号、不要加表情符号以外的格式，不要解释你为什么这么说。",
+    `4. 这次的角度是「${angleHint(angle)}」，只从这个角度说，别混进别的套路。`,
+    "5. 不要每次都用「记得喝水」「注意休息」这种万能句。",
+    "6. 不要加引号、不要加表情符号以外的格式，不要解释你为什么这么说。",
   ];
+  const openings = recentOpenings(6);
+  if (openings.length > 0) {
+    lines.push("");
+    lines.push(`不要用这些词开头：${openings.join(" / ")}`);
+  }
   if (avoid.length > 0) {
     lines.push("");
-    lines.push("下面这些是最近说过的话，不要重复它们的说法和句式：");
-    lines.push(...avoid.slice(0, 6).map((line) => `- ${line}`));
+    lines.push("下面这些是最近说过的话，不要重复它们的说法、句式和比喻：");
+    lines.push(...avoid.slice(0, 8).map((line) => `- ${line}`));
   }
   lines.push("");
   lines.push("直接输出你要说的那一句话。");
@@ -237,6 +356,49 @@ const FALLBACKS: FallbackRule[] = [
   },
 ];
 
+/** 每个角度一组备用句，让「关掉模型」时也不总是那几句。 */
+const ANGLE_LINES: Record<ProactiveAngle, string[]> = {
+  care: [
+    "你坐得有点久了，我趴你手边打个滚提醒你一下",
+    "肩膀是不是又耸起来了？我拿脑袋顶顶你",
+    "眼睛累不累，我看屏幕都觉得晃",
+  ],
+  curious: [
+    "你现在弄的这个，看起来挺有意思的？",
+    "屏幕上那些东西是什么呀，我凑近看看",
+    "这个做得挺久了，是遇到好玩的难题了吗",
+  ],
+  clingy: [
+    "我也在这儿呢，你都不看我一眼",
+    "忙归忙，抽空摸摸我嘛",
+    "我尾巴都摇累了，你还没发现我",
+  ],
+  tease: [
+    "你这么认真，我都不好意思打哈欠了",
+    "又要熬夜啦？我看你是舍不得关电脑",
+    "忙成这样，桌面上就我最闲",
+  ],
+  empathy: [
+    "这事儿确实麻烦，换我也会烦",
+    "不用做到完美，先把今天过完就行",
+    "你已经坐了这么久，慢一点也没关系",
+  ],
+  detail: [
+    "「{media}」这个名字我记住了，等你说说好不好看",
+    "第 {streak} 分钟了，我给你记着时间呢",
+    "刚才那一下你停顿了很久，是想到了什么吗",
+  ],
+  recall: [
+    "你刚才{event}，我就在旁边看着",
+    "你{event}的时候，尾巴不自觉地摇了一下",
+    "想起你{event}，还怪认真的",
+  ],
+  self: [
+    "我刚在桌角翻了个身，顺便看看你在干嘛",
+    "我打了个哈欠，你也跟着困了吗",
+    "我把爪子揣起来了，这样陪你比较久",
+  ],
+};
 function fillTemplate(template: string, context: ProactiveContext): string {
   return template
     .replace("{media}", context.mediaTitle || "这个视频")
@@ -267,16 +429,33 @@ function characterFallbacks(character: string): string[] {
   }
 }
 
-/** 模型不可用时用：按当前情境挑一句，并避开最近说过的。 */
-export function pickFallback(context: ProactiveContext, history = readHistory()): string {
+/** 模型不可用时用：按情境 + 角度挑一句，尽量避开说过的。 */
+export function pickFallback(
+  context: ProactiveContext,
+  history = recentLines(),
+  angle: ProactiveAngle = pickAngle(),
+): string {
   const matching = FALLBACKS.filter((rule) => rule.when(context));
   const pool: string[] = [];
-  pool.push(...characterFallbacks(context.character ?? "xiaobai"));
+  // 与当前角度相关的句子优先，但不独占（避免模板太少反而更容易重复）。
+  const angled = ANGLE_LINES[angle] ?? [];
+  pool.push(...angled.map((line) => fillTemplate(line, context)));
   for (const rule of matching) {
     for (const line of rule.lines) pool.push(fillTemplate(line, context));
   }
-  const fresh = pool.filter((line) => !isRepeated(line, history));
-  const candidates = fresh.length > 0 ? fresh : pool;
+  pool.push(...characterFallbacks(context.character ?? "xiaobai"));
+
+  const scored = pool.map((line, index) => ({
+    line,
+    index,
+    repeated: isRepeated(line, history),
+    // 曾经用过的次数越多，优先级越低。
+    used: history.filter((previous) => normalize(previous) === normalize(line)).length,
+  }));
+  const fresh = scored.filter((item) => !item.repeated);
+  const candidates = fresh.length > 0 ? fresh : scored;
   if (candidates.length === 0) return "我在这儿，别忙坏了";
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  const leastUsed = Math.min(...candidates.map((item) => item.used));
+  const best = candidates.filter((item) => item.used === leastUsed);
+  return best[Math.floor(Math.random() * best.length)].line;
 }
