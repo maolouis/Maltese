@@ -1369,6 +1369,20 @@ struct PathCheckResult {
     error: Option<String>,
 }
 
+/// 桌宠素材外置后的真实目录：`<resource_dir>/assets/pets`。
+/// 开发态（tauri dev）资源不存在时返回空串，前端退回 `/assets/pets/...`。
+#[tauri::command]
+fn get_pet_asset_base(app: AppHandle) -> String {
+    use tauri::Manager;
+    if let Ok(dir) = app.path().resource_dir() {
+        let pets = dir.join("assets").join("pets");
+        if pets.exists() {
+            return pets.display().to_string();
+        }
+    }
+    String::new()
+}
+
 #[tauri::command]
 fn check_local_path(path: String) -> PathCheckResult {
     let trimmed = path.trim();
@@ -3937,6 +3951,7 @@ pub fn run() {
             set_launch_at_startup,
             open_local_path,
             check_local_path,
+            get_pet_asset_base,
             launch_tool,
             discover_shortcuts,
             discover_installed_apps,

@@ -4,6 +4,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { petAssetUrl } from "./petAssetBase";
 import { invoke } from "@tauri-apps/api/core";
 import { resolvePetGif } from "./petAssets";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
@@ -30,7 +31,7 @@ const STEPS = ["欢迎", "显示 / 隐藏", "开机自启", "完成"] as const;
 
 export function OnboardingPanel({ onFinish }: { onFinish: () => void }) {
   const [step, setStep] = useState(0);
-  const [petSrc] = useState("/assets/pets/rest.gif");
+  const [petSrc] = useState(petAssetUrl("/assets/pets/rest.gif"));
   const [donePetSrc] = useState(() => resolvePetGif("celebrate"));
 
   // 快捷键步骤状态

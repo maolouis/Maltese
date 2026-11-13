@@ -10,6 +10,7 @@ import BongoPet from "./BongoPet";
 import Billiards from "./Billiards";
 import PinnedPanel from "./PinnedPanel";
 import { I18nProvider } from "./i18n";
+import { initPetAssetBase } from "./petAssetBase";
 
 const windowKind = new URLSearchParams(window.location.search).get("window");
 const RootComponent =
@@ -49,10 +50,13 @@ window.addEventListener(
   true,
 );
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <I18nProvider>
-      <RootComponent />
-    </I18nProvider>
-  </React.StrictMode>,
-);
+// 素材已外置到安装目录：渲染前先拿到资源目录，避免首帧图片 404。
+void initPetAssetBase().finally(() => {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <I18nProvider>
+        <RootComponent />
+      </I18nProvider>
+    </React.StrictMode>,
+  );
+});

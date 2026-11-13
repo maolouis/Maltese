@@ -1,3 +1,5 @@
+import { petAssetUrl } from "./petAssetBase";
+
 // 线条小狗 GIF 素材清单与随机选取逻辑。
 // 素材来源：LineDogPet（小白角色），已复制到 public/assets/pets/<state>/<n>.gif。
 // 每个状态的第 0 项是既有的根级 GIF（作为默认/兜底），其余为随机变体。
@@ -72,10 +74,10 @@ const FALLBACK_FILE: Record<string, string> = {
 export function resolvePetGif(state: string, exclude?: string): string {
   const list = PET_GIF_VARIANTS[state as PetVisualState];
   if (!list || list.length === 0) {
-    return FALLBACK_FILE[state] ?? `/assets/pets/${state}.gif`;
+    return petAssetUrl(FALLBACK_FILE[state] ?? `/assets/pets/${state}.gif`);
   }
   if (list.length === 1) {
-    return list[0];
+    return petAssetUrl(list[0]);
   }
   let picked = list[Math.floor(Math.random() * list.length)];
   // 尽量避免连续两次同一张图。
@@ -84,5 +86,5 @@ export function resolvePetGif(state: string, exclude?: string): string {
     picked = list[Math.floor(Math.random() * list.length)];
     guard += 1;
   }
-  return picked;
+  return petAssetUrl(picked);
 }

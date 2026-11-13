@@ -89,6 +89,7 @@ import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
 import { checkShortcutPath, missingPathMessage } from "./shortcutPath";
+import { petAssetUrl } from "./petAssetBase";
 import { loadLocalChatConfig } from "./localChat";
 import {
   buildPrompt as buildProactivePrompt,
@@ -5436,7 +5437,7 @@ const ACTIVITY_MOODS: Record<string, PetState> = {
 };
 
 // 睡觉/缩边时固定趴睡帧；其余表情由设置页的轮播顺序决定。
-const SLEEPING_FRAME = "/assets/pets/rest.gif";
+const SLEEPING_FRAME = petAssetUrl("/assets/pets/rest.gif");
 
 // 根据前台进程生成的情感互动台词（相当于 LineDogPet 的“偷偷观察你”）。
 const ACTIVITY_LINES: Record<string, string[]> = {

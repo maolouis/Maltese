@@ -27,7 +27,8 @@ const built = run("类型检查与前端构建", "npm run build");
 
 // 2. 素材完整性：petAssets.ts 里引用的所有 /assets/pets 路径必须存在
 const petAssetsSource = fs.readFileSync(path.join(root, "src/petAssets.ts"), "utf8");
-const petDir = path.join(root, "public/assets/pets");
+// 素材已外置到仓库根 assets/pets（安装后位于 <安装目录>/resources/assets/pets）。
+const petDir = path.join(root, "assets/pets");
 const referenced = new Set();
 
 // 直接写死的路径

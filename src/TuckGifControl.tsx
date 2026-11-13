@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { petAssetUrl } from "./petAssetBase";
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { ImagePlus, RotateCcw } from "lucide-react";
 import { characterFramesForState, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
@@ -17,7 +18,7 @@ export function TuckGifControl() {
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const fallback = characterFramesForState(character, "sleeping")[0] ?? "/assets/pets/rest.gif";
+  const fallback = characterFramesForState(character, "sleeping")[0] ?? petAssetUrl("/assets/pets/rest.gif");
   let preview = fallback;
   if (tuckPath) {
     try {

@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
+import { petAssetUrl } from "./petAssetBase";
 
 export type PetCharacterId = "xiaobai" | "xiaojimao" | "duo";
 
@@ -219,14 +220,14 @@ export function characterFramesForState(
   const key = `${character}|${state}|${ownOnly ? "own" : "all"}`;
   const cached = frameCache.get(key);
   if (cached) return cached;
-  const frames = sampleFrames(computeFrames(character, state, ownOnly));
+  const frames = sampleFrames(computeFrames(character, state, ownOnly)).map(petAssetUrl);
   frameCache.set(key, frames);
   return frames;
 }
 
 /** 设置页「全选」用的完整素材池（不抽样）。 */
 export function characterAllFrames(character: PetCharacterId, state: string): string[] {
-  return computeFrames(character, state, false);
+  return computeFrames(character, state, false).map(petAssetUrl);
 }
 
 /** 该形象在某状态下可用的素材总量（设置页展示用）。 */
