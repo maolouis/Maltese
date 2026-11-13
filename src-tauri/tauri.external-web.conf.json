@@ -1,0 +1,193 @@
+{
+    "$schema":  "https://schema.tauri.app/config/2",
+    "build":  {
+                  "frontendDist":  "./web-stub"
+              },
+    "app":  {
+                "windows":  [
+                                {
+                                    "label":  "main",
+                                    "title":  "Maltese 线条小狗桌面助手",
+                                    "width":  640,
+                                    "height":  540,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "resizable":  false,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "visible":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html"
+                                },
+                                {
+                                    "label":  "translation",
+                                    "title":  "Maltese 有道翻译",
+                                    "width":  480,
+                                    "height":  640,
+                                    "minWidth":  480,
+                                    "minHeight":  380,
+                                    "decorations":  false,
+                                    "transparent":  false,
+                                    "resizable":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "visible":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=translation"
+                                },
+                                {
+                                    "label":  "bubble",
+                                    "title":  "",
+                                    "width":  340,
+                                    "height":  520,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "resizable":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "visible":  false,
+                                    "shadow":  false,
+                                    "focusable":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=bubble"
+                                },
+                                {
+                                    "label":  "settings",
+                                    "title":  "Maltese · 桌宠设置",
+                                    "width":  560,
+                                    "height":  780,
+                                    "minWidth":  460,
+                                    "minHeight":  560,
+                                    "resizable":  true,
+                                    "visible":  false,
+                                    "center":  true,
+                                    "url":  "http://maltese.localhost/index.html?window=settings"
+                                },
+                                {
+                                    "label":  "companion-1",
+                                    "title":  "",
+                                    "width":  200,
+                                    "height":  180,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=companion\u0026id=1"
+                                },
+                                {
+                                    "label":  "companion-2",
+                                    "title":  "",
+                                    "width":  200,
+                                    "height":  180,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=companion\u0026id=2"
+                                },
+                                {
+                                    "label":  "companion-3",
+                                    "title":  "",
+                                    "width":  200,
+                                    "height":  180,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=companion\u0026id=3"
+                                },
+                                {
+                                    "label":  "companion-4",
+                                    "title":  "",
+                                    "width":  200,
+                                    "height":  180,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=companion\u0026id=4"
+                                },
+                                {
+                                    "label":  "bongo-pet",
+                                    "title":  "",
+                                    "width":  440,
+                                    "height":  358,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=bongo"
+                                },
+                                {
+                                    "label":  "cursor-pet",
+                                    "title":  "",
+                                    "width":  120,
+                                    "height":  120,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "focusable":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=cursor"
+                                },
+                                {
+                                    "label":  "billiards",
+                                    "title":  "和小狗打台球",
+                                    "width":  1280,
+                                    "height":  800,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  true,
+                                    "resizable":  false,
+                                    "visible":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=billiards"
+                                },
+                                {
+                                    "label":  "pinned",
+                                    "title":  "固定在桌面的标签页",
+                                    "width":  420,
+                                    "height":  560,
+                                    "decorations":  false,
+                                    "transparent":  true,
+                                    "alwaysOnTop":  true,
+                                    "skipTaskbar":  false,
+                                    "resizable":  true,
+                                    "minWidth":  320,
+                                    "minHeight":  360,
+                                    "visible":  false,
+                                    "shadow":  false,
+                                    "url":  "http://maltese.localhost/index.html?window=pinned"
+                                }
+                            ]
+            },
+    "bundle":  {
+                   "resources":  {
+                                     "../dist":  "web",
+                                     "../assets/pets":  "assets/pets"
+                                 }
+               }
+}

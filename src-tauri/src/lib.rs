@@ -3,6 +3,7 @@ mod clipboard_history;
 mod netease;
 mod desktop_extras;
 mod desktop_icons;
+mod web_protocol;
 mod dsh_api;
 mod dsh_chat;
 mod local_chat;
@@ -3827,6 +3828,11 @@ pub fn run() {
         context.config_mut().identifier = identifier;
     }
     tauri::Builder::default()
+        // 前端产物外置：`http://maltese.localhost/...` 从 <资源目录>/web 读取。
+        // 默认（内嵌产物）时这个协议不会被请求，注册本身没有副作用。
+        .register_uri_scheme_protocol(web_protocol::scheme(), |context, request| {
+            web_protocol::respond(context.app_handle(), &request)
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = show_island(app);
         }))

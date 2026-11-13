@@ -6,7 +6,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -103,6 +103,20 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - 支持 Chrome、Edge、Firefox、Brave、Vivaldi、Opera，以及 360、QQ、搜狗、猎豹、2345、Maxthon、UC 等常见 Windows 浏览器；也兼容抖音 / 哔哩哔哩桌面客户端。
 - 需要本机已安装浏览器并手动登录；本项目不保存账号密码，也不绕过平台风控。
 
+## 桌宠形象预览
+
+素材现在装在安装目录的 `resources/assets/pets`，下面是仓库里的几段：
+
+| 待机 | 开心 | 睡觉 |
+| --- | --- | --- |
+| ![待机](assets/pets/idle.gif) | ![开心](assets/pets/happy.gif) | ![睡觉](assets/pets/rest.gif) |
+
+| 吃饭 | 庆祝 | 被摸头 |
+| --- | --- | --- |
+| ![吃饭](assets/pets/eat.gif) | ![庆祝](assets/pets/celebrate.gif) | ![摸头](assets/pets/pet.gif) |
+
+按形象分目录（`assets/pets/chars/xiaobai|xiaojimao|shared/<动作>/*.gif`），
+新增或替换素材后跑 `node scripts/build-pet-manifest.mjs` 重新生成清单。
 ## 快速开始
 
 ### 环境要求
@@ -198,6 +212,16 @@ $env:MALTESE_DSH_CLI = "D:\path\to\dsh.cmd"
 5. 等待约 6 秒开始自动翻页；切到其他窗口会暂停，回到目标窗口后继续。
 6. 点击停止即可结束。
 
+## 工程结构与重构（v0.2.0 起）
+
+- **前端分离**：桌宠素材已移出 PE（`assets/pets` → 安装目录 `resources/assets/pets`）；
+  另提供 `src-tauri/tauri.external-web.conf.json` overlay，可把 JS/CSS/字体也外置到
+  `resources/web`，由 `web_protocol.rs` 通过 `http://maltese.localhost/...` 提供；
+- **单模块预算**：`App.tsx` 只允许持平或缩小（当前 9161 行），其余模块 ≤900 行，由
+  `node scripts/verify-architecture.mjs` 守护；设置控件已拆到 `src/uiControls.tsx`；
+- **功能不减少**：`node scripts/verify-parity.mjs` 用 17 项能力锚点核对重构前后功能面；
+- 分层、拆分路线、脚本清单见 [docs/architecture.md](docs/architecture.md)，
+  打包与分发约束见 [docs/distribution.md](docs/distribution.md)。
 ## 技术栈
 
 - 前端：React 19 + TypeScript + Vite 7，lucide-react 图标
