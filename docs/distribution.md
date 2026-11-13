@@ -127,3 +127,19 @@ git -c http.curloptResolve=github.com:443:20.205.243.166 push <remote> HEAD:main
 
 API 侧同理：`curl --resolve api.github.com:443:20.205.243.168 …`。
 `20.200.245.247`、`140.82.112.3`、`4.237.22.38` 也可作为备用地址。
+## 8. 自定义安装目录（本机示例：`E:\Maltese2`）
+
+默认安装目录是 `%LOCALAPPDATA%\Maltese 线条小狗桌面助手`。想换盘可以整个目录搬走，再把这几处指过去：
+
+| 位置 | 键 / 文件 | 改成 |
+| --- | --- | --- |
+| 卸载项 | `HKCU\...\Uninstall\Maltese 线条小狗桌面助手` 的 `InstallLocation` / `DisplayIcon` / `UninstallString` | 新目录 |
+| 自启动 | `HKCU\...\CurrentVersion\Run` 的 `Maltese Desktop Assistant` | 新 exe 路径 |
+| 开始菜单 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Maltese 线条小狗桌面助手.lnk` | 新 exe 路径 |
+| 桌面快捷方式 | `%USERPROFILE%\Desktop\Maltese 线条小狗桌面助手.lnk` | 新 exe 路径 |
+
+注意两点：
+
+1. **`resources\` 必须一起搬**：素材外置后 GIF 在 `<安装目录>\resources\assets\pets`，只搬 exe 会看不到小狗；
+2. **升级**：`InstallLocation` 更新后，NSIS 升级安装会沿用注册表里的旧路径；内置更新器写的是同一份注册表，
+   因此后续 OTA 会继续装在自定义目录里。
