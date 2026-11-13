@@ -143,3 +143,31 @@ API 侧同理：`curl --resolve api.github.com:443:20.205.243.168 …`。
 1. **`resources\` 必须一起搬**：素材外置后 GIF 在 `<安装目录>\resources\assets\pets`，只搬 exe 会看不到小狗；
 2. **升级**：`InstallLocation` 更新后，NSIS 升级安装会沿用注册表里的旧路径；内置更新器写的是同一份注册表，
    因此后续 OTA 会继续装在自定义目录里。
+## 9. 数据备份与 identifier 迁移
+
+应用数据（设置、待办、聊天、剪贴板、形象配置）存在 WebView2 的 localStorage 里，
+路径跟着 `identifier` 走：
+
+```
+%LOCALAPPDATA%\<identifier>\EBWebView\Default\Local Storage\leveldb
+```
+
+改 `identifier` 前务必先备份，再迁移：
+
+```powershell
+# 1. 停进程、备份
+Stop-Process -Name maltese-assistant -Force
+robocopy "$env:LOCALAPPDATA\com.maltese.desktop-assistant\EBWebView\Default\Local Storage" `
+         "E:\Maltese-backup\<时间戳>\Local Storage" /E
+
+# 2. 用新 identifier 启动一次（建目录），停掉
+
+# 3. 覆盖迁移
+robocopy "E:\Maltese-backup\<时间戳>\Local Storage" `
+         "$env:LOCALAPPDATA\com.maolouis.maltese\EBWebView\Default\Local Storage" /E
+
+# 4. 再启动验证；LevelDB 的 .ldb 段文件哈希一致即说明数据完整搬过去了
+```
+
+本机已按这个流程把 `com.maltese.desktop-assistant` → `com.maolouis.maltese` 迁完，
+4 个 `.ldb` 文件 SHA-256 完全一致；旧目录保留作二次备份。
