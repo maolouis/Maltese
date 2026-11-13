@@ -84,6 +84,9 @@ node scripts/build-windows.mjs   # 一键打包（优先 pnpm，兜底 npm）
 - 前端改动：新增组件放 `src/` 下独立文件，样式添加到对应位置。`App.tsx` 已超过 6300 行，在新文件里添加新功能避免进一步膨胀。
 - Rust 改动：所有命令注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 块。模块分拆在独立文件（`mod` imports at top）。新增 Win32 API 调用时需要确认 `windows` crate features 是否覆盖。
 - 构建验证：改完前端跑 `pnpm build`；改完 Rust 至少在我这里跑 `cargo check --target x86_64-pc-windows-msvc`（mini crate 也行），实机再跑完整构建。
+- **版本与推送要用户确认**：未经用户明确同意，**不改版本号**（`package.json` / `src-tauri/tauri.conf.json` /
+  `src-tauri/Cargo.toml` / README 徽章），**不 `git push`**、**不打 Release**。修 bug、加功能照常做，
+  本地构建与本地提交照常；等用户说“发布”再升版本号并推送。
 - **交付前检查**：发版前必须过 [docs/release-checklist.md](docs/release-checklist.md)，并跑
   `powershell -File scripts/verify-release-artifacts.ps1 <产物...>`；它会检查签名状态、调用 Defender 扫描、输出 SHA-256，
   检出威胁或扫描失败时退出码为 1，不能跳过。
