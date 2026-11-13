@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Pin, Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
+import { Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
 import { PetSkillsSettings } from "./PetSkillsSettings";
@@ -100,8 +100,6 @@ function loadMessages(): ChatMessage[] {
 
 export function PetChat() {
   const t = useTranslation();
-  // 固定在桌面的窗口里就不再显示「固定到桌面」，避免套娃。
-  const inPinnedWindow = new URLSearchParams(window.location.search).get("window") === "pinned";
   const character = usePetCharacter();
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages);
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -556,19 +554,7 @@ export function PetChat() {
           </div>
         </div>
         <div className="pet-chat__header-actions">
-          {!inPinnedWindow && (
-            <button
-              className="pet-chat__pin"
-              type="button"
-              title="把聊天固定在桌面上，随时能看"
-              onClick={() => {
-                void invoke("pin_page_to_desktop", { page: "chat" }).catch(() => undefined);
-              }}
-            >
-              <Pin size={13} strokeWidth={1.9} />
-              固定到桌面
-            </button>
-          )}
+
           <button
             className={`pet-chat__model-toggle${agentEnabled ? " is-active" : ""}`}
             type="button"

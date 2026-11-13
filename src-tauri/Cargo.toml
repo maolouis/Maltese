@@ -1,8 +1,8 @@
 [package]
 name = "maltese-assistant"
-version = "0.2.2"
+version = "0.2.3"
 description = "A line-dog desktop assistant for Windows."
-authors = ["you"]
+authors = ["maolouis"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
