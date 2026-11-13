@@ -1,7 +1,7 @@
 import { petAssetUrl } from "./petAssetBase";
 
 // 线条小狗 GIF 素材清单与随机选取逻辑。
-// 素材来源：LineDogPet（小白角色），已复制到 public/assets/pets/<state>/<n>.gif。
+// 素材来源：LineDogPet（小白角色），已复制到 assets/pets/<state>/<n>.gif。
 // 每个状态的第 0 项是既有的根级 GIF（作为默认/兜底），其余为随机变体。
 
 export type PetVisualState =

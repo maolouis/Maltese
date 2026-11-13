@@ -1375,8 +1375,20 @@ struct PathCheckResult {
 #[tauri::command]
 fn get_pet_asset_base(app: AppHandle) -> String {
     use tauri::Manager;
+    // 不同安装方式下素材落点不一样（NSIS 会放到 resources/，绿色版可能直接跟在 exe 旁边），
+    // 这里按可能性依次探测，避免「升级后小狗变空白」。
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(dir) = app.path().resource_dir() {
-        let pets = dir.join("assets").join("pets");
+        candidates.push(dir.join("assets").join("pets"));
+        candidates.push(dir.join("resources").join("assets").join("pets"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("assets").join("pets"));
+            candidates.push(dir.join("resources").join("assets").join("pets"));
+        }
+    }
+    for pets in candidates {
         if pets.exists() {
             return pets.display().to_string();
         }

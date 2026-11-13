@@ -4,10 +4,10 @@ Maltese 现在支持 LineDogPet 的两只小狗形象，并把「两只同框」
 
 ## 素材来源
 
-从 `E:\LineDogPet\LineDogPetv2.8.3\pets` 复制到 `public/assets/pets/chars/`：
+从 `E:\LineDogPet\LineDogPetv2.8.3\pets` 复制到 `assets/pets/chars/`：
 
 ```
-public/assets/pets/chars/
+assets/pets/chars/
 ├── xiaobai/    小白，20 个动作、254 张 GIF
 ├── xiaojimao/  小鸡毛，18 个动作、151 张 GIF
 └── shared/     两只小狗同框，14 个动作、90 张 GIF（不是可选角色）
@@ -60,7 +60,7 @@ node scripts/build-pet-manifest.mjs
 主狗多久没动静自动趴下、缩到屏幕边缘、手动点「让小狗睡觉」时，都会单独播这一张「趴睡」帧。
 
 - 默认跟随当前形象：取该角色 `sleeping` 动作的第一张（小白是小白的睡觉动画，小鸡毛是小鸡毛的）。
-  早期版本固定播 `public/assets/pets/rest.gif`，那是金黄色的小鸡毛，选小白也会变成小鸡毛，已修掉。
+  早期版本固定播 `assets/pets/rest.gif`，那是金黄色的小鸡毛，选小白也会变成小鸡毛，已修掉。
 - 设置页「趴下睡觉的 GIF」（紧挨着「多久没动静就趴下睡」）可以换成自己的 GIF：文件存到应用数据目录的
   `pet-gifs/tuck/`，路径记在 `localStorage` 的 `maltese-tuck-gif`；「恢复默认」清掉这个键即可。
 - 岛内设置和独立设置窗口共用同一个控件（`src/TuckGifControl.tsx`）。

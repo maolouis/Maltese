@@ -1,4 +1,4 @@
-// 扫描 public/assets/pets/chars/<角色>/<动作>/*.gif，生成前端可直接引用的素材清单。
+// 扫描 assets/pets/chars/<角色>/<动作>/*.gif，生成前端可直接引用的素材清单。
 //
 // 用法：node scripts/build-pet-manifest.mjs
 // 素材来源：LineDogPet 的 pets/xiaobai、pets/xiaojimao、pets/shared 三个目录，
@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const root = path.resolve('public/assets/pets/chars');
+const root = path.resolve('assets/pets/chars');
 const out = path.resolve('src/petCharacterAssets.generated.ts');
 const characters = ['xiaobai', 'xiaojimao', 'shared'];
 
