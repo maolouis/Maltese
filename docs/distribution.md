@@ -129,14 +129,14 @@ API 侧同理：`curl --resolve api.github.com:443:20.205.243.168 …`。
 `20.200.245.247`、`140.82.112.3`、`4.237.22.38` 也可作为备用地址。
 ## 8. 自定义安装目录（本机示例：`E:\Maltese2`）
 
-默认安装目录是 `%LOCALAPPDATA%\Maltese 线条小狗桌面助手`。想换盘可以整个目录搬走，再把这几处指过去：
+默认安装目录是 `%LOCALAPPDATA%\Maltese`。想换盘可以整个目录搬走，再把这几处指过去：
 
 | 位置 | 键 / 文件 | 改成 |
 | --- | --- | --- |
-| 卸载项 | `HKCU\...\Uninstall\Maltese 线条小狗桌面助手` 的 `InstallLocation` / `DisplayIcon` / `UninstallString` | 新目录 |
+| 卸载项 | `HKCU\...\Uninstall\Maltese` 的 `InstallLocation` / `DisplayIcon` / `UninstallString` | 新目录 |
 | 自启动 | `HKCU\...\CurrentVersion\Run` 的 `Maltese Desktop Assistant` | 新 exe 路径 |
-| 开始菜单 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Maltese 线条小狗桌面助手.lnk` | 新 exe 路径 |
-| 桌面快捷方式 | `%USERPROFILE%\Desktop\Maltese 线条小狗桌面助手.lnk` | 新 exe 路径 |
+| 开始菜单 | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Maltese.lnk` | 新 exe 路径 |
+| 桌面快捷方式 | `%USERPROFILE%\Desktop\Maltese.lnk` | 新 exe 路径 |
 
 注意两点：
 
