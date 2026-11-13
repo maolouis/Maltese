@@ -7,6 +7,7 @@
     "translation",
     "bubble",
     "settings",
+    "plugin",
     "companion-1",
     "companion-2",
     "companion-3",
@@ -18,6 +19,7 @@
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
+    "core:window:allow-hide",
     "opener:default",
     "updater:default"
   ]

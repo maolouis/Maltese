@@ -14,6 +14,7 @@ mod messenger_activation;
 mod notification_diagnostics;
 mod pet_gifs;
 mod plugins;
+mod relay;
 mod qq_notifications;
 mod qq_mail;
 mod wechat_reminder_source;
@@ -4023,6 +4024,10 @@ pub fn run() {
             plugins::remove_plugin,
             plugins::open_plugins_directory,
             plugins::run_plugin_action,
+            plugins::open_plugin_window,
+            plugins::get_active_plugin,
+            relay::relay_publish,
+            relay::relay_fetch,
             pet_gifs::add_pet_gif,
             custom_sound::add_custom_sound,
             custom_sound::remove_custom_sound,

@@ -377,6 +377,7 @@ const zhCN: Translations = {
     title: "插件中心",
     subtitle: "内置功能与第三方插件放在一起管理；插件以当前用户权限运行，请只安装可信来源。",
     builtin: "内置插件",
+    open: "打开",
     installPlaceholder: "插件文件夹路径（根目录含 plugin.json；zip 请先解压）",
     install: "安装插件",
     openDirectory: "打开插件目录",

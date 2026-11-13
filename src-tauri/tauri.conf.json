@@ -158,6 +158,18 @@
         "shadow": false
       },
       {
+        "label": "plugin",
+        "title": "Maltese · 插件",
+        "url": "index.html?window=plugin",
+        "width": 720,
+        "height": 640,
+        "minWidth": 520,
+        "minHeight": 420,
+        "resizable": true,
+        "visible": false,
+        "shadow": true
+      },
+      {
         "label": "billiards",
         "title": "和小狗打台球",
         "url": "index.html?window=billiards",
@@ -194,6 +206,7 @@
         "enable": true,
         "scope": [
           "$APPDATA/pet-gifs/**",
+          "$APPDATA/plugins/**",
           "$RESOURCE/**"
         ]
       }
@@ -230,7 +243,10 @@
         "compression": "lzma"
       }
     },
-    "resources": { "../assets/pets": "assets/pets" },
+    "resources": {
+      "../assets/pets": "assets/pets",
+      "../examples/plugins": "plugins"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

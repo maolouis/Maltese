@@ -2,9 +2,10 @@
   "id": "hello-world",
   "name": "Hello World",
   "version": "0.1.0",
-  "description": "Maltese 最小插件示例：点击按钮弹出一个问候窗口。",
+  "description": "Maltese 最小插件示例：自带一个页面，也能用 PowerShell 弹问候窗口。",
   "author": "Maltese",
   "homepage": "https://github.com/maolouis/Maltese",
+  "ui": "index.html",
   "actions": [
     {
       "id": "say-hello",

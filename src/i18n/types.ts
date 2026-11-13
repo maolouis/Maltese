@@ -355,6 +355,7 @@ export type Translations = {
     title: string;
     subtitle: string;
     builtin: string;
+    open: string;
     installPlaceholder: string;
     install: string;
     openDirectory: string;

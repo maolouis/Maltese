@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CircleHelp } from "lucide-react";
 import { useTranslation } from "./i18n";
 import "./PluginsPanel.css";
 
@@ -21,7 +20,9 @@ type PluginInfo = {
   author: string;
   homepage: string;
   builtin: boolean;
+  locked: boolean;
   path: string | null;
+  ui: string | null;
   actions: PluginAction[];
 };
 
@@ -32,6 +33,7 @@ type PluginList = {
 };
 
 const DISABLED_PLUGINS_KEY = "maltese-disabled-plugins";
+const BILLIARDS_PLUGIN_ID = "billiards";
 
 function loadDisabledPlugins(): string[] {
   try {
@@ -54,11 +56,7 @@ function saveDisabledPlugins(ids: string[]) {
   }
 }
 
-type PluginsPanelProps = {
-  onOpenBuiltin?: (id: string) => void;
-};
-
-export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
+export function PluginsPanel() {
   const t = useTranslation();
   const [snapshot, setSnapshot] = useState<PluginList | null>(null);
   const [installPath, setInstallPath] = useState("");
@@ -85,13 +83,27 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
     void refresh();
   }, [refresh]);
 
-  // 台球要读桌面图标位置：图标被隐藏时先提示，别让用户点了没反应。
   useEffect(() => {
     if (!isTauri()) return;
     void invoke<boolean>("desktop_icons_available")
       .then(setIconsAvailable)
       .catch(() => setIconsAvailable(null));
   }, []);
+
+  useEffect(() => {
+    if (!removeArmed) return;
+    const timer = window.setTimeout(() => setRemoveArmed(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [removeArmed]);
+
+  const openPlugin = async (plugin: PluginInfo) => {
+    setNotice("");
+    try {
+      await invoke("open_plugin_window", { id: plugin.id });
+    } catch (error) {
+      setNotice(`打开失败：${String(error)}`);
+    }
+  };
 
   const openBilliards = async () => {
     setBilliardsNotice("");
@@ -101,12 +113,6 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
       setBilliardsNotice("打开台球失败：" + String(error));
     }
   };
-
-  useEffect(() => {
-    if (!removeArmed) return;
-    const timer = window.setTimeout(() => setRemoveArmed(""), 4000);
-    return () => window.clearTimeout(timer);
-  }, [removeArmed]);
 
   const install = async () => {
     const source = installPath.trim();
@@ -172,16 +178,21 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
     }
   };
 
+  const showHelp = (plugin: PluginInfo, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    const width = 320;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const top = Math.min(rect.bottom + 8, window.innerHeight - 240);
+    setHelp({ plugin, left, top });
+  };
+
   const plugins = snapshot?.plugins ?? [];
   const external = plugins.filter((plugin) => !plugin.builtin);
 
   return (
     <section className="plugins-panel" aria-label={t.plugins.title}>
       <div className="plugins-panel__head">
-        <div>
-          <span className="assistant-panel__label">{t.plugins.title}</span>
-          <small>{t.plugins.subtitle}</small>
-        </div>
+        <h2 className="plugins-panel__title">{t.plugins.title}</h2>
         <div className="plugins-panel__head-actions">
           <button type="button" onClick={() => void invoke("open_plugins_directory").catch((error) => setNotice(String(error)))}>
             {t.plugins.openDirectory}
@@ -191,34 +202,6 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
           </button>
         </div>
       </div>
-
-      <article className="plugin-card plugin-card--builtin plugin-billiards">
-        <div className="plugin-card__head">
-          <div className="plugin-card__title">
-            <strong className="plugin-billiards__title">桌面图标台球</strong>
-            <span className="plugin-card__badge">{t.plugins.builtin}</span>
-          </div>
-          <div className="plugin-card__head-actions">
-            <button type="button" onClick={() => void openBilliards()}>
-              和小狗开一局
-            </button>
-          </div>
-        </div>
-        <p className="plugin-billiards__desc">
-          把桌面图标当成台球：按住左键拉杆蓄力，松手击球，小狗会在旁边帮你加油。桌面图标保持原样，退出即恢复。
-        </p>
-        <p className="plugin-billiards__credit">
-          玩法参考开源项目{" "}
-          <a href="https://github.com/liuxiaogang-com/desktop-icon-billiards" target="_blank" rel="noreferrer">
-            desktop-icon-billiards
-          </a>{" "}
-          · 作者 GitHub@liuxiaogang-com（MIT）
-        </p>
-        {iconsAvailable === false && (
-          <p className="plugin-billiards__warn">桌面图标当前是隐藏的，先在设置里把它们显示出来再玩。</p>
-        )}
-        {billiardsNotice && <p className="plugin-billiards__warn">{billiardsNotice}</p>}
-      </article>
 
       <div className="plugins-panel__install">
         <input
@@ -235,121 +218,125 @@ export function PluginsPanel({ onOpenBuiltin }: PluginsPanelProps) {
         </button>
       </div>
 
-      {snapshot?.directory && (
-        <p className="plugins-panel__directory" title={snapshot.directory}>
-          {snapshot.directory}
-        </p>
-      )}
       {notice && <p className="plugins-panel__notice" role="status">{notice}</p>}
       {snapshot?.errors.map((error) => (
         <p className="plugins-panel__notice plugins-panel__notice--warn" key={error}>{error}</p>
       ))}
 
       <div className="plugins-panel__list">
+        <article
+          className="plugin-card"
+          onMouseEnter={(event) => showHelp(
+            {
+              id: BILLIARDS_PLUGIN_ID,
+              name: "桌面图标台球",
+              version: "",
+              description: "把桌面图标当成台球：按住左键拉杆蓄力，松手击球，小狗在旁边帮你加油。图标保持原样，退出即恢复。",
+              author: "GitHub@liuxiaogang-com（MIT）",
+              homepage: "https://github.com/liuxiaogang-com/desktop-icon-billiards",
+              builtin: true,
+              locked: true,
+              path: null,
+              ui: null,
+              actions: [],
+            },
+            event.currentTarget,
+          )}
+          onMouseLeave={() => setHelp(null)}
+        >
+          <div className="plugin-card__main">
+            <strong className="plugin-card__name">桌面图标台球</strong>
+            <span className="plugin-card__badge">{t.plugins.builtin}</span>
+            {iconsAvailable === false && <span className="plugin-card__badge plugin-card__badge--warn">图标已隐藏</span>}
+          </div>
+          <div className="plugin-card__actions">
+            <button type="button" className="plugin-card__primary" onClick={() => void openBilliards()}>
+              开一局
+            </button>
+          </div>
+        </article>
+
         {plugins.map((plugin) => {
           const isDisabled = !plugin.builtin && disabled.includes(plugin.id);
+          const canManage = !plugin.builtin && !plugin.locked;
           return (
             <article
-              className={`plugin-card${plugin.builtin ? " plugin-card--builtin" : ""}${isDisabled ? " plugin-card--disabled" : ""}`}
+              className={`plugin-card${isDisabled ? " plugin-card--disabled" : ""}`}
               key={plugin.id}
-              onMouseEnter={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const width = 282;
-                const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-                const top = Math.min(rect.bottom + 7, window.innerHeight - 250);
-                setHelp({ plugin, left, top });
-              }}
+              onMouseEnter={(event) => showHelp(plugin, event.currentTarget)}
               onMouseLeave={() => setHelp(null)}
             >
-              <div className="plugin-card__head">
-                <div className="plugin-card__title">
-                  <strong>{plugin.name}</strong>
-                  <span className="plugin-card__badge">
-                    {plugin.builtin ? t.plugins.builtin : `v${plugin.version || "0.0.0"}`}
-                  </span>
-                  {isDisabled && <span className="plugin-card__badge plugin-card__badge--muted">{t.plugins.disabled}</span>}
-                </div>
-                <div className="plugin-card__head-actions">
-                  {plugin.builtin ? (
-                    <button type="button" onClick={() => onOpenBuiltin?.(plugin.id)}>
-                      {t.plugins.openVideo}
-                    </button>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => toggle(plugin)}>
-                        {isDisabled ? t.plugins.enable : t.plugins.disable}
-                      </button>
-                      <button
-                        type="button"
-                        className={removeArmed === plugin.id ? "plugin-card__danger plugin-card__danger--armed" : "plugin-card__danger"}
-                        onClick={() => void remove(plugin)}
-                      >
-                        {removeArmed === plugin.id ? t.plugins.removeConfirm : t.plugins.remove}
-                      </button>
-                    </>
-                  )}
-                </div>
+              <div className="plugin-card__main">
+                <strong className="plugin-card__name">{plugin.name}</strong>
+                <span className="plugin-card__badge">
+                  {plugin.builtin ? t.plugins.builtin : plugin.locked ? "预置" : `v${plugin.version || "0.0.0"}`}
+                </span>
+                {isDisabled && <span className="plugin-card__badge plugin-card__badge--muted">{t.plugins.disabled}</span>}
               </div>
-              {plugin.actions.length > 0 ? (
-                <div className="plugin-card__actions" aria-label={t.plugins.actions}>
-                  {plugin.actions.map((action) => (
-                    <button
-                      type="button"
-                      key={action.id}
-                      title={action.description || action.command}
-                      disabled={isDisabled || Boolean(busyAction)}
-                      onClick={() => void run(plugin, action)}
-                    >
-                      {busyAction === `${plugin.id}:${action.id}` ? t.plugins.running : action.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                !plugin.builtin && <span className="plugin-card__hint">{t.plugins.noActions}</span>
-              )}
-              <span className="plugin-card__help-hint">
-                <CircleHelp size={11} aria-hidden="true" />
-                {t.plugins.helpHover}
-              </span>
+              <div className="plugin-card__actions">
+                <button type="button" className="plugin-card__primary" onClick={() => void openPlugin(plugin)}>
+                  {t.plugins.open}
+                </button>
+                {plugin.actions.map((action) => (
+                  <button
+                    type="button"
+                    key={action.id}
+                    title={action.description || action.command}
+                    disabled={isDisabled || Boolean(busyAction)}
+                    onClick={() => void run(plugin, action)}
+                  >
+                    {busyAction === `${plugin.id}:${action.id}` ? t.plugins.running : action.label}
+                  </button>
+                ))}
+                {canManage && (
+                  <button type="button" onClick={() => toggle(plugin)}>
+                    {isDisabled ? t.plugins.enable : t.plugins.disable}
+                  </button>
+                )}
+                {canManage && (
+                  <button
+                    type="button"
+                    className={removeArmed === plugin.id ? "plugin-card__danger plugin-card__danger--armed" : "plugin-card__danger"}
+                    onClick={() => void remove(plugin)}
+                  >
+                    {removeArmed === plugin.id ? t.plugins.removeConfirm : t.plugins.remove}
+                  </button>
+                )}
+              </div>
             </article>
           );
         })}
         {external.length === 0 && (
           <div className="plugins-panel__empty">
             <strong>{t.plugins.empty}</strong>
-            <small>{t.plugins.emptyHint}</small>
           </div>
         )}
       </div>
-      <p className="plugins-panel__security">⚠ {t.plugins.security}</p>
+
+      {billiardsNotice && <p className="plugins-panel__notice plugins-panel__notice--warn">{billiardsNotice}</p>}
+
       {help && createPortal(
-        <aside
-          className="plugin-help-window"
-          style={{ left: help.left, top: help.top }}
-          role="tooltip"
-        >
+        <aside className="plugin-help-window" style={{ left: help.left, top: help.top }} role="tooltip">
           <header className="plugin-help-window__head">
             <strong>{help.plugin.name}</strong>
             <span>{help.plugin.builtin ? t.plugins.builtin : `v${help.plugin.version || "0.0.0"}`}</span>
           </header>
-          <p className="plugin-help-window__description">
-            {help.plugin.description || t.plugins.noActions}
-          </p>
+          <p className="plugin-help-window__description">{help.plugin.description}</p>
           {help.plugin.actions.length > 0 && (
             <div className="plugin-help-window__actions">
               {help.plugin.actions.map((action) => (
                 <div key={action.id}>
                   <strong>{action.label}</strong>
                   {action.description && <p>{action.description}</p>}
-                  {action.command && <code>{action.command}</code>}
                 </div>
               ))}
             </div>
           )}
           <footer className="plugin-help-window__meta">
             {help.plugin.author && <span>{t.plugins.by} {help.plugin.author}</span>}
-            {help.plugin.path && <span title={help.plugin.path}>{help.plugin.path}</span>}
+            {help.plugin.path && <span className="plugin-help-window__path">{help.plugin.path}</span>}
           </footer>
+          <p className="plugin-help-window__security">⚠ {t.plugins.security}</p>
         </aside>,
         document.body,
       )}

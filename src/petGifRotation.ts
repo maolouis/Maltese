@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PET_GIF_VARIANTS } from "./petAssets";
+import { builtinAssetRelative, PET_ASSET_PREFIX, petAssetUrl } from "./petAssetBase";
 import {
+  characterFramePaths,
   characterFramesForState,
   loadPetCharacter,
   type PetCharacterId,
@@ -66,7 +68,8 @@ export function defaultPetGifItems(
   state: string,
   character: PetCharacterId = "xiaobai",
 ): PetGifRotationItem[] {
-  const frames = characterFramesForState(character, state);
+  // 存原始路径而不是已经转换好的 asset URL：装到哪个目录都能重新解析。
+  const frames = characterFramePaths(character, state);
   return frames.map((src) => ({
     id: src,
     src,
@@ -91,6 +94,18 @@ function normalizeItem(value: unknown): PetGifRotationItem | null {
   const src = typeof item.src === "string" && item.src ? item.src : undefined;
   const path = typeof item.path === "string" && item.path ? item.path : undefined;
   if (!src && !path) return null;
+  // 历史数据里内置素材是用 path 记的（甚至是旧版存下的 asset.localhost 绝对地址），
+  // 统一还原成 `/assets/pets/...` 原始路径，否则外置之后一律 404。
+  const builtinRelative = builtinAssetRelative(path ?? src ?? "");
+  if (builtinRelative !== null) {
+    const canonical = `${PET_ASSET_PREFIX}${builtinRelative}`;
+    return {
+      id: canonical,
+      src: canonical,
+      name: petGifFileName(canonical),
+      custom: false,
+    };
+  }
   return {
     id:
       typeof item.id === "string" && item.id
@@ -200,14 +215,21 @@ export function usePetGifRotationStates(): string[] {
 }
 
 export function petGifItemSrc(item: PetGifRotationItem): string {
+  // 内置素材（含历史数据里的原始路径 / 旧 asset URL）走资源目录解析；
+  // 只有用户自选的外置文件才用 convertFileSrc。
+  if (item.src) {
+    const resolved = petAssetUrl(item.src);
+    if (resolved) return resolved;
+  }
   if (item.path) {
+    if (builtinAssetRelative(item.path) !== null) return petAssetUrl(item.path);
     try {
       return convertFileSrc(item.path);
     } catch {
       return item.path;
     }
   }
-  return item.src ?? "";
+  return "";
 }
 
 export function rotationFramesForState(

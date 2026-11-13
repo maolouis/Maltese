@@ -1,3 +1,4 @@
+/* 插件中心：卡片只留名字 + 按钮，说明一律进悬停气泡；正文 13px 起，不再用 8-9px 小字。 */
 .plugins-page {
   display: flex;
   flex-direction: column;
@@ -12,7 +13,7 @@
   border: 1px solid rgba(255, 216, 170, 0.3);
   border-radius: 12px;
   background: rgba(255, 216, 170, 0.07);
-  padding: 9px;
+  padding: 10px;
 }
 
 .plugin-video-card__head {
@@ -22,75 +23,60 @@
   gap: 8px;
 }
 
-.plugin-video-card__head > div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .plugin-video-card__head strong {
-  font-size: 12px;
-}
-
-.plugin-video-card__head small {
-  max-width: 50%;
-  color: rgba(255, 255, 255, 0.46);
-  font-size: 9px;
-  line-height: 1.4;
-  text-align: right;
+  font-size: 14px;
 }
 
 .plugins-panel {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 10px;
   min-height: 0;
 }
 
 .plugins-panel__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.plugins-panel__head > div:first-child {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.plugins-panel__head small {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 9px;
-  line-height: 1.45;
+.plugins-panel__title {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .plugins-panel__head-actions {
   display: flex;
   flex: none;
-  gap: 5px;
+  gap: 6px;
 }
 
 .plugins-panel__head-actions button,
 .plugins-panel__install button,
 .plugin-card button {
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
   font: inherit;
-  font-size: 9px;
-  padding: 4px 7px;
+  font-size: 13px;
+  padding: 6px 11px;
   cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
 .plugins-panel__head-actions button:hover,
 .plugins-panel__install button:hover,
 .plugin-card button:hover {
-  border-color: rgba(255, 216, 170, 0.5);
-  background: rgba(255, 216, 170, 0.16);
+  border-color: rgba(255, 216, 170, 0.7);
+  background: rgba(255, 216, 170, 0.22);
+  transform: translateY(-1px);
 }
 
 .plugins-panel__head-actions button:disabled,
@@ -98,58 +84,50 @@
 .plugin-card button:disabled {
   opacity: 0.45;
   cursor: default;
+  transform: none;
 }
 
 .plugins-panel__install {
   display: flex;
-  gap: 6px;
+  gap: 7px;
 }
 
 .plugins-panel__install input {
   min-width: 0;
   flex: 1;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.95);
   font: inherit;
-  font-size: 9px;
-  padding: 5px 7px;
+  font-size: 13px;
+  padding: 7px 10px;
   outline: none;
 }
 
 .plugins-panel__install input:focus {
-  border-color: rgba(255, 216, 170, 0.6);
-}
-
-.plugins-panel__directory {
-  overflow: hidden;
-  margin: 0;
-  color: rgba(255, 255, 255, 0.36);
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border-color: rgba(255, 216, 170, 0.7);
 }
 
 .plugins-panel__notice {
   margin: 0;
-  border-radius: 8px;
-  background: rgba(255, 216, 170, 0.14);
-  color: #ffe2c2;
-  font-size: 9px;
-  line-height: 1.45;
-  padding: 5px 7px;
+  border-radius: 9px;
+  background: rgba(255, 216, 170, 0.16);
+  color: #ffe6cb;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 7px 10px;
 }
 
 .plugins-panel__notice--warn {
-  background: rgba(255, 120, 120, 0.14);
-  color: #ffc2c2;
+  background: rgba(255, 120, 120, 0.18);
+  color: #ffcbcb;
 }
 
 .plugins-panel__list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
@@ -158,39 +136,111 @@
 .plugin-card {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.055);
-  padding: 8px;
-}
-
-.plugin-card__help-hint {
-  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  color: rgba(255, 255, 255, 0.34);
-  font-size: 8px;
-  line-height: 1.3;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 12px 14px;
 }
 
+.plugin-card--builtin {
+  border-color: rgba(255, 216, 170, 0.4);
+  background: rgba(255, 216, 170, 0.1);
+}
+
+.plugin-card--disabled {
+  opacity: 0.55;
+}
+
+.plugin-card__main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-card__name {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 16px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-card__badge {
+  flex: none;
+  border-radius: 6px;
+  background: rgba(255, 216, 170, 0.24);
+  color: #ffe0c2;
+  font-size: 12px;
+  padding: 2px 7px;
+}
+
+.plugin-card__badge--muted {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.plugin-card__badge--warn {
+  background: rgba(253, 224, 71, 0.24);
+  color: #fff3b0;
+}
+
+.plugin-card__actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.plugin-card__primary {
+  border-color: rgba(45, 212, 191, 0.7) !important;
+  background: rgba(45, 212, 191, 0.22) !important;
+  color: #d7fff8 !important;
+  font-weight: 700 !important;
+}
+
+.plugin-card__primary:hover {
+  background: rgba(45, 212, 191, 0.36) !important;
+  color: #ffffff !important;
+}
+
+.plugin-card__danger--armed {
+  border-color: rgba(255, 120, 120, 0.8) !important;
+  background: rgba(255, 120, 120, 0.24) !important;
+  color: #ffd6d6 !important;
+}
+
+.plugins-panel__empty {
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 11px;
+  padding: 14px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+}
+
+/* ---------- 悬停气泡：所有说明文字都在这里，14px / 高对比 ---------- */
 .plugin-help-window {
   position: fixed;
   z-index: 80;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  width: 282px;
-  max-height: 242px;
+  gap: 9px;
+  width: 320px;
+  max-height: 320px;
   overflow-y: auto;
   box-sizing: border-box;
-  padding: 10px 11px;
-  border: 1px solid #eadfce;
-  border-radius: 12px;
-  background: #fffdf9;
-  color: #333944;
-  box-shadow: 0 10px 28px rgba(31, 27, 22, 0.18);
+  padding: 13px 15px;
+  border: 1px solid #d7e4d6;
+  border-radius: 14px;
+  background: #fdfefb;
+  color: #1d332c;
+  box-shadow: 0 14px 34px rgba(25, 42, 35, 0.22);
   pointer-events: none;
   scrollbar-width: thin;
 }
@@ -204,232 +254,85 @@
 
 .plugin-help-window__head strong {
   overflow: hidden;
-  font-size: 11.5px;
+  color: #14352a;
+  font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .plugin-help-window__head span {
   flex: none;
-  border-radius: 5px;
-  background: #fff0dc;
-  color: #a65f1d;
-  font-size: 8px;
-  padding: 1px 4px;
+  border-radius: 6px;
+  background: #eef6ec;
+  border: 1px solid #d2e6cf;
+  color: #2b5c3c;
+  font-size: 13px;
+  padding: 2px 7px;
 }
 
 .plugin-help-window__description {
   margin: 0;
-  color: #626a77;
-  font-size: 9.5px;
-  line-height: 1.5;
+  color: #2b463c;
+  font-size: 14px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
 .plugin-help-window__actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 6px;
-  border-top: 1px solid #f0ebe3;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid #e7ede5;
 }
 
 .plugin-help-window__actions > div {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .plugin-help-window__actions strong {
-  color: #4c5360;
-  font-size: 9.5px;
+  color: #1d3b30;
+  font-size: 14px;
 }
 
 .plugin-help-window__actions p {
   margin: 0;
-  color: #8a909c;
-  font-size: 9px;
-  line-height: 1.4;
-}
-
-.plugin-help-window__actions code {
-  overflow: hidden;
-  color: #a6acb8;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #48635a;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .plugin-help-window__meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding-top: 6px;
-  border-top: 1px solid #f0ebe3;
-  color: #9aa0ad;
-  font-size: 8px;
+  gap: 3px;
+  padding-top: 9px;
+  border-top: 1px solid #e7ede5;
+  color: #4c655c;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
-.plugin-card--builtin {
-  border-color: rgba(255, 216, 170, 0.34);
-  background: rgba(255, 216, 170, 0.08);
+.plugin-help-window__path {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
-.plugin-card--disabled {
-  opacity: 0.55;
-}
-
-.plugin-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.plugin-card__title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-}
-
-.plugin-card__title strong {
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plugin-card__badge {
-  flex: none;
-  border-radius: 5px;
-  background: rgba(255, 216, 170, 0.2);
-  color: #ffd8b4;
-  font-size: 8px;
-  padding: 1px 4px;
-}
-
-.plugin-card__badge--muted {
-  background: rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.plugin-card__head-actions {
-  display: flex;
-  flex: none;
-  gap: 4px;
-}
-
-.plugin-card__danger--armed {
-  border-color: rgba(255, 120, 120, 0.7) !important;
-  background: rgba(255, 120, 120, 0.2) !important;
-  color: #ffd0d0 !important;
-}
-
-.plugin-card__description {
+.plugin-help-window__security {
   margin: 0;
-  color: rgba(255, 255, 255, 0.62);
-  font-size: 9px;
+  padding-top: 9px;
+  border-top: 1px solid #e7ede5;
+  color: #7a4a1c;
+  font-size: 13px;
   line-height: 1.5;
 }
 
-.plugin-card__meta {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-  color: rgba(255, 255, 255, 0.36);
-  font-size: 8px;
-}
-
-.plugin-card__meta span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plugin-card__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.plugin-card__hint {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.42);
-  font-size: 9px;
-}
-
-.plugins-panel__empty {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border: 1px dashed rgba(255, 255, 255, 0.16);
-  border-radius: 10px;
-  padding: 10px;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 9px;
-}
-
-.plugins-panel__empty strong {
-  font-size: 10px;
-}
-
-.plugins-panel__empty small {
-  color: rgba(255, 255, 255, 0.4);
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.plugins-panel__security {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.34);
-  font-size: 8px;
-  line-height: 1.45;
-}
-
-/* 展开后的白色面板 */
-.island__expanded .plugin-video-card {
-  border-color: #f0c994;
-  background: #fff8ef;
-}
-
-.island__expanded .plugin-video-card__head small {
-  color: #8a909c;
-}
-
-.island__expanded .plugin-card__help-hint {
-  color: #9aa0ad;
-}
-
-.island__expanded .plugins-panel__head small,
-.island__expanded .plugins-panel__directory,
-.island__expanded .plugin-card__description,
-.island__expanded .plugin-card__meta,
-.island__expanded .plugin-card__hint,
-.island__expanded .plugins-panel__security,
-.island__expanded .plugins-panel__empty small {
-  color: #8a909c;
-}
-
-.island__expanded .plugins-panel__head-actions button,
-.island__expanded .plugins-panel__install button,
-.island__expanded .plugin-card button {
-  border-color: #e1e4eb;
-  background: #eef0f5;
-  color: #5f6673;
-}
-
-.island__expanded .plugins-panel__install input {
-  border-color: #e1e4eb;
-  background: #fff;
-  color: #2f333b;
-}
-
+/* ---------- 展开后的浅色面板：同一套排版，换成浅底深字 ---------- */
+.island__expanded .plugin-video-card,
 .island__expanded .plugin-card {
-  border-color: #e6e8ee;
-  background: #fff;
+  border-color: #e2e7e0;
+  background: #ffffff;
 }
 
 .island__expanded .plugin-card--builtin {
@@ -437,8 +340,24 @@
   background: #fff8ef;
 }
 
-.island__expanded .plugin-card__title strong {
-  color: #2f333b;
+.island__expanded .plugins-panel__title,
+.island__expanded .plugin-card__name,
+.island__expanded .plugin-video-card__head strong {
+  color: #1b3a2f;
+}
+
+.island__expanded .plugins-panel__head-actions button,
+.island__expanded .plugins-panel__install button,
+.island__expanded .plugin-card button {
+  border-color: #d5e0d4;
+  background: #f2f7f1;
+  color: #24493a;
+}
+
+.island__expanded .plugins-panel__install input {
+  border-color: #d5e0d4;
+  background: #ffffff;
+  color: #1b3a2f;
 }
 
 .island__expanded .plugin-card__badge {
@@ -446,98 +365,23 @@
   color: #9a5b1b;
 }
 
-.island__expanded .plugins-panel__empty {
-  border-color: #e1e4eb;
-  color: #6f7480;
+.island__expanded .plugin-card__badge--muted {
+  background: #eef1ee;
+  color: #5a6d63;
+}
+
+.island__expanded .plugin-card__primary {
+  border-color: #8ed3a0 !important;
+  background: #eaf8ee !important;
+  color: #1c5b34 !important;
 }
 
 .island__expanded .plugins-panel__notice {
   background: #fff3e5;
-  color: #8a541c;
-}
-/* ---------- 内置插件：桌面图标台球 ---------- */
-.plugin-billiards {
-  margin: 8px 0 10px;
-  border-color: rgba(45, 212, 191, 0.35);
+  color: #7a4a1c;
 }
 
-.plugin-billiards:hover {
-  border-color: rgba(45, 212, 191, 0.6);
-}
-
-.plugin-billiards__desc {
-  margin: 8px 0 6px;
-  color: rgba(255, 255, 255, 0.86);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.plugin-billiards__credit {
-  margin: 0 0 4px;
-  color: rgba(203, 213, 225, 0.75);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-.plugin-billiards__credit a {
-  color: rgba(147, 197, 253, 0.98);
-  font-weight: 600;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.plugin-billiards__credit a:hover {
-  text-decoration: underline;
-}
-
-.plugin-billiards__warn {
-  margin: 4px 0 0;
-  color: rgba(253, 224, 71, 0.95);
-  font-size: 12px;
-}
-/* 插件卡片按钮：不靠小字，靠悬停变色 + 轻微上浮表达可点 */
-.plugin-card__head-actions button,
-.plugin-card__actions button {
-  transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease,
-    transform 140ms ease;
-}
-
-.plugin-card__head-actions button:hover,
-.plugin-card__actions button:hover {
-  background: rgba(45, 212, 191, 0.22);
-  border-color: rgba(45, 212, 191, 0.7);
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-.plugin-card__head-actions button:active,
-.plugin-card__actions button:active {
-  transform: translateY(0) scale(0.97);
-}
-
-.plugin-billiards .plugin-card__head-actions button {
-  font-size: 13px;
-  padding: 5px 12px;
-}
-.plugin-billiards__title {
-  font-size: 15px;
-  letter-spacing: 0.01em;
-}
-
-/* 主按钮：实心底 + 悬停提亮，比小字更容易发现 */
-.plugin-billiards__cta {
-  font-size: 13px !important;
-  font-weight: 700;
-  padding: 6px 14px !important;
-  border-color: rgba(45, 212, 191, 0.65) !important;
-  background: rgba(45, 212, 191, 0.18) !important;
-  color: #ccfbf1 !important;
-}
-
-.plugin-billiards__cta:hover {
-  background: rgba(45, 212, 191, 0.34) !important;
-  color: #ffffff !important;
+.island__expanded .plugins-panel__empty {
+  border-color: #dfe6dd;
+  color: #46604f;
 }

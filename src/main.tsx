@@ -9,6 +9,7 @@ import CursorPet from "./CursorPet";
 import BongoPet from "./BongoPet";
 import Billiards from "./Billiards";
 import PinnedPanel from "./PinnedPanel";
+import { PluginWindow } from "./plugins/PluginWindow";
 import { I18nProvider } from "./i18n";
 import { initPetAssetBase } from "./petAssetBase";
 
@@ -30,7 +31,9 @@ const RootComponent =
                 ? Billiards
                 : windowKind === "pinned"
                   ? PinnedPanel
-                  : App;
+                  : windowKind === "plugin"
+                    ? PluginWindow
+                    : App;
 
 window.addEventListener(
   "pointerdown",

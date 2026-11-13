@@ -1,4 +1,0 @@
-94f8619cef65ab3366bbf364cf1fc7508a821b4f75952fbb48673e4c1a4121a8  Maltese-assistant.exe
-e09de39cafcf8f9e77f801f3fb070776a807863c49f3c1a1abe1504c996cd004  maltese-assistant-v1.2.8-win64.zip
-bd9636d604dcf42e2e60261e7f5ade4ea3f198130f9fddebe1330ad8f6fbad58  Maltese-1.2.8-x64-setup.exe
-1be482f5009997b2c54a83a26eab1af19978e91a3fe83284de19db590843b877  latest.json

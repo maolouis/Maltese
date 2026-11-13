@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello World · Maltese 插件</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        padding: 24px 26px;
+        font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.65;
+        color: #17302a;
+        background: #fbfdf9;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+        color: #14352a;
+      }
+      p {
+        margin: 0 0 14px;
+        color: #33564a;
+      }
+      .card {
+        padding: 18px;
+        border: 1px solid #d9e7d8;
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 6px 18px rgba(31, 71, 58, 0.06);
+      }
+      button {
+        height: 42px;
+        padding: 0 18px;
+        border: none;
+        border-radius: 12px;
+        background: #7fc390;
+        color: #10301f;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #6cb580;
+      }
+      #count {
+        margin-left: 10px;
+        font-weight: 700;
+        color: #1c5b34;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Hello from a Maltese plugin</h1>
+      <p>
+        这一页来自插件自己的目录（<code>plugin.json</code> 里的 <code>ui</code> 字段），
+        不是宿主编译进去的界面。你可以用任何前端技术写它。
+      </p>
+      <button id="ping" type="button">点我一下</button>
+      <span id="count">0 次</span>
+    </div>
+    <script>
+      let count = 0;
+      document.getElementById("ping").addEventListener("click", function () {
+        count += 1;
+        document.getElementById("count").textContent = count + " 次";
+      });
+    </script>
+  </body>
+</html>

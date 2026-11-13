@@ -160,6 +160,7 @@ function interleaveShared(own: string[], shared: string[]): string[] {
 const MAX_FRAMES_PER_STATE = 30;
 
 const frameCache = new Map<string, string[]>();
+const rawFrameCache = new Map<string, string[]>();
 
 function computeFrames(
   character: PetCharacterId,
@@ -220,8 +221,27 @@ export function characterFramesForState(
   const key = `${character}|${state}|${ownOnly ? "own" : "all"}`;
   const cached = frameCache.get(key);
   if (cached) return cached;
-  const frames = sampleFrames(computeFrames(character, state, ownOnly)).map(petAssetUrl);
+  const frames = characterFramePaths(character, state, { ownOnly }).map(petAssetUrl);
   frameCache.set(key, frames);
+  return frames;
+}
+
+/**
+ * 同上，但返回 `/assets/pets/...` 原始路径。
+ *
+ * 本地存储里只该存这种「与安装目录无关」的路径：装到哪都能解析，
+ * 也不会因为升级/换盘符变成失效的绝对地址。
+ */
+export function characterFramePaths(
+  character: PetCharacterId,
+  state: string,
+  { ownOnly = false }: { ownOnly?: boolean } = {},
+): string[] {
+  const key = `${character}|${state}|${ownOnly ? "own" : "all"}`;
+  const cached = rawFrameCache.get(key);
+  if (cached) return cached;
+  const frames = sampleFrames(computeFrames(character, state, ownOnly));
+  rawFrameCache.set(key, frames);
   return frames;
 }
 

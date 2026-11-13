@@ -374,6 +374,7 @@ const en: Translations = {
     title: "Plugins",
     subtitle: "Built-in features and third-party plugins live together. Plugins run with your user permissions, so install only trusted sources.",
     builtin: "Built-in",
+    open: "Open",
     installPlaceholder: "Plugin folder path (must contain plugin.json; unzip archives first)",
     install: "Install plugin",
     openDirectory: "Open plugin folder",

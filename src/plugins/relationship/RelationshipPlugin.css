@@ -1,0 +1,326 @@
+/* 「关系」插件：浅绿 / 浅橙品牌色，正文一律 14px 起步，不放小字说明。 */
+.relationship {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 22px 22px;
+  color: #17302a;
+  font-size: 14px;
+  line-height: 1.6;
+  background: #fbfdf9;
+}
+
+.relationship__intro {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.relationship__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid #d9e7d8;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(31, 71, 58, 0.06);
+}
+
+.relationship__card--join {
+  justify-content: center;
+  background: #fffaf1;
+  border-color: #f3dfc4;
+}
+
+.relationship__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #16332b;
+}
+
+.relationship__subtitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #4a3520;
+}
+
+.relationship__lead {
+  margin: 0;
+  font-size: 14px;
+  color: #35564c;
+}
+
+.relationship__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: #35564c;
+}
+
+.relationship__field input,
+.relationship__join input,
+.relationship__compose input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid #cfe0ce;
+  background: #ffffff;
+  color: #16332b;
+  font-size: 15px;
+  outline: none;
+}
+
+.relationship__field input:focus,
+.relationship__join input:focus,
+.relationship__compose input:focus {
+  border-color: #79b98b;
+  box-shadow: 0 0 0 3px rgba(121, 185, 139, 0.18);
+}
+
+.relationship__primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  height: 42px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  background: #7fc390;
+  color: #10301f;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.relationship__primary:hover {
+  background: #6cb580;
+}
+
+.relationship__join {
+  display: flex;
+  gap: 10px;
+}
+
+.relationship__join input {
+  flex: 1;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.relationship__join button {
+  height: 40px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 10px;
+  background: #f5b971;
+  color: #4a2f0c;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.relationship__join button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.relationship__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #eef7ee;
+  border: 1px solid #d5e8d5;
+}
+
+.relationship__code-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.relationship__label {
+  font-size: 13px;
+  color: #4c6a5f;
+}
+
+.relationship__code {
+  font-size: 22px;
+  letter-spacing: 4px;
+  color: #14352a;
+}
+
+.relationship__head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.relationship__head-actions button,
+.relationship__foot button {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid #c9dcc8;
+  background: #ffffff;
+  color: #1f4437;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.relationship__status {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff4e4;
+  border: 1px solid #f0d9b7;
+  color: #6b4a1c;
+  font-size: 14px;
+}
+
+.relationship__status--on {
+  background: #e8f7ec;
+  border-color: #bfe3c8;
+  color: #1c5b34;
+}
+
+.relationship__relations {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.relationship__relation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #dbe7da;
+  background: #ffffff;
+  color: #1c3b31;
+  text-align: left;
+  cursor: pointer;
+}
+
+.relationship__relation strong {
+  font-size: 16px;
+}
+
+.relationship__relation span {
+  font-size: 13px;
+  color: #4b665c;
+}
+
+.relationship__relation.is-active {
+  border-color: #7fc390;
+  background: #eaf8ee;
+  box-shadow: 0 0 0 2px rgba(127, 195, 144, 0.25);
+}
+
+.relationship__confirm {
+  margin: 0;
+  font-size: 14px;
+  color: #4a6a5e;
+}
+
+.relationship__chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 220px;
+}
+
+.relationship__log {
+  flex: 1;
+  min-height: 160px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid #dbe7da;
+  background: #ffffff;
+}
+
+.relationship__empty {
+  margin: 0;
+  color: #6d8579;
+  font-size: 14px;
+}
+
+.relationship__bubble {
+  align-self: flex-start;
+  max-width: 78%;
+  padding: 9px 13px;
+  border-radius: 12px;
+  background: #f2f6f1;
+  color: #1d3b31;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.relationship__bubble.is-mine {
+  align-self: flex-end;
+  background: #7fc390;
+  color: #12301f;
+}
+
+.relationship__compose {
+  display: flex;
+  gap: 10px;
+}
+
+.relationship__compose input {
+  flex: 1;
+}
+
+.relationship__send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: #7fc390;
+  color: #10301f;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.relationship__send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.relationship__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.relationship__danger {
+  border-color: #f0c9c0 !important;
+  background: #fff2ee !important;
+  color: #8a3b26 !important;
+}
+
+.relationship__notice {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #eef4ff;
+  border: 1px solid #cfdffa;
+  color: #24406c;
+  font-size: 14px;
+}
