@@ -6227,3 +6227,8 @@ html.maltese-page-opening .island__collapsed {
 .pet-bubble-panel__pin:active {
   transform: translateY(0) scale(0.98);
 }
+/* 顶部按钮组里的「固定当前标签」：悬停青色高亮 */
+.island-pin-button:hover {
+  color: #0f766e;
+  background: rgba(45, 212, 191, 0.24);
+}

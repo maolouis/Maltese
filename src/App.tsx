@@ -14,7 +14,7 @@ import {
   type WheelEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import {
+import { Pin,
   Bell,
   Check,
   CircleDot,
@@ -2056,6 +2056,18 @@ export function IslandShell({
             </button>
 
             <div className="window-actions">
+              <button
+                className="icon-button island-pin-button"
+                type="button"
+                title={`把「${PAGE_LABELS[page] ?? "当前标签"}」固定到桌面`}
+                aria-label="固定当前标签到桌面"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+                }}
+              >
+                <Pin size={16} strokeWidth={2} aria-hidden="true" />
+              </button>
               <button className={`icon-button island-message-button${page === "qq" ? " island-message-button--active" : ""}`} type="button" aria-label={t.messages.label(messageBadgeLabel)} aria-pressed={page === "qq"} title={t.messages.title} onClick={() => onOpenMessages(wechatPending ? "wechat" : "qq")}>
                 <Bell size={17} strokeWidth={1.8} />
                 {(qqNotificationCount > 0 || wechatPending) && <span className="island-message-button__dot" aria-hidden="true" />}
@@ -5506,7 +5518,7 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
   }
 }
 
-function AssistantPanel() {
+export function AssistantPanel() {
   const t = useTranslation();
   const panelRef = useRef<HTMLElement | null>(null);
   const appSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -8806,6 +8818,21 @@ function IslandApp({
   useEffect(() => {
     window.localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
   }, [todos]);
+
+  // 固定在桌面的「待办」窗口改的是同一份 localStorage，这里跟着同步。
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== TODOS_STORAGE_KEY || !event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue) as typeof todos;
+        if (Array.isArray(parsed)) setTodos(parsed);
+      } catch {
+        // 忽略坏数据
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(DAILY_NOTE_STORAGE_KEY, dailyNote);

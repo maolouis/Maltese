@@ -1,15 +1,15 @@
 {
-  "version": "1.3.41",
-  "notes": "# Maltese v1.3.41\n\n## 修：「固定到桌面」按钮找不到\n\n上一版只把按钮加在了 `PetBubble` 那个独立气泡窗口的菜单里，但**右键小狗其实是直接打开聊天页**\n（`onContextMenu → onOpenPage(\"chat\")`），根本没走那个菜单，所以看不到按钮。\n\n这一版把入口放到了用户真正会看到的地方：\n\n| 位置 | 什么时候能看到 | 文案 |\n| --- | --- | --- |\n| 鼠标悬停气泡面板 | 鼠标移到小狗身上 | 📌 固定「聊天」到桌面（显示当前标签名） |\n| 聊天页头部 | 右键小狗 → 打开聊天后 | 📌 固定到桌面 |\n\n- 悬停面板里的按钮按当前标签命名（聊天 / 待办 / 音乐 / 剪贴板 / 消息 / 快捷…），点完直接把气泡收起来；\n- 聊天页头部的按钮固定的是聊天标签，点完在桌面右下角出现固定窗口；\n- 固定窗口里不再显示这个按钮，避免\"窗口里再固定一个窗口\"；\n- 两个按钮都是 12.5px 加粗、青色底，悬停变亮 + 上浮，符合上一版定的可读性规则。\n\n## 验证\n\n- `tsc --noEmit`、`vite build` 通过。\n- `scripts/verify-build.mjs` 全部检查通过。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.41，已构建、安装到本机。**只本地提交，未推送远端。**",
-  "pub_date": "2026-11-12T10:24:52Z",
+  "version": "1.3.42",
+  "notes": "# Maltese v1.3.42\n\n## 固定到桌面：支持聊天 / 待办 / 音乐 / 快捷，按钮挪进顶部按钮组\n\n### 按钮位置\n\n按你的要求，入口放在小狗面板右上角那组按钮里（消息 / 归位 / 最小化 那一排），\n新增一个 **📌 固定按钮**，排在消息按钮左边：\n\n- 悬停时变色高亮，提示文字会写明要固定哪个标签（\"把「音乐」固定到桌面\"）；\n- 点一下就把**当前标签**固定到桌面，先收起面板也能用；\n- 原来加在聊天页头部和悬停气泡里的入口保留，但现在都只是快捷方式。\n\n### 固定窗口本身也升级了\n\n固定窗口顶部新增标签栏：**聊天 / 待办 / 音乐 / 快捷**，可以随时切换，切换状态会记住。\n\n| 标签 | 能力 |\n| --- | --- |\n| 聊天 | 完整聊天（模型、思考面板、图片、复制都在），和主面板共用一份记录 |\n| 待办 | 可以直接加待办、打勾完成、设为「进行中」；和主面板共用同一份数据 |\n| 音乐 | 显示曲目 / 歌手 / 进度，支持上一首、播放暂停、下一首（直接读系统媒体会话） |\n| 快捷 | 完整的快捷入口面板（应用搜索、快捷方式管理都在） |\n\n### 待办的数据一致性\n\n固定在桌面的待办窗口和主窗口读写的是同一份 `focusd-island-todos`，两边通过 `storage`\n事件互相同步：在固定窗口里打勾，主面板立刻跟着变；主面板新增，固定窗口也会刷新。\n（另有 3 秒兜底轮询，避免事件丢失。）\n\n## 验证\n\n- `tsc --noEmit`、`vite build`、`cargo check` 通过。\n- `scripts/verify-build.mjs` 全部检查通过。\n- 交付前检查：Defender 未发现威胁、SHA-256 已输出。\n\n## 说明\n\n版本号 1.3.42，已构建、安装到本机。**只本地提交，未推送远端。**",
+  "pub_date": "2026-11-13T00:46:31Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xVOTV3ekxDY2d3TzJLMER6Z0ZEUWRkWDJnMktxeDV2dlhZYXNxSVRHeTlqMmQ0TFZ3VFpJVmVDYkRmckMrY2N6a2Npekp0NHNKc1orNE5hM2RNbWdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc5MDg2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQxX3g2NC1zZXR1cC5leGUKV0RsQlQ2TmZjblJvcmtzUk5IbmIrbFFLUWorelZPQ1pyOGV6U3BzelN6ckNIMWVsWFdDN0hQRHZYUzVFS3NYUDJ1bEVxWnp6bjhiYW13Um5jd3Y4RHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.41/Maltese-1.3.41-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VGUmhxSE9Ba2ZGRnVsdlFNN0ZGQUxKR0xsc2dZRjNuNVRRckFVNk1UODFlR3pCTXV0VUxRQy8yRVZpZ1JnMUQ2OVZHTEFVS2ROeitLMlNJUDhtMWdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTMwNzg1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQyX3g2NC1zZXR1cC5leGUKSkhXY1RCSWpzWWhNZ1VDMVJrR1FkVVVYbGpCQzNJaVhVUEJZQklRSmovTkFVemFMenRDRXBPMENBQ0tBOTdMUEFBR2tjK0NQb0ZuSC9HVEJhZVhkQXc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.42/Maltese-1.3.42-x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0xVOTV3ekxDY2d3TzJLMER6Z0ZEUWRkWDJnMktxeDV2dlhZYXNxSVRHeTlqMmQ0TFZ3VFpJVmVDYkRmckMrY2N6a2Npekp0NHNKc1orNE5hM2RNbWdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDc5MDg2CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQxX3g2NC1zZXR1cC5leGUKV0RsQlQ2TmZjblJvcmtzUk5IbmIrbFFLUWorelZPQ1pyOGV6U3BzelN6ckNIMWVsWFdDN0hQRHZYUzVFS3NYUDJ1bEVxWnp6bjhiYW13Um5jd3Y4RHc9PQo=",
-      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.41/Maltese-1.3.41-x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNUVUM29WNEFYM0VGUmhxSE9Ba2ZGRnVsdlFNN0ZGQUxKR0xsc2dZRjNuNVRRckFVNk1UODFlR3pCTXV0VUxRQy8yRVZpZ1JnMUQ2OVZHTEFVS2ROeitLMlNJUDhtMWdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTMwNzg1CWZpbGU6TWFsdGVzZSDnur/mnaHlsI/ni5fmoYzpnaLliqnmiYtfMS4zLjQyX3g2NC1zZXR1cC5leGUKSkhXY1RCSWpzWWhNZ1VDMVJrR1FkVVVYbGpCQzNJaVhVUEJZQklRSmovTkFVemFMenRDRXBPMENBQ0tBOTdMUEFBR2tjK0NQb0ZuSC9HVEJhZVhkQXc9PQo=",
+      "url": "https://github.com/maolouis/Maltese/releases/download/v1.3.42/Maltese-1.3.42-x64-setup.exe"
     }
   }
 }
