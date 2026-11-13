@@ -106,8 +106,12 @@ fn preset_plugins_root(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// 清单里声明的 ui 页面：必须留在插件目录内，避免指到系统目录。
+/// 特殊值 `host` 表示「界面由宿主渲染」，内置插件也能用普通插件目录的形式分发。
 fn resolve_ui_file(directory: &Path, ui: &str) -> Option<String> {
     let name = ui.trim();
+    if name.eq_ignore_ascii_case("host") {
+        return Some("host".to_string());
+    }
     if name.is_empty() || name.contains("..") || name.contains(':') {
         return None;
     }
@@ -253,6 +257,10 @@ pub fn list_plugins(app: AppHandle) -> Result<PluginList, String> {
             }
         }
     }
+
+    // 内置插件也以插件目录的形式预置在 resources\plugins 里：目录里有的就用目录那份
+    // （有真实路径和清单文件），代码里的内置兜底只在没有预置目录的开发环境生效。
+    plugins.retain(|plugin| !plugin.builtin || !seen.contains(&plugin.id));
 
     plugins.sort_by(|left, right| {
         right

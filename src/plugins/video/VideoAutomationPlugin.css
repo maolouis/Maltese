@@ -1,0 +1,146 @@
+/* 自动刷视频：插件窗口 / 视频页用的是浅色背景，
+   而 App.css 里这套样式是为深色悬浮岛写的（白字、8–10px），直接搬过来会看不清。
+   这里只在这两个容器里覆盖成浅色高对比版本，不影响悬浮岛本身。 */
+:is(.plugin-window, .video-page, .plugins-page) .video-automation {
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #d9e7d8;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation .assistant-panel__label {
+  color: #33564a;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__head strong {
+  color: #14352a;
+  font-size: 17px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__steps {
+  color: #4c6b60;
+  font-size: 13px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls {
+  gap: 10px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls select,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls input {
+  height: 38px;
+  padding: 6px 10px;
+  border: 1px solid #bcd6c6;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #17302a;
+  font-size: 14px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls input {
+  width: 64px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls label {
+  color: #33564a;
+  font-size: 13px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 10px;
+  background: #7fc390;
+  color: #10301f;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button:hover:not(:disabled) {
+  background: #6cb580;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button:disabled {
+  background: #d5e3d8;
+  color: #6c8377;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__hint {
+  color: #4c6b60;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__hint--warn {
+  color: #a33b2a;
+  font-size: 12.5px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment {
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px dashed #cfe0d2;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-toggle {
+  gap: 7px;
+  color: #2c4a3f;
+  font-size: 13px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment textarea {
+  min-height: 84px;
+  padding: 10px 12px;
+  border: 1px solid #bcd6c6;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #17302a;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions {
+  gap: 8px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid #bcd6c6;
+  border-radius: 10px;
+  background: #eef6ef;
+  color: #1f473a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions button:hover:not(:disabled) {
+  background: #dcecdf;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__publish {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plugins-page .video-page__notice {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #6b4a1c;
+}
+
+.plugins-page .plugin-video-card__head strong {
+  color: #14352a;
+  font-size: 16px;
+}

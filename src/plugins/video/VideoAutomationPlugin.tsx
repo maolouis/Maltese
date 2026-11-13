@@ -3,6 +3,7 @@
 // 从 App.tsx 拆出来，插件窗口（`index.html?window=plugin`）和插件中心都复用同一个面板。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import "./VideoAutomationPlugin.css";
 import "../../App.css";
 import { loadLocalChatConfig } from "../../localChat";
 

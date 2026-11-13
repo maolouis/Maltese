@@ -93,7 +93,7 @@ export function PluginWindow() {
       </header>
       <main className="plugin-window__body">
         {plugin ? (
-          plugin.builtin ? (
+          plugin.builtin || plugin.ui === "host" ? (
             renderBuiltin(plugin.id, setNotice)
           ) : plugin.ui ? (
             <iframe

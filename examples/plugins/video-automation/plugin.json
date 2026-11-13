@@ -1,0 +1,9 @@
+{
+  "id": "builtin-video-automation",
+  "name": "自动刷视频",
+  "version": "0.2.5",
+  "description": "在 B 站 / 抖音推荐流里按设定间隔自动翻页；支持刷评论、点赞、关注与投稿/开播半自动流程。界面由宿主渲染，但清单与目录就是普通插件，可以整个文件夹拷走。",
+  "author": "Maltese",
+  "homepage": "https://github.com/maolouis/Maltese",
+  "ui": "host"
+}
