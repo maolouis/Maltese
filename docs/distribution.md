@@ -116,3 +116,14 @@ Tauri 默认把 `frontendDist` 整个嵌进可执行文件。要真正外置，�
 | `scripts/verify-packaging.mjs` | 打包卫生检查（版本一致性、无加壳、NSIS、无注入、自启动范围、资源体积） |
 | `scripts/verify-release-artifacts.ps1` | 产物检查（签名状态、Defender 扫描、SHA-256） |
 | `scripts/prepare-release-config.mjs` / `make-latest-json.mjs` | 更新器公钥注入与清单生成 |
+## 7. 推送/拉取排障（DNS 被污染时）
+
+本机曾出现 `github.com` 解析到 `57.155.223.240`（非 GitHub 地址），导致 `git push` 超时。
+不改 hosts 的做法：
+
+```powershell
+git -c http.curloptResolve=github.com:443:20.205.243.166 push <remote> HEAD:main
+```
+
+API 侧同理：`curl --resolve api.github.com:443:20.205.243.168 …`。
+`20.200.245.247`、`140.82.112.3`、`4.237.22.38` 也可作为备用地址。
