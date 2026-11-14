@@ -2,7 +2,7 @@
   "name": "maltese-assistant",
   "private": true,
   "author": "maolouis",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

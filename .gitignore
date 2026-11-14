@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 release
+dist-plugins
 screenshot-current.png
 src-tauri/target
 src-tauri/gen
