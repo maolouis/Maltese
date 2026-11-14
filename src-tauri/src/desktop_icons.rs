@@ -12,7 +12,10 @@
 use std::{
     mem::size_of,
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +80,9 @@ struct BackupEntry {
 
 // 退出时要还原的东西：图标原始位置 + 被我们临时改掉的桌面样式。
 static BACKUP: Mutex<Option<Vec<BackupEntry>>> = Mutex::new(None);
+/// 只有用户显式开了一局台球才为 true。
+/// 任何搬动图标的入口都以它为前提，杜绝「应用一启动就重排桌面」（issue #1）。
+static GAME_ACTIVE: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Copy)]
 struct StyleBackup {
     auto_arrange: bool,
@@ -373,6 +379,7 @@ pub fn desktop_icons_begin_game() -> DesktopIconLayout {
     if let Ok(mut slot) = BACKUP.lock() {
         *slot = Some(positions.clone());
     }
+    GAME_ACTIVE.store(true, Ordering::SeqCst);
     relax_styles(list);
 
     let (spacing_x, spacing_y) = list_view_spacing(list);
@@ -421,6 +428,10 @@ pub struct IconMove {
 /// 批量搬动真实图标（屏幕坐标 → 客户端坐标）。
 #[tauri::command]
 pub fn desktop_icons_move(moves: Vec<IconMove>) -> Result<(), String> {
+    // 没开局就谁也不许动图标（前端窗口可能在后台被挂载/卸载）。
+    if !GAME_ACTIVE.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     let Some(list) = find_desktop_listview() else {
         return Err("桌面图标列表不可用".to_string());
     };
@@ -437,15 +448,16 @@ pub fn desktop_icons_move(moves: Vec<IconMove>) -> Result<(), String> {
     Ok(())
 }
 
-/// 恢复桌面：优先用内存里的备份，其次用上次异常退出留下的文件。
+/// 恢复桌面：只在「这一局真的开过」时动图标。
+/// 以前这里会退回读取备份文件，导致应用启动、窗口挂载/卸载时也可能搬动图标。
 #[tauri::command]
 pub fn desktop_icons_restore() -> Result<(), String> {
-    let entries = BACKUP
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-        .or_else(read_backup_file);
+    if !GAME_ACTIVE.swap(false, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let entries = BACKUP.lock().ok().and_then(|mut slot| slot.take());
     let Some(entries) = entries else {
+        clear_backup_file();
         return Ok(());
     };
     let Some(list) = find_desktop_listview() else {

@@ -11,7 +11,7 @@ use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_L
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
 
 #[tauri::command]
-pub fn get_shortcut_icon(path: String) -> Result<Option<String>, String> {
+pub async fn get_shortcut_icon(path: String) -> Result<Option<String>, String> {
     Ok(read_icon_png(&path))
 }
 

@@ -1445,7 +1445,7 @@ struct CommonScript {
     kind: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct DiscoveredShortcut {
     label: String,
@@ -1587,18 +1587,64 @@ fn scan_shortcuts(
 }
 
 #[tauri::command]
-fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
+async fn discover_shortcuts(scan_dir: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
     scan_shortcuts(shortcut_scan_roots(scan_dir.as_deref()), None, 240)
 }
 
-#[tauri::command]
-fn discover_installed_apps(query: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
-    // 系统开始菜单/桌面里的入口就是 Windows 识别并展示的应用；
-    // 搜索只在这个范围内进行，不扫描磁盘。
-    scan_shortcuts(system_app_roots(), query.as_deref(), 200)
+// 应用清单缓存：以前每敲一个字就重新扫一遍开始菜单 + 起一个 PowerShell，
+// 这是快捷方式搜索卡顿的主要原因。现在全量清单缓存 10 分钟，搜索只做内存过滤。
+static INSTALLED_APPS_CACHE: Mutex<Option<(std::time::Instant, Vec<DiscoveredShortcut>)>> =
+    Mutex::new(None);
+static START_APPS_CACHE: Mutex<Option<(std::time::Instant, Vec<StartApp>)>> = Mutex::new(None);
+const APP_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn filter_discovered(
+    items: Vec<DiscoveredShortcut>,
+    query: Option<&str>,
+    limit: usize,
+) -> Vec<DiscoveredShortcut> {
+    let needle = query
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty());
+    items
+        .into_iter()
+        .filter(|item| {
+            needle
+                .as_ref()
+                .map(|value| item.label.to_lowercase().contains(value))
+                .unwrap_or(true)
+        })
+        .take(limit)
+        .collect()
 }
 
-#[derive(Serialize)]
+#[tauri::command]
+async fn discover_installed_apps(query: Option<String>) -> Result<Vec<DiscoveredShortcut>, String> {
+    // 系统开始菜单/桌面里的入口就是 Windows 识别并展示的应用；
+    // 搜索只在这个范围内进行，不扫描磁盘。
+    let cached = INSTALLED_APPS_CACHE.lock().ok().and_then(|slot| {
+        slot.as_ref().and_then(|(at, items)| {
+            if at.elapsed() < APP_CACHE_TTL {
+                Some(items.clone())
+            } else {
+                None
+            }
+        })
+    });
+    let all = match cached {
+        Some(items) => items,
+        None => {
+            let items = scan_shortcuts(system_app_roots(), None, 4000)?;
+            if let Ok(mut slot) = INSTALLED_APPS_CACHE.lock() {
+                *slot = Some((std::time::Instant::now(), items.clone()));
+            }
+            items
+        }
+    };
+    Ok(filter_discovered(all, query.as_deref(), 60))
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct StartApp {
     label: String,
@@ -1611,7 +1657,43 @@ struct StartApp {
 /// 例如 ChatGPT 只有 `WindowsApps\chatgpt-desktop.exe` 这个执行别名，
 /// 所以这里走 Get-StartApps 拿到 Name + AppID，启动时用 shell:AppsFolder。
 #[tauri::command]
-fn discover_start_apps(query: Option<String>) -> Result<Vec<StartApp>, String> {
+async fn discover_start_apps(query: Option<String>) -> Result<Vec<StartApp>, String> {
+    let cached = START_APPS_CACHE.lock().ok().and_then(|slot| {
+        slot.as_ref().and_then(|(at, items)| {
+            if at.elapsed() < APP_CACHE_TTL {
+                Some(items.clone())
+            } else {
+                None
+            }
+        })
+    });
+    let all = match cached {
+        Some(items) => items,
+        None => {
+            let items = load_start_apps()?;
+            if let Ok(mut slot) = START_APPS_CACHE.lock() {
+                *slot = Some((std::time::Instant::now(), items.clone()));
+            }
+            items
+        }
+    };
+    let needle = query
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty());
+    Ok(all
+        .into_iter()
+        .filter(|app| {
+            needle
+                .as_ref()
+                .map(|value| app.label.to_lowercase().contains(value))
+                .unwrap_or(true)
+        })
+        .take(60)
+        .collect())
+}
+
+/// 真正去读 Get-StartApps（带缓存的 discover_start_apps 只在 miss 时调用）。
+fn load_start_apps() -> Result<Vec<StartApp>, String> {
     let mut command = Command::new("powershell.exe");
     command
         .args([
@@ -1641,9 +1723,6 @@ fn discover_start_apps(query: Option<String>) -> Result<Vec<StartApp>, String> {
         Value::Array(items) => items,
         other => vec![other],
     };
-    let needle = query
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty());
     let mut apps = Vec::new();
     for row in rows {
         let label = row
@@ -1661,22 +1740,14 @@ fn discover_start_apps(query: Option<String>) -> Result<Vec<StartApp>, String> {
         if label.is_empty() || app_id.is_empty() {
             continue;
         }
-        if let Some(needle) = needle.as_deref() {
-            if !label.to_lowercase().contains(needle) {
-                continue;
-            }
-        }
         apps.push(StartApp { label, app_id });
-        if apps.len() >= 60 {
-            break;
-        }
     }
     Ok(apps)
 }
 
 /// 启动 shell:AppsFolder 里的应用（Store / MSIX 应用都走这里）。
 #[tauri::command]
-fn launch_start_app(app_id: String) -> Result<(), String> {
+async fn launch_start_app(app_id: String) -> Result<(), String> {
     let app_id = app_id.trim();
     if app_id.is_empty() || app_id.contains('"') {
         return Err("应用标识无效。".to_string());
@@ -1860,7 +1931,7 @@ fn launch_discovered_shortcut(
 /// 自定义快捷方式允许任意本机路径（由用户主动添加），
 /// 不复用“只能打开自动发现目录”的限制。
 #[tauri::command]
-fn launch_custom_shortcut(path: String) -> Result<(), String> {
+async fn launch_custom_shortcut(path: String) -> Result<(), String> {
     launch_shortcut_path(PathBuf::from(path.trim()))
 }
 
@@ -1933,7 +2004,7 @@ fn run_common_script(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn launch_tool(tool: String) -> Result<(), String> {
+async fn launch_tool(tool: String) -> Result<(), String> {
     let normalized = tool.trim().to_ascii_lowercase();
     if normalized == "calculator" {
         return spawn_detached(Command::new("calc.exe"));

@@ -66,8 +66,6 @@ export function PluginsPanel() {
   const [disabled, setDisabled] = useState<string[]>(loadDisabledPlugins);
   const [notice, setNotice] = useState("");
   const [help, setHelp] = useState<{ plugin: PluginInfo; left: number; top: number } | null>(null);
-  const [billiardsNotice, setBilliardsNotice] = useState("");
-  const [iconsAvailable, setIconsAvailable] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
@@ -84,13 +82,6 @@ export function PluginsPanel() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!isTauri()) return;
-    void invoke<boolean>("desktop_icons_available")
-      .then(setIconsAvailable)
-      .catch(() => setIconsAvailable(null));
-  }, []);
-
-  useEffect(() => {
     if (!removeArmed) return;
     const timer = window.setTimeout(() => setRemoveArmed(""), 4000);
     return () => window.clearTimeout(timer);
@@ -99,18 +90,14 @@ export function PluginsPanel() {
   const openPlugin = async (plugin: PluginInfo) => {
     setNotice("");
     try {
+      // 台球是覆盖整个桌面的独立窗口，不走普通插件窗口。
+      if (plugin.id === BILLIARDS_PLUGIN_ID) {
+        await invoke("open_billiards_window");
+        return;
+      }
       await invoke("open_plugin_window", { id: plugin.id });
     } catch (error) {
       setNotice(`打开失败：${String(error)}`);
-    }
-  };
-
-  const openBilliards = async () => {
-    setBilliardsNotice("");
-    try {
-      await invoke("open_billiards_window");
-    } catch (error) {
-      setBilliardsNotice("打开台球失败：" + String(error));
     }
   };
 
@@ -224,38 +211,6 @@ export function PluginsPanel() {
       ))}
 
       <div className="plugins-panel__list">
-        <article
-          className="plugin-card"
-          onMouseEnter={(event) => showHelp(
-            {
-              id: BILLIARDS_PLUGIN_ID,
-              name: "桌面图标台球",
-              version: "",
-              description: "把桌面图标当成台球：按住左键拉杆蓄力，松手击球，小狗在旁边帮你加油。图标保持原样，退出即恢复。",
-              author: "GitHub@liuxiaogang-com（MIT）",
-              homepage: "https://github.com/liuxiaogang-com/desktop-icon-billiards",
-              builtin: true,
-              locked: true,
-              path: null,
-              ui: null,
-              actions: [],
-            },
-            event.currentTarget,
-          )}
-          onMouseLeave={() => setHelp(null)}
-        >
-          <div className="plugin-card__main">
-            <strong className="plugin-card__name">桌面图标台球</strong>
-            <span className="plugin-card__badge">{t.plugins.builtin}</span>
-            {iconsAvailable === false && <span className="plugin-card__badge plugin-card__badge--warn">图标已隐藏</span>}
-          </div>
-          <div className="plugin-card__actions">
-            <button type="button" className="plugin-card__primary" onClick={() => void openBilliards()}>
-              开一局
-            </button>
-          </div>
-        </article>
-
         {plugins.map((plugin) => {
           const isDisabled = !plugin.builtin && disabled.includes(plugin.id);
           const canManage = !plugin.builtin && !plugin.locked;
@@ -312,8 +267,6 @@ export function PluginsPanel() {
           </div>
         )}
       </div>
-
-      {billiardsNotice && <p className="plugins-panel__notice plugins-panel__notice--warn">{billiardsNotice}</p>}
 
       {help && createPortal(
         <aside className="plugin-help-window" style={{ left: help.left, top: help.top }} role="tooltip">

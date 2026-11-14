@@ -1,0 +1,9 @@
+{
+  "id": "billiards",
+  "name": "桌面图标台球",
+  "version": "2.0.0",
+  "description": "把桌面图标当成台球：按住左键拉杆蓄力，松手击球。只有点「打开」开始这一局才会动图标，退出（Esc）立即恢复原位。",
+  "author": "Maltese（玩法参考 GitHub@liuxiaogang-com，MIT）",
+  "homepage": "https://github.com/liuxiaogang-com/desktop-icon-billiards",
+  "ui": "host"
+}
