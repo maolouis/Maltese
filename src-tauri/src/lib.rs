@@ -4041,6 +4041,19 @@ pub fn run() {
             video_automation::start_video_automation,
             video_automation::stop_video_automation,
         ])
-        .run(context)
-        .expect("error while running FocuSD Island");
+        .build(context)
+        .expect("error while building Maltese")
+        .run(|app, event| {
+            // 退出应用时，如果台球还开着，把真实桌面图标放回去（issue #1）。
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                if let Some(window) = app.get_webview_window("billiards") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = desktop_icons::desktop_icons_restore();
+                    }
+                }
+            }
+        });
 }

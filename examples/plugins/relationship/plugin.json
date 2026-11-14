@@ -1,5 +1,5 @@
 {
-  "id": "builtin-relationship",
+  "id": "relationship",
   "name": "关系",
   "version": "0.2.5",
   "description": "用配对码和另一个人配对，选好关系（情侣 / 朋友 / 兄弟）之后就能互聊；消息在两端加解密，中继只转发密文。界面由宿主渲染。",

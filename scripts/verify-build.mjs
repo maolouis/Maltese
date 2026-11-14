@@ -118,7 +118,7 @@ if (built) {
   }
 }
 
-// 5. 插件系统检查：示例清单必须可解析，内置刷视频必须仍在插件列表里。
+// 5. 插件系统检查：示例清单必须可解析；默认不内置插件，宿主渲染的插件以 zip 分发。
 
 try {
   const example = JSON.parse(
@@ -128,8 +128,19 @@ try {
     fail("示例插件 plugin.json 缺少 id/name/actions");
   }
   const pluginSource = fs.readFileSync(path.join(root, "src-tauri/src/plugins.rs"), "utf8");
-  if (!pluginSource.includes("video-automation") || !pluginSource.includes("run_plugin_action")) {
-    fail("插件系统没有包含内置刷视频或动作执行入口");
+  if (!pluginSource.includes("run_plugin_action") || !pluginSource.includes("open_plugin_window")) {
+    fail("插件系统缺少动作执行或插件窗口入口");
+  }
+  for (const id of ["video-automation", "relationship"]) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, `examples/plugins/${id}/plugin.json`), "utf8"),
+    );
+    if (manifest.id !== id || manifest.ui !== "host") {
+      fail(`插件 ${id} 的清单 id/ui 不符合宿主渲染插件约定`);
+    }
+  }
+  if (!fs.existsSync(path.join(root, "scripts/pack-plugins.ps1"))) {
+    fail("缺少插件打包脚本 scripts/pack-plugins.ps1");
   }
   if (!fs.existsSync(path.join(root, "docs/plugins.md"))) {
     fail("缺少插件开发文档 docs/plugins.md");

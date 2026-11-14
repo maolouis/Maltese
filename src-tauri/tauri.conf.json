@@ -244,8 +244,7 @@
       }
     },
     "resources": {
-      "../assets/pets": "assets/pets",
-      "../examples/plugins": "plugins"
+      "../assets/pets": "assets/pets"
     },
     "icon": [
       "icons/32x32.png",

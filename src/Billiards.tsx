@@ -75,6 +75,9 @@ export default function Billiards() {
   const startedAtRef = useRef<number | null>(null);
   const syncAtRef = useRef(0);
   const runningRef = useRef(false);
+  // 是否已经进入一局。隐藏的台球窗口会随应用一起挂载，
+  // 绝不能在挂载时就开局（否则一启动应用桌面图标就被搬走，见 issue #1）。
+  const [inGame, setInGame] = useState(false);
 
   phaseRef.current = phase;
   turnRef.current = turn;
@@ -169,7 +172,10 @@ export default function Billiards() {
       startedAtRef.current = null;
       setElapsed(0);
       runningRef.current = true;
+      setInGame(true);
     } catch (error) {
+      runningRef.current = false;
+      setInGame(false);
       setErrorText(`开局失败：${String(error)}`);
     }
   }, []);
@@ -177,6 +183,7 @@ export default function Billiards() {
   /** 退出：恢复桌面图标 */
   const quit = useCallback(async () => {
     runningRef.current = false;
+    setInGame(false);
     try {
       await invoke("close_billiards_window");
     } catch {
@@ -185,7 +192,8 @@ export default function Billiards() {
   }, []);
 
   useEffect(() => {
-    void start();
+    // 注意：这里不能自动 start()。窗口虽然隐藏，但页面在应用启动时就已挂载，
+    // 自动开局会把用户桌面图标直接搬走。只有「打开台球」事件或点开始才开局。
     let unlisten: (() => void) | null = null;
     void listen("maltese-billiards-start", () => {
       void start();
@@ -194,7 +202,7 @@ export default function Billiards() {
     });
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") void quit();
-      if (event.key.toLowerCase() === "r") void start();
+      if (event.key.toLowerCase() === "r" && runningRef.current) void start();
     };
     window.addEventListener("keydown", onKey);
     // 关掉窗口时也要恢复（标题栏关闭 / Alt+F4 / 系统关闭）
@@ -362,6 +370,10 @@ export default function Billiards() {
     window.addEventListener("resize", resize);
 
     const step = () => {
+      if (!runningRef.current) {
+        frame = window.requestAnimationFrame(step);
+        return;
+      }
       const { w, h } = sizeRef.current;
       const balls = ballsRef.current;
       const cue = cueRef.current;
@@ -675,27 +687,46 @@ export default function Billiards() {
       />
 
       <div className="billiards__bar">
-        <span className={`billiards__turn${turn === "you" ? " billiards__turn--you" : ""}`}>
-          {phase === "cleared" ? "清台！" : turn === "you" ? "你的回合" : "小狗的回合"}
-        </span>
-        <span className="billiards__score">
-          你 {youScore} : {dogScore} 小狗
-        </span>
-        <span>剩余 {remaining}</span>
-        <span>{Math.floor(elapsed / 1000)}s</span>
-        <button type="button" className="billiards__btn" onClick={() => void start()} title="重开（R）">
-          重开
-        </button>
+        {inGame ? (
+          <>
+            <span className={`billiards__turn${turn === "you" ? " billiards__turn--you" : ""}`}>
+              {phase === "cleared" ? "清台！" : turn === "you" ? "你的回合" : "小狗的回合"}
+            </span>
+            <span className="billiards__score">
+              你 {youScore} : {dogScore} 小狗
+            </span>
+            <span>剩余 {remaining}</span>
+            <span>{Math.floor(elapsed / 1000)}s</span>
+            <button type="button" className="billiards__btn" onClick={() => void start()} title="重开（R）">
+              重开
+            </button>
+          </>
+        ) : (
+          <span className="billiards__turn">还没开局</span>
+        )}
         <button type="button" className="billiards__btn" onClick={() => void quit()} title="退出并恢复桌面（Esc）">
           <X size={13} /> 退出
         </button>
       </div>
 
+      {!inGame && (
+        <div className="billiards__gate">
+          <strong>和小狗打台球</strong>
+          <p>开始后才会把桌面图标摆成球阵；退出（或按 Esc）会把图标放回原来的位置。</p>
+          {errorText && <p className="billiards__gate-error">{errorText}</p>}
+          <button type="button" className="billiards__btn billiards__btn--primary" onClick={() => void start()}>
+            开始这一局
+          </button>
+        </div>
+      )}
+
       <p className="billiards__tip">
-        {errorText ||
-          (phase === "cleared"
-            ? `清台完成：你 ${youScore} 分，小狗 ${dogScore} 分（退出后桌面自动恢复）`
-            : `${tip}${count > 0 ? ` · 桌面 ${count} 个图标就是 ${count} 颗球` : ""}`)}
+        {inGame
+          ? errorText ||
+            (phase === "cleared"
+              ? `清台完成：你 ${youScore} 分，小狗 ${dogScore} 分（退出后桌面自动恢复）`
+              : `${tip}${count > 0 ? ` · 桌面 ${count} 个图标就是 ${count} 颗球` : ""}`)
+          : "只有点「开始这一局」才会动桌面图标"}
       </p>
 
       <p className="billiards__credit">玩法参考 desktop-icon-billiards · GitHub@liuxiaogang-com（MIT）</p>

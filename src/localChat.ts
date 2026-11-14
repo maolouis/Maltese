@@ -44,10 +44,9 @@ export const LOCAL_CHAT_STORAGE_KEY = "maltese-local-chat-settings";
 export const LOCAL_CHAT_UPDATED_EVENT = "maltese-local-chat-settings-updated";
 
 export const DEFAULT_LOCAL_CHAT: LocalChatConfig = {
-  backend: "local",
-  // 默认留空：本地模型是用户自己装的服务，不同机器地址和模型名都不一样，
-  // 不能把某台电脑的 Strata 部署（8080 / qwen3.6…）当成出厂默认。
-  // 需要的话在设置里点 Ollama / LM Studio / Strata 预设，或手动填。
+  // 默认走 DSH（应用自带的模型服务）；本地模型是用户自己装的服务，
+  // 不同机器地址和模型名都不一样，不能把某台电脑的部署当成出厂默认。
+  backend: "dsh",
   baseUrl: "",
   model: "",
   apiKey: "",

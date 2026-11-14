@@ -20,8 +20,6 @@ use tauri::{AppHandle, Emitter, Manager};
 const PLUGINS_DIRECTORY: &str = "plugins";
 const MANIFEST_FILE: &str = "plugin.json";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const BUILTIN_VIDEO_ID: &str = "video-automation";
-const BUILTIN_RELATIONSHIP_ID: &str = "relationship";
 const PLUGIN_WINDOW_LABEL: &str = "plugin";
 
 /// 当前插件窗口正在显示哪个插件。窗口只有一个，靠这个状态切换内容。
@@ -155,35 +153,10 @@ fn read_manifest(path: &Path) -> Result<PluginManifest, String> {
     Ok(manifest)
 }
 
+/// 默认不内置、不预置任何插件：包括自动刷视频、关系在内的所有插件都以
+/// 独立 zip 分发，由用户在插件中心自行安装。保留这个函数只是让列表逻辑有统一起点。
 fn builtin_plugins() -> Vec<PluginInfo> {
-    let mut plugins = Vec::new();
-    for (id, name, description) in [
-        (
-            BUILTIN_VIDEO_ID,
-            "自动刷视频",
-            "在 B 站 / 抖音推荐流里按设定间隔自动翻页；由宿主内置，和第三方插件共用插件中心。",
-        ),
-        (
-            BUILTIN_RELATIONSHIP_ID,
-            "关系",
-            "用配对码和另一个人配对，选好关系（情侣 / 朋友 / 兄弟）之后就能互聊；消息在你俩之间加解密，宿主只做转发。",
-        ),
-    ] {
-        plugins.push(PluginInfo {
-            id: id.to_string(),
-            name: name.to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            description: description.to_string(),
-            author: "Maltese".to_string(),
-            homepage: "https://github.com/maolouis/Maltese".to_string(),
-            builtin: true,
-            locked: true,
-            path: None,
-            ui: None,
-            actions: Vec::new(),
-        });
-    }
-    plugins
+    Vec::new()
 }
 
 fn plugin_info_from(manifest: PluginManifest, path: &Path, locked: bool) -> PluginInfo {
@@ -258,10 +231,6 @@ pub fn list_plugins(app: AppHandle) -> Result<PluginList, String> {
         }
     }
 
-    // 内置插件也以插件目录的形式预置在 resources\plugins 里：目录里有的就用目录那份
-    // （有真实路径和清单文件），代码里的内置兜底只在没有预置目录的开发环境生效。
-    plugins.retain(|plugin| !plugin.builtin || !seen.contains(&plugin.id));
-
     plugins.sort_by(|left, right| {
         right
             .builtin
@@ -298,32 +267,95 @@ fn copy_plugin_directory(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 解压 zip 到临时目录。只把「含 plugin.json 的那一层目录」复制进插件目录，
+/// 压缩包里的其它内容一律丢弃，避免 zip 里的奇怪路径影响系统。
+fn expand_zip(zip: &Path, target: &Path) -> Result<(), String> {
+    let script = format!(
+        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+        zip.to_string_lossy().replace('\'', "''"),
+        target.to_string_lossy().replace('\'', "''")
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| format!("无法调用解压工具：{error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "解压 zip 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+/// 在解压出来的目录里找插件根目录（含 plugin.json 的那一层）。
+fn locate_plugin_dir(stage: &Path) -> Result<PathBuf, String> {
+    if stage.join(MANIFEST_FILE).is_file() {
+        return Ok(stage.to_path_buf());
+    }
+    let entries = fs::read_dir(stage).map_err(|error| format!("无法读取解压目录：{error}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join(MANIFEST_FILE).is_file() {
+            return Ok(path);
+        }
+    }
+    Err("zip 里没有找到 plugin.json（应位于压缩包根目录或唯一一层子目录里）。".to_string())
+}
+
 #[tauri::command]
 pub fn install_plugin(app: AppHandle, source: String) -> Result<PluginInfo, String> {
     let source = PathBuf::from(source.trim());
+    let root = plugins_root(&app)?;
+
+    // 支持直接装 zip：先解到插件目录下的临时文件夹，再按普通文件夹流程安装。
+    let mut staging: Option<PathBuf> = None;
+    let source = if source.is_file()
+        && source
+            .extension()
+            .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+    {
+        let stage = root.join(format!(".installing-{}", std::process::id()));
+        if stage.exists() {
+            fs::remove_dir_all(&stage).map_err(|error| format!("无法清理临时目录：{error}"))?;
+        }
+        fs::create_dir_all(&stage).map_err(|error| format!("无法创建临时目录：{error}"))?;
+        expand_zip(&source, &stage)?;
+        let dir = locate_plugin_dir(&stage)?;
+        staging = Some(stage);
+        dir
+    } else {
+        source
+    };
+
     if !source.is_dir() {
-        return Err("请选择插件文件夹（文件夹根目录需要包含 plugin.json；zip 请先解压）。".to_string());
+        return Err("请选择插件文件夹或 .zip（文件夹根目录需要包含 plugin.json）。".to_string());
     }
     let source = source
         .canonicalize()
-        .map_err(|error| format!("无法读取插件文件夹：{error}"))?;
+        .map_err(|error| format!("无法读取插件：{error}"))?;
     let manifest = read_manifest(&source.join(MANIFEST_FILE))?;
-    let root = plugins_root(&app)?;
     let target = root.join(&manifest.id);
     if target.exists() {
+        if let Some(stage) = staging {
+            let _ = fs::remove_dir_all(stage);
+        }
         return Err(format!("插件 {} 已经安装。", manifest.id));
     }
-    copy_plugin_directory(&source, &target)?;
-    // 复制完成后再读一次，确保复制结果可用。
-    let installed = read_manifest(&target.join(MANIFEST_FILE))?;
-    Ok(plugin_info_from(installed, &target, false))
+    let result = copy_plugin_directory(&source, &target)
+        .and_then(|_| read_manifest(&target.join(MANIFEST_FILE)))
+        .map(|installed| plugin_info_from(installed, &target, false));
+    if let Some(stage) = staging {
+        let _ = fs::remove_dir_all(stage);
+    }
+    result
 }
 
 #[tauri::command]
 pub fn remove_plugin(app: AppHandle, id: String) -> Result<(), String> {
-    if id == BUILTIN_VIDEO_ID || id == BUILTIN_RELATIONSHIP_ID {
-        return Err("内置插件不能删除。".to_string());
-    }
     if !valid_plugin_id(&id) {
         return Err("插件 id 无效。".to_string());
     }
