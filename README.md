@@ -7,7 +7,7 @@
   <p>一只住在 Windows 桌面上的线条小狗：陪聊、管待办、记剪贴板、控制音乐、提醒 QQ/微信消息，还能帮你刷 B 站和抖音。</p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-2.0.1-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-2.0.2-orange">
     <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4">
     <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24C8DB">
     <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB">
@@ -48,12 +48,12 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 - **隐藏一起收**：用显示 / 隐藏快捷键、托盘隐藏或面板上的收起按钮隐藏桌宠时，Bongo、陪伴狗和跟随鼠标的小狗会一起消失；重新显示时按原配置一并放回来。
 - **收起面板快捷键**：另一个可录制全局快捷键，默认 `Ctrl+Alt+Shift+C`，展开面板时按一下直接收回成小狗；在设置窗口「互动」里改键，被占用时会回滚提示，并会后台重试；和「显示 / 隐藏桌宠」用同一个组合键会被拦下。
 - **桌面图标开关**：设置页「其他」里可一键隐藏 / 恢复桌面图标（当前桌面图标为隐藏状态时也能直接点回来）。
-- **桌面图标台球**：插件页里点「和小狗开一局」，把桌面图标当成台球——拉杆蓄力、松手击球、碰撞入袋，小狗在旁边跟着白球加油。玩法参考开源项目 [desktop-icon-billiards](https://github.com/liuxiaogang-com/desktop-icon-billiards)（作者 GitHub@liuxiaogang-com，MIT）；真实图标会被摆成三角球阵并在桌面上滚动、入袋，退出后自动恢复原位置。
+- **桌面图标台球**：装上 `billiards.zip` 插件后，插件页点「打开」就能和小狗开一局——把桌面图标当成台球，拉杆蓄力、松手击球、碰撞入袋，小狗在旁边跟着白球加油。玩法参考开源项目 [desktop-icon-billiards](https://github.com/liuxiaogang-com/desktop-icon-billiards)（作者 GitHub@liuxiaogang-com，MIT）；只有点「开始这一局」才会搬动真实图标，退出立即恢复原位置，应用启动/退出、窗口挂载都不会碰桌面。
 - **主动程度可调（0–100）**：一个滑块同时决定冷却时间、每小时上限、状态模式稳定时长与免打扰时段，设置里实时显示「大约每 X 分钟最多一次、每小时不超过 Y 次」。- **自动更新（OTA）**：启动后自动检查新版本并每 4 小时复查；发现更新时收起态弹气泡、展开态显示更新条，点击即可下载签名安装包、安装并重启。设置页保留手动检查入口。
 
 ### 快捷面板
 
-- **插件中心**：B 站 / 抖音自动翻页作为内置插件，与第三方插件放在同一页；第三方插件只需一个含 `plugin.json` 的文件夹，可安装、停用、卸载和运行动作。卡片保持简洁，完整使用说明在悬停浮窗里查看。开发说明见 [`docs/plugins.md`](docs/plugins.md)。
+- **插件中心**：应用默认不预置任何插件，插件中心初始为空；每个插件打成一个独立 zip（`billiards` / `video-automation` / `relationship` / `hello-world`），把 zip 或文件夹路径粘进插件中心点「安装插件」即可，支持停用、卸载和运行动作。卡片保持简洁，完整使用说明在悬停浮窗里查看。开发说明见 [`docs/plugins.md`](docs/plugins.md)。
 - **快捷面板热键**：整个快捷入口面板共用一个系统级热键，按一次直接打开快捷方式面板，而不是逐个应用设置；点击热键按钮录制，右键清除。
 - **搜索应用直接打开**：面板最上方就是应用搜索框，用面板热键打开后**自动聚焦、可以直接打字**（窗口聚焦时会补抢焦点），输入软件名后 **↑ / ↓** 在结果里切换、**Enter** 打开选中的软件、**Esc** 清空；鼠标悬停会同步高亮。点结果按钮仍然是把它加进快捷入口，不会误打开。
 - **常用脚本可靠启动**：快捷入口中的 `.cmd` / `.bat` 用带 `/d /c call` 的 `cmd.exe` 执行，`.ps1` 用 PowerShell，`.py` 先用 `py.exe`，没有 Python Launcher 时回退 `python.exe`；所有脚本都使用脚本所在目录作为工作目录，带空格的路径也能运行。

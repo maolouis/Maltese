@@ -81,7 +81,9 @@ Maltese 的「插件」页同时管理内置功能和第三方插件。当前的
 - 写 `"ui": "host"` 表示界面由宿主渲染。**自动刷视频、关系就是这样分发的**：它们的
   `plugin.json` 在 `examples/plugins/video-automation`、`examples/plugins/relationship`，
   用 `scripts/pack-plugins.ps1` 打成 zip 后由用户自行安装，应用本身不内置、不预置任何插件。
-  桌面图标台球仍走自己的卡片（不是插件）。
+- **桌面图标台球也是独立插件**：`examples/plugins/billiards`（`ui: "host"`），装好后插件页出现
+  「桌面图标台球」，它的「打开」走覆盖桌面的独立窗口（`open_billiards_window`），
+  玩法与安全设计见 `docs/billiards.md`。
 
 插件页面里的 iframe 与宿主隔离，只能用自己的前端能力；需要启动本机程序时，仍然
 在插件中心点它声明的动作。
@@ -90,7 +92,9 @@ Maltese 的「插件」页同时管理内置功能和第三方插件。当前的
 
 - **默认不安装任何插件**，插件中心初始是空的。
 - 每个插件打成一个独立 zip：`powershell -File scripts/pack-plugins.ps1 -OutputDir <目录>`，
-  压缩包里带一层同名目录，根目录含 `plugin.json`。
+  压缩包里带一层同名目录，根目录含 `plugin.json`。当前仓库产出 4 个：
+  `billiards.zip`（桌面图标台球）、`video-automation.zip`（自动刷视频）、`relationship.zip`（关系）、
+  `hello-world.zip`（最小示例）。
 - **安装**：把插件 zip 或文件夹路径粘进插件中心点「安装插件」即可，zip 由宿主解压
   （只取含 `plugin.json` 的那一层目录）；也可以把文件夹放进插件目录后点「刷新」。
 - **停用**：只在本机记录停用状态，不删除文件；重新启用后动作恢复。
