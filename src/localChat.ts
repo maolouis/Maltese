@@ -45,8 +45,11 @@ export const LOCAL_CHAT_UPDATED_EVENT = "maltese-local-chat-settings-updated";
 
 export const DEFAULT_LOCAL_CHAT: LocalChatConfig = {
   backend: "local",
-  baseUrl: "http://127.0.0.1:8080/v1",
-  model: "qwen3.6-35b-a3b-ud-q4_k_xl",
+  // 默认留空：本地模型是用户自己装的服务，不同机器地址和模型名都不一样，
+  // 不能把某台电脑的 Strata 部署（8080 / qwen3.6…）当成出厂默认。
+  // 需要的话在设置里点 Ollama / LM Studio / Strata 预设，或手动填。
+  baseUrl: "",
+  model: "",
   apiKey: "",
   maxTokens: 256,
   temperature: 0.7,
@@ -64,9 +67,7 @@ export function loadLocalChatConfig(): LocalChatConfig {
     const parsed = JSON.parse(raw) as Partial<LocalChatConfig>;
     return {
       backend: parsed.backend === "local" ? "local" : "dsh",
-      baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl.trim()
-        ? parsed.baseUrl.trim()
-        : DEFAULT_LOCAL_CHAT.baseUrl,
+      baseUrl: typeof parsed.baseUrl === "string" ? parsed.baseUrl.trim() : "",
       model: typeof parsed.model === "string" ? parsed.model.trim() : "",
       apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
       maxTokens: typeof parsed.maxTokens === "number" && Number.isFinite(parsed.maxTokens)
@@ -98,7 +99,8 @@ export function loadLocalChatConfig(): LocalChatConfig {
 export function saveLocalChatConfig(config: LocalChatConfig) {
   const next: LocalChatConfig = {
     backend: config.backend === "local" ? "local" : "dsh",
-    baseUrl: config.baseUrl.trim() || DEFAULT_LOCAL_CHAT.baseUrl,
+    // 空值就是空值：以前这里会把清空的地址强行填回默认的 Strata 地址，用户清不掉。
+    baseUrl: config.baseUrl.trim(),
     model: config.model.trim(),
     apiKey: config.apiKey,
     maxTokens: Math.max(32, Math.min(2048, Math.round(config.maxTokens || DEFAULT_LOCAL_CHAT.maxTokens))),

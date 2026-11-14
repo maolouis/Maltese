@@ -55,6 +55,7 @@ const en: Translations = {
     modelTestEmpty: "Connected, but the service returned no model list",
     modelClose: "Done",
     modelNotConfigured: "No local model selected",
+    modelBaseUrlMissing: "No local model endpoint yet",
     modelBadgeLocal: (model) => model ? `Local · ${model}` : "Local · no model",
     imageAttach: "Add image",
     imageRemove: "Remove image",

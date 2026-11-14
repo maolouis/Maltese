@@ -407,6 +407,12 @@ export function PetChat() {
       setShowModelSettings(true);
       return;
     }
+    // 本地模型默认留空，没填地址时先引导去设置，别把 Rust 侧的地址报错直接甩给用户。
+    if (chatConfig.backend === "local" && !chatConfig.baseUrl.trim()) {
+      setError(t.chat.modelBaseUrlMissing);
+      setShowModelSettings(true);
+      return;
+    }
     if (chatConfig.backend === "dsh" && sendImages.length > 0) {
       setError(t.chat.multimodalLocalOnly);
       return;

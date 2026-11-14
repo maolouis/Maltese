@@ -57,6 +57,7 @@ export type Translations = {
     modelTestEmpty: string;
     modelClose: string;
     modelNotConfigured: string;
+    modelBaseUrlMissing: string;
     modelBadgeLocal: (model: string) => string;
     imageAttach: string;
     imageRemove: string;

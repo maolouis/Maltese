@@ -55,6 +55,7 @@ const zhCN: Translations = {
     modelTestEmpty: "连接成功，但服务没有返回模型列表",
     modelClose: "完成",
     modelNotConfigured: "还没有选择本地模型",
+    modelBaseUrlMissing: "还没有填写本地模型接口地址",
     modelBadgeLocal: (model) => model ? `本地 · ${model}` : "本地 · 未选模型",
     imageAttach: "添加图片",
     imageRemove: "移除图片",
