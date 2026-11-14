@@ -87,6 +87,8 @@ node scripts/build-windows.mjs   # 一键打包（优先 pnpm，兜底 npm）
 - **版本与推送要用户确认**：未经用户明确同意，**不改版本号**（`package.json` / `src-tauri/tauri.conf.json` /
   `src-tauri/Cargo.toml` / README 徽章），**不 `git push`**、**不打 Release**。修 bug、加功能照常做，
   本地构建与本地提交照常；等用户说“发布”再升版本号并推送。
+- **发布历史只增不减**：GitHub 上的 Release 与 tag **每个版本都要保留**，不删除、不改写既有 Release；
+  本地 `release\` 只维护最新版本产物，旧版本不备份（要留档就以 GitHub Release 为准）。
 - **交付前检查**：发版前必须过 [docs/release-checklist.md](docs/release-checklist.md)，并跑
   `powershell -File scripts/verify-release-artifacts.ps1 <产物...>`；它会检查签名状态、调用 Defender 扫描、输出 SHA-256，
   检出威胁或扫描失败时退出码为 1，不能跳过。
