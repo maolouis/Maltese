@@ -213,8 +213,17 @@ AppStarted
 7. **强制结束恢复**：任务管理器结束进程后立即重启，不应被 stale lock / 子进程阻塞。
 8. **13 窗口懒加载**：启动时只创建 main；打开设置/插件/台球时才创建对应窗口，冷启动时间应明显下降。
 
-## 6. 待确认
+## 6. 2026-11-16 实机验证记录
+
+本轮在 Windows 实机用**独立 WebView2 profile**（`WEBVIEW2_USER_DATA_FOLDER`）+ CDP 验证，不写默认 profile：
+
+- debug exe 启动后 13 个窗口全部加载，WebView2 页面地址均为 `http://localhost:1420/...`，包括 `main / settings / bubble / translation / pinned / plugin / billiards / bongo / cursor / companion 1–4`。
+- 设置页实际窗口 `560×780`；表情轮播墙展开后 244 个格子、8 列、31 行，行高 `50.25px`，`grid-auto-rows: max-content` 生效；页面 275 张图片全部 `naturalWidth=240`，0 张加载失败。
+- 主窗口桌宠实际加载 `xiaobai/sleep/p19-7.gif`（240×240），点击后切换到另一张 sleep GIF，说明归位后的素材路径可用。
+- **注意**：`src-tauri/target/debug/assets` 是上一次构建时的素材副本，不会随 `assets/` 里的文件移动自动更新；只跑 `npm run build` 后直接启动旧 debug exe 会看到旧路径 404。实机测试前需重新 `cargo build` / `tauri build`，或把当前 `assets/` 同步到该目录。生产打包会通过 `bundle.resources` 复制当前素材。
+
+## 7. 待确认
 
 - `notification_diagnostics::verification_identifier()` 的环境变量来源与使用场景（哪个构建/脚本会设置）。
 - 用户机器上两个旧进程分别来自哪个构建（安装版 / 旧 debug / 测试包），需要 `Get-Process` + `Path` 才能定论。
-- 是否要把 `shared` 池按角色拆分后同步调整 `docs/pet-characters.md` 的素材数量说明（见本轮表情包拆分任务）。
+- 表情包拆分已完成并已更新 `docs/pet-characters.md`（785 张 / `shared` 180 张），此处保留为历史待办。
