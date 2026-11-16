@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, CheckCheck, ChevronDown, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useTranslation } from "./i18n";
@@ -12,7 +12,7 @@ import {
   usePetGifRotationStates,
   type PetGifRotationItem,
 } from "./petGifRotation";
-import { characterAllFrames, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
+import { characterAllFrames, characterFramesForState, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
 import "./PetGifRotationSettings.css";
 
 type CustomPetGif = {
@@ -51,6 +51,23 @@ export function PetGifRotationSettings() {
   }));
   const selectedKeys = new Set(items.map((item) => item.path ?? item.src).filter(Boolean));
   const missingItems = availableItems.filter((item) => !selectedKeys.has(item.src));
+
+  // 轮播范围里实际会轮到的全部 GIF（按勾选状态合并，和主窗口的合并规则一致），
+  // 让用户一眼看到「点了全选之后到底轮哪些图」，而不是只看到当前表情那一列。
+  const scopeFrames = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: Array<{ src: string; state: string; name: string }> = [];
+    for (const key of rotationStates) {
+      const configured = (config[key] ?? []).map(petGifItemSrc).filter(Boolean);
+      const list = configured.length > 0 ? configured : characterFramesForState(character, key);
+      for (const src of list) {
+        if (!src || seen.has(src)) continue;
+        seen.add(src);
+        merged.push({ src, state: key, name: petGifFileName(src) });
+      }
+    }
+    return merged;
+  }, [character, config, rotationStates]);
 
   const saveItems = (nextItems: PetGifRotationItem[]) => {
     savePetGifRotationConfig({ ...config, [state]: nextItems }, character);
@@ -233,6 +250,28 @@ export function PetGifRotationSettings() {
             >
               {t.petGifs.currentStateOnly}
             </button>
+          </div>
+          <div className="pet-gif-settings__scope-preview">
+            <div className="pet-gif-settings__scope-preview-head">
+              <span>{t.petGifs.rotationFrames}</span>
+              <small>{t.petGifs.count(scopeFrames.length)}</small>
+            </div>
+            {scopeFrames.length === 0 ? (
+              <p className="pet-gif-settings__scope-preview-empty">{t.petGifs.rotationFramesEmpty}</p>
+            ) : (
+              <div className="pet-gif-settings__scope-grid">
+                {scopeFrames.map((frame) => (
+                  <figure
+                    className="pet-gif-scope-item"
+                    key={frame.src}
+                    title={`${t.petGifs.states[frame.state] ?? frame.state} · ${frame.name}`}
+                  >
+                    <img src={frame.src} alt="" loading="lazy" draggable={false} />
+                    <figcaption>{t.petGifs.states[frame.state] ?? frame.state}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            )}
           </div>
         </div>
   

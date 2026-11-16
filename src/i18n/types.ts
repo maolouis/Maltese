@@ -333,6 +333,8 @@ export type Translations = {
     selectAllStates: string;
     currentStateOnly: string;
     scopeCount: (count: number, total: number) => string;
+    rotationFrames: string;
+    rotationFramesEmpty: string;
     states: Record<string, string>;
   };
 

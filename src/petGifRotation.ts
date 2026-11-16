@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { PET_GIF_VARIANTS } from "./petAssets";
 import { builtinAssetRelative, PET_ASSET_PREFIX, petAssetUrl } from "./petAssetBase";
 import {
   characterFramePaths,
@@ -15,6 +14,8 @@ export const PET_GIF_ROTATION_STORAGE_PREFIX = "maltese-pet-gif-rotation:";
 export const PET_GIF_ROTATION_UPDATED_EVENT = "maltese-pet-gif-rotation-updated";
 export const PET_GIF_ROTATION_STATES_KEY = "maltese-pet-gif-rotation-states";
 export const PET_GIF_ROTATION_STATES_EVENT = "maltese-pet-gif-rotation-states-updated";
+/** 轮播范围默认值的一次性迁移标记：旧版默认只勾「待机」。 */
+const SCOPE_MIGRATION_KEY = "maltese-pet-gif-rotation-scope-v2";
 
 export type PetGifRotationItem = {
   id: string;
@@ -52,6 +53,12 @@ export const PET_STATE_LABELS: Record<string, string> = {
   hide: "躲藏",
   chase: "追逐",
   peek: "偷看",
+  angry: "生气",
+  cry: "委屈",
+  love: "比心",
+  ride: "兜风",
+  bath: "泡澡",
+  costume: "装扮",
 };
 
 export function petGifFileName(path: string) {
@@ -82,7 +89,7 @@ export function defaultPetGifRotationConfig(
   character: PetCharacterId = "xiaobai",
 ): PetGifRotationConfig {
   const config: PetGifRotationConfig = {};
-  for (const state of Object.keys(PET_GIF_VARIANTS)) {
+  for (const state of Object.keys(PET_STATE_LABELS)) {
     config[state] = defaultPetGifItems(state, character);
   }
   return config;
@@ -164,23 +171,36 @@ export function savePetGifRotationConfig(
 }
 
 export function loadPetGifRotationStates(): string[] {
-  const valid = Object.keys(PET_GIF_VARIANTS);
+  const valid = Object.keys(PET_STATE_LABELS);
+  const allStates = valid;
   try {
     const raw = window.localStorage.getItem(PET_GIF_ROTATION_STATES_KEY);
-    if (!raw) return ["idle"];
+    if (!raw) {
+      window.localStorage.setItem(SCOPE_MIGRATION_KEY, "1");
+      return allStates;
+    }
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return ["idle"];
+    if (!Array.isArray(parsed)) return allStates;
     const states = [...new Set(parsed.filter((value): value is string =>
       typeof value === "string" && valid.includes(value),
     ))];
-    return states.length > 0 ? states : ["idle"];
+    // 旧默认是「只轮播待机」，素材扩充后大部分时间只看到 idle。升级一次到全状态，
+    // 用户之后在设置页里手动改动会原样保留。
+    if (window.localStorage.getItem(SCOPE_MIGRATION_KEY) !== "1") {
+      window.localStorage.setItem(SCOPE_MIGRATION_KEY, "1");
+      if (states.length <= 1) {
+        window.localStorage.setItem(PET_GIF_ROTATION_STATES_KEY, JSON.stringify(allStates));
+        return allStates;
+      }
+    }
+    return states.length > 0 ? states : allStates;
   } catch {
-    return ["idle"];
+    return allStates;
   }
 }
 
 export function savePetGifRotationStates(states: string[]) {
-  const valid = new Set(Object.keys(PET_GIF_VARIANTS));
+  const valid = new Set(Object.keys(PET_STATE_LABELS));
   const normalized = [...new Set(states.filter((state) => valid.has(state)))];
   const next = normalized.length > 0 ? normalized : ["idle"];
   try {

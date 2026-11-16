@@ -1527,11 +1527,9 @@ export function IslandShell({
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
   // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
-  const carouselFrames = rotationFramesForState(
-    gifRotationConfig,
-    petState,
-    gifRotationStates,
-    petCharacter,
+  const carouselFrames = useMemo(
+    () => rotationFramesForState(gifRotationConfig, petState, gifRotationStates, petCharacter),
+    [gifRotationConfig, gifRotationStates, petCharacter, petState],
   );
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: 10_000,

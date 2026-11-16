@@ -335,6 +335,8 @@ const zhCN: Translations = {
     selectAllStates: "全选所有状态",
     currentStateOnly: "仅当前状态",
     scopeCount: (count, total) => `已选 ${count} / ${total} 个状态`,
+    rotationFrames: "轮播中的 GIF",
+    rotationFramesEmpty: "还没有选任何状态，待机时会退回默认素材。",
     states: {
       idle: "待机",
       resting: "休息",
@@ -355,6 +357,12 @@ const zhCN: Translations = {
       hide: "躲藏",
       chase: "追逐",
       peek: "偷看",
+      angry: "生气",
+      cry: "委屈",
+      love: "比心",
+      ride: "兜风",
+      bath: "泡澡",
+      costume: "装扮",
     },
   },
 

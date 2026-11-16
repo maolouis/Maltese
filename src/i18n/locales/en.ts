@@ -332,6 +332,8 @@ const en: Translations = {
     selectAllStates: "Select all states",
     currentStateOnly: "Current state only",
     scopeCount: (count, total) => `${count} / ${total} states selected`,
+    rotationFrames: "GIFs in rotation",
+    rotationFramesEmpty: "No state selected; idle falls back to the default set.",
     states: {
       idle: "Idle",
       resting: "Resting",
@@ -352,6 +354,12 @@ const en: Translations = {
       hide: "Hiding",
       chase: "Chasing",
       peek: "Peeking",
+      angry: "Grumpy",
+      cry: "Sulking",
+      love: "Heart",
+      ride: "Riding",
+      bath: "Bathing",
+      costume: "Costume",
     },
   },
 

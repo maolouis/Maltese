@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type RotationOptions = {
   /** 每张 GIF 停留的毫秒数。 */
@@ -9,8 +9,12 @@ type RotationOptions = {
 
 const preloaded = new Set<string>();
 
-function preload(frames: readonly string[]) {
-  for (const frame of frames) {
+/** 只预加载后面几张：素材池可能有几百张，全量解码会吃掉几十 MB 内存。 */
+const PRELOAD_AHEAD = 4;
+
+function preload(frames: readonly string[], start = 0) {
+  for (let offset = 0; offset < PRELOAD_AHEAD; offset += 1) {
+    const frame = frames[(start + offset) % Math.max(1, frames.length)];
     if (!frame || preloaded.has(frame)) continue;
     preloaded.add(frame);
     const image = new Image();
@@ -31,7 +35,8 @@ export function usePetGifRotation(
 ) {
   const [source, setSource] = useState(() => frames[0] ?? "");
   const indexRef = useRef(0);
-  const key = frames.join("|");
+  // 合并后的轮播池可能有几百张，每次都 join 会白烧 CPU；数组身份变了才算。
+  const key = useMemo(() => frames.join("|"), [frames]);
 
   useEffect(() => {
     if (frames.length === 0) {
@@ -51,6 +56,7 @@ export function usePetGifRotation(
     const timer = window.setInterval(() => {
       indexRef.current = (indexRef.current + 1) % frames.length;
       setSource(frames[indexRef.current] ?? frames[0] ?? "");
+      preload(frames, indexRef.current + 1);
     }, Math.max(2_000, intervalMs));
 
     return () => window.clearInterval(timer);
