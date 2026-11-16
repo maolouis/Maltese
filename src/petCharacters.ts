@@ -99,11 +99,12 @@ const ACTION_FALLBACK: Record<string, string[]> = {
   costume: ["happy", "idle"],
 };
 
-/** 招牌动作固定播共享池里的那一张，和 LineDogPet 手感一致。 */
-const FIXED_SHARED_FILES: Record<string, string> = {
-  pickup: "举起来.gif",
-  spin: "转圈.gif",
-  chase: "狂奔.gif",
+/** 招牌动作固定播指定池里的那一张，和 LineDogPet 手感一致。 */
+const FIXED_SHARED_FILES: Record<string, { character: string; fileName: string }> = {
+  pickup: { character: "shared", fileName: "举起来.gif" },
+  spin: { character: "shared", fileName: "转圈.gif" },
+  // 这张是单只小鸡毛，归到小鸡毛池；界面仍固定用它作为追逐招牌动作。
+  chase: { character: "xiaojimao", fileName: "狂奔.gif" },
 };
 
 /** 默认角色轮播里同框素材的露面比例：每 3 张本角色图插 1 张同框图。 */
@@ -138,11 +139,13 @@ function sharedFrames(action: string): string[] {
   return [];
 }
 
-function fixedSharedFrame(action: string): string | undefined {
-  const fileName = FIXED_SHARED_FILES[action];
-  if (!fileName) return undefined;
-  const pool = assetsOf("shared", action);
-  return pool.find((frame) => decodeName(frame) === fileName);
+function fixedSharedFrame(action: string, character: string): string | undefined {
+  const entry = FIXED_SHARED_FILES[action];
+  if (!entry) return undefined;
+  // 共享招牌图给所有单角色用；某个角色专属的招牌图只给该角色用。
+  if (entry.character !== "shared" && entry.character !== character) return undefined;
+  const pool = assetsOf(entry.character === "shared" ? "shared" : entry.character, action);
+  return pool.find((frame) => decodeName(frame) === entry.fileName);
 }
 
 function fallbackIdle(): string[] {
@@ -180,9 +183,9 @@ function computeFrames(
   ownOnly: boolean,
 ): string[] {
   const action = STATE_TO_ACTION[state] ?? "idle";
-  const fixed = fixedSharedFrame(action);
+  const fixed = fixedSharedFrame(action, character);
   if (fixed && character !== "duo") {
-    // 抱起/转圈/追逐是 LineDogPet 的招牌动作，固定用同框那一张。
+    // 抱起/转圈/追逐是 LineDogPet 的招牌动作，固定用指定池里的那一张。
     return [fixed, ...collectFrames(character, action).slice(0, 2)];
   }
 
