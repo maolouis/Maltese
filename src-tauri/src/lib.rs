@@ -2950,7 +2950,14 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
-    apply_stage_geometry(&window, read_window_state(), false)?;
+    // 几何计算依赖 webview 的同步消息（inner_size / monitor / position）。
+    // dev 下 webview 还没握手完成时这些调用会失败，旧写法直接把错误
+    // 冒泡出去，后面的 window.show() 就永远执行不到，表现为「初始化卡住、
+    // 桌宠一直不出现」。这里把几何失败降级成日志，保证窗口一定能显示，
+    // 随后前端 set_island_layout 会再触发一次几何同步。
+    if let Err(error) = apply_stage_geometry(&window, read_window_state(), false) {
+        eprintln!("failed to apply island geometry when showing: {error}");
+    }
     window.show().map_err(|error| error.to_string())?;
     // 置顶是层级属性，与位置无关：重新显示后再断言一次，避免被其它窗口压到下面。
     let _ = window.set_always_on_top(true);

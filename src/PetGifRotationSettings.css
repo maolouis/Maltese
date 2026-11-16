@@ -161,6 +161,10 @@
 .pet-gif-settings__scope-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  /* 行高必须给 max-content：格子只有 aspect-ratio、内部 img 是 100% 高，
+     默认的 auto 轨道会把行压成几像素，178 张图全叠在一起变成「切片条」。 */
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 4px;
   max-height: 216px;
   overflow-y: auto;
