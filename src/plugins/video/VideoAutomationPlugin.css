@@ -144,3 +144,31 @@
   color: #14352a;
   font-size: 16px;
 }
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__section {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-channel,
+:is(.plugin-window, .video-page, .plugins-page) .video-digest {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__diagnostics {
+  font-size: 12px;
+  color: #5b6470;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__danger {
+  justify-self: start;
+  border: 1px solid #f2c2bd;
+  background: #fff6f5;
+  color: #b64238;
+}

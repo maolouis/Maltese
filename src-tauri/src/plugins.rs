@@ -53,6 +53,9 @@ pub struct PluginManifest {
     /// 插件自己的页面（相对插件目录的 html 文件名）。留空就只提供命令动作。
     #[serde(default)]
     pub ui: String,
+    /// 清单声明的能力集合；旧清单没有该字段时视为空。
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     #[serde(default)]
     pub actions: Vec<PluginAction>,
 }
@@ -72,6 +75,8 @@ pub struct PluginInfo {
     pub path: Option<String>,
     /// 插件自带页面文件的绝对路径；内置插件由宿主界面渲染，这里为空。
     pub ui: Option<String>,
+    /// 清单声明的能力集合，宿主按能力渲染可执行动作。
+    pub capabilities: Vec<String>,
     pub actions: Vec<PluginAction>,
 }
 
@@ -175,6 +180,7 @@ fn plugin_info_from(manifest: PluginManifest, path: &Path, locked: bool) -> Plug
         locked,
         ui: resolve_ui_file(path, &manifest.ui),
         path: Some(path.to_string_lossy().to_string()),
+        capabilities: manifest.capabilities,
         actions: manifest.actions,
     }
 }

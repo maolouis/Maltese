@@ -55,6 +55,7 @@ type PetSettings = {
   lockCorner: Corner;
   fullscreenAvoid: FullscreenAvoid;
   fullscreenHideExtras: boolean;
+  fullscreenHideBongo: boolean;
   autoTuck: boolean;
   autoTuckSeconds: number;
   observeApps: boolean;
@@ -100,6 +101,7 @@ const DEFAULTS: PetSettings = {
   lockCorner: "",
   fullscreenAvoid: "tuck",
   fullscreenHideExtras: true,
+  fullscreenHideBongo: true,
   autoTuck: false,
   autoTuckSeconds: 30,
   observeApps: true,
@@ -513,10 +515,16 @@ export default function SettingsWindow() {
           items={[["tuck", "缩边"], ["hide", "隐藏"], ["off", "不处理"]]}
           onChange={(value) => update("fullscreenAvoid", value)}
         />
+        <Switch
+          label="全屏时 Bongo 也收起来"
+          hint="关闭后，全屏玩游戏 / 看视频时 Bongo 仍然留在桌面上；与上面“全屏时小狗”互不影响"
+          checked={settings.fullscreenHideBongo}
+          onChange={(value) => update("fullscreenHideBongo", value)}
+        />
         {settings.fullscreenAvoid !== "off" && (
           <Switch
-            label="全屏时连 Bongo 一起隐藏"
-            hint="Bongo / 陪伴狗 / 跟随鼠标的小狗随主狗一起收起来"
+            label="全屏时连陪伴狗 / 跟随小狗一起隐藏"
+            hint="陪伴狗 / 跟随鼠标的小狗随主狗一起收起来（不含 Bongo）"
             checked={settings.fullscreenHideExtras}
             onChange={(value) => update("fullscreenHideExtras", value)}
           />

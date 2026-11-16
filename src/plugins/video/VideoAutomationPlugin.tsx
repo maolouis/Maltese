@@ -1,354 +1,287 @@
-// 「自动刷视频」插件的界面。
+// 「小狗自主刷视频」插件面板。
 //
-// 从 App.tsx 拆出来，插件窗口（`index.html?window=plugin`）和插件中心都复用同一个面板。
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+// 小狗用独立浏览器看推荐流，按兴趣整理小结，再通过聊天/气泡回传；
+// 面板只负责启停、配置、通道诊断与小结展示，不代用户评论或发布。
+
+import { useCallback, useEffect, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./VideoAutomationPlugin.css";
 import "../../App.css";
-import { loadLocalChatConfig } from "../../localChat";
+import { useVideoPluginState } from "./useVideoPluginState";
+import { VideoChannelCard } from "./VideoChannelCard";
+import { VideoDigestList } from "./VideoDigestList";
+import { errorMessageForCode, type Platform } from "./types";
+import { formatDigestMessage } from "../../videoDelivery";
 
-export type VideoAutomationSnapshot = {
-  provider: "bilibili" | "douyin";
-  running: boolean;
-  intervalSeconds: number;
-  maxMinutes: number;
-  steps: number;
-  startedAt: number | null;
-  lastActionAt: number | null;
-  currentUrl: string;
-  waitingForBrowser: boolean;
-  foregroundTitle: string;
-  foregroundProcess: string;
-  error: string | null;
+type Props = {
+  onNotice: (notice: string) => void;
 };
 
-const DEFAULT_VIDEO_AUTOMATION: VideoAutomationSnapshot = {
-  provider: "bilibili",
-  running: false,
-  intervalSeconds: 45,
-  maxMinutes: 30,
-  steps: 0,
-  startedAt: null,
-  lastActionAt: null,
-  currentUrl: "",
-  waitingForBrowser: false,
-  foregroundTitle: "",
-  foregroundProcess: "",
-  error: null,
-};
+function codeOf(error: unknown): string | null {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
+  }
+  return null;
+}
 
-export function VideoAutomationPanel({ onNotice }: { onNotice: (notice: string) => void }) {
-  const [snapshot, setSnapshot] = useState<VideoAutomationSnapshot>(DEFAULT_VIDEO_AUTOMATION);
-  const [provider, setProvider] = useState<"bilibili" | "douyin">("bilibili");
-  const [intervalSeconds, setIntervalSeconds] = useState(45);
+function phaseText(running: boolean, phase: string, waiting: boolean): string {
+  if (!running) {
+    if (phase === "digesting") return "正在整理小结";
+    if (phase === "ended") return "这一轮看完了";
+    return "已暂停";
+  }
+  if (phase === "preparing") return "正在准备小狗浏览器";
+  if (phase === "awaitingLogin") return "等待你登录一次";
+  if (phase === "userTakeover") return "你接管了，先让你看";
+  return waiting ? "等待视频页" : "小狗正在看";
+}
+
+export function VideoAutomationPanel({ onNotice }: Props) {
+  const video = useVideoPluginState();
+  const [provider, setProvider] = useState<Platform>("bilibili");
+  const [pageInterval, setPageInterval] = useState(45);
   const [maxMinutes, setMaxMinutes] = useState(30);
-  // 评论区互动：生成一句评论 → 复制 / 直接敲进已聚焦的评论框。
-  const [comment, setComment] = useState("");
-  const [commentBusy, setCommentBusy] = useState(false);
-  const [autoComment, setAutoComment] = useState(() => {
-    try {
-      return window.localStorage.getItem("maltese-video-auto-comment") === "on";
-    } catch {
-      return false;
-    }
-  });
-  // 自动发送：剪贴板里的评论直接用 Ctrl+V + Enter 发出去。
-  // 需要先把光标放进评论框（点一次），之后每轮都能自动发。
-  const [autoSendComment, setAutoSendComment] = useState(() => {
-    try {
-      return window.localStorage.getItem("maltese-video-auto-send-comment") === "on";
-    } catch {
-      return false;
-    }
-  });
-
-  const refresh = useCallback(async () => {
-    try {
-      const next = await invoke<VideoAutomationSnapshot>("get_video_automation_state");
-      setSnapshot(next);
-      setProvider(next.provider);
-      setIntervalSeconds(next.intervalSeconds);
-      setMaxMinutes(next.maxMinutes);
-    } catch {
-      // Browser preview can run without the native API.
-    }
-  }, []);
+  const [sampleInterval, setSampleInterval] = useState(2);
+  const [dailyDeliveries, setDailyDeliveries] = useState(2);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 2000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    const snapshot = video.snapshot;
+    if (!snapshot) return;
+    setProvider(snapshot.provider);
+    setPageInterval(snapshot.intervalSeconds);
+    setMaxMinutes(snapshot.maxMinutes);
+  }, [video.snapshot]);
+
+  const start = useCallback(async () => {
+    setError("");
+    try {
+      await video.start(provider);
+      onNotice(provider === "bilibili" ? "小狗开始看 B 站了" : "小狗开始看抖音了");
+    } catch (reason) {
+      const message = errorMessageForCode(codeOf(reason), String(reason));
+      setError(message);
+      onNotice(`启动失败：${message}`);
+    }
+  }, [onNotice, provider, video]);
+
+  const stop = useCallback(async () => {
+    setError("");
+    try {
+      await video.stop();
+      onNotice("小狗已停止观看");
+    } catch (reason) {
+      setError(errorMessageForCode(codeOf(reason), String(reason)));
+    }
+  }, [onNotice, video]);
+
+  const openLogin = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      await invoke("video_open_login_window", { provider });
+      onNotice("已打开小狗专用浏览器，请登录一次");
+    } catch (reason) {
+      setError(errorMessageForCode(codeOf(reason), String(reason)));
+    }
+  }, [onNotice, provider]);
 
   const saveConfig = useCallback(async () => {
-    await invoke("set_video_automation_config", {
-      config: {
-        intervalSeconds: Math.max(15, Math.round(intervalSeconds)),
+    setError("");
+    try {
+      await video.updateConfig({
+        provider,
+        pageIntervalSeconds: Math.max(15, Math.round(pageInterval)),
         maxMinutes: Math.max(1, Math.round(maxMinutes)),
-      },
-    });
-  }, [intervalSeconds, maxMinutes]);
-
-  const start = async () => {
-    try {
-      await saveConfig();
-      await invoke("start_video_automation", { provider });
-      await refresh();
-      onNotice((provider === "bilibili" ? "B站" : "抖音") + " 自动刷视频已开始，请先在浏览器完成登录");
-    } catch (error) {
-      onNotice("自动刷视频启动失败：" + String(error));
+        sampleIntervalSeconds: Math.min(5, Math.max(1, Math.round(sampleInterval))),
+        dailyDeliveries: Math.min(5, Math.max(1, Math.round(dailyDeliveries))),
+      });
+      onNotice("小狗的观看配置已保存");
+    } catch (reason) {
+      setError("配置超出允许范围，请检查输入。");
+      onNotice(errorMessageForCode(codeOf(reason), "配置保存失败"));
     }
-  };
+  }, [dailyDeliveries, maxMinutes, onNotice, pageInterval, provider, sampleInterval, video]);
 
-  const stop = async () => {
+  const openOfficial = useCallback(async (target: "publish" | "live") => {
+    const url =
+      target === "publish"
+        ? provider === "bilibili"
+          ? "https://member.bilibili.com/platform/upload/video/frame"
+          : "https://creator.douyin.com/creator-micro/content/upload"
+        : provider === "bilibili"
+          ? "https://link.bilibili.com/p/center/index#/user-center/my-info/live-data"
+          : "https://creator.douyin.com/creator-micro/content/manage?enter_from=live";
     try {
-      await invoke("stop_video_automation");
-      await refresh();
-      onNotice("自动刷视频已暂停");
-    } catch (error) {
-      onNotice("停止自动刷视频失败：" + String(error));
+      await invoke("video_open_external_url", { url });
+      onNotice("已用系统浏览器打开官方页面；发布与开播仍需你本人确认。");
+    } catch (reason) {
+      onNotice(errorMessageForCode(codeOf(reason), "打开官方页面失败"));
     }
-  };
+  }, [onNotice, provider]);
 
-  const generateComment = useCallback(async () => {
+  const draft = video.preview ? formatDigestMessage(video.preview) : "";
+
+  const copyDraft = useCallback(async () => {
+    if (!draft) return;
+    try {
+      await invoke("set_clipboard_text", { text: draft });
+      onNotice("观后感草稿已复制，不会替你发表评论");
+    } catch {
+      onNotice("复制失败");
+    }
+  }, [draft, onNotice]);
+
+  const snapshot = video.snapshot;
+  const running = snapshot?.running ?? false;
+
+  // 「在视频下评论」：只有点发送才会执行，小狗不会自动评论。
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentStatus, setCommentStatus] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+
+  const postComment = async () => {
+    const text = commentDraft.trim();
+    if (!text || commentBusy) return;
     setCommentBusy(true);
-    const title = snapshot.foregroundTitle || "";
-    const fallback = [
-      "这个视频讲得挺清楚的，学到了。",
-      "刚好在找这个内容，谢谢分享。",
-      "看到这里忍不住点赞，up 主加油。",
-      "节奏很舒服，看着不累。",
-    ];
+    setCommentStatus("正在把评论输入到视频页面…");
     try {
-      const config = loadLocalChatConfig();
-      const prompt = `你是正在看视频的观众，视频标题是「${title || "未知视频"}」。请写一条不超过 20 个字的中文弹幕风格评论，自然、不夸张、不带话题标签。`;
-      let text = "";
-      try {
-        if (config.backend === "local" && config.model) {
-          text = await invoke<string>("local_chat", {
-            baseUrl: config.baseUrl,
-            model: config.model,
-            apiKey: config.apiKey.trim() || null,
-            message: prompt,
-            history: [],
-            character: "xiaobai",
-            images: null,
-          });
-        } else {
-          const reply = await invoke<{ text: string }>("dsh_chat", {
-            message: prompt,
-            sessionId: null,
-            character: "xiaobai",
-          });
-          text = reply.text;
-        }
-      } catch {
-        text = "";
+      const report = await invoke<{
+        ok: boolean;
+        reason: string;
+        message: string;
+        platform: string;
+      }>("video_post_comment", { text });
+      if (report.ok) {
+        setCommentStatus("评论已提交，去页面里确认一下是否显示");
+        setCommentDraft("");
+      } else {
+        setCommentStatus(report.message || `没发出去（${report.reason}）`);
       }
-      const line = (text || "").trim().replace(/^["「『]|["」』]$/g, "");
-      setComment(line || fallback[Math.floor(Math.random() * fallback.length)]);
+    } catch (error) {
+      setCommentStatus(`发送失败：${String(error)}`);
     } finally {
       setCommentBusy(false);
     }
-  }, [snapshot.foregroundTitle]);
-
-  const copyComment = useCallback(async (text: string) => {
-    try {
-      await invoke("set_clipboard_text", { text });
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  // 自动评论：每次翻页后生成一句并放进剪贴板，用户点开评论框直接 Ctrl+V。
-  const lastStepsRef = useRef(0);
-  useEffect(() => {
-    if (!autoComment) {
-      lastStepsRef.current = snapshot.steps;
-      return;
-    }
-    if (snapshot.steps > lastStepsRef.current) {
-      lastStepsRef.current = snapshot.steps;
-      void (async () => {
-        await generateComment();
-      })();
-    }
-  }, [autoComment, generateComment, snapshot.steps]);
-
-  useEffect(() => {
-    if (!autoComment || !comment) return;
-    void (async () => {
-      const ok = await copyComment(comment);
-      if (!ok || !autoSendComment) return;
-      try {
-        await invoke("press_shortcut", { shortcut: "ctrl+v" });
-        await new Promise((resolve) => window.setTimeout(resolve, 220));
-        await invoke("press_shortcut", { shortcut: "enter" });
-      } catch {
-        // 光标不在评论框时按不出去，忽略
-      }
-    })();
-  }, [autoComment, autoSendComment, comment, copyComment]);
+  };
   return (
-    <section className="video-automation" aria-label="自动刷视频">
+    <section className="video-automation" aria-label="小狗刷视频">
       <div className="video-automation__head">
         <div>
-          <span className="assistant-panel__label">自动翻页</span>
-          <strong>{snapshot.running ? snapshot.waitingForBrowser ? "等待视频页回到前台" : "正在观看" : "已暂停"}</strong>
+          <span className="assistant-panel__label">小狗自主观看</span>
+          <strong>
+            {phaseText(running, snapshot?.phase ?? "idle", snapshot?.waitingForBrowser ?? false)}
+          </strong>
         </div>
-        <span className="video-automation__steps">已翻页 {snapshot.steps} 次</span>
+        <span className="video-automation__steps">
+          条目 {snapshot?.itemCount ?? 0} · 强兴趣 {snapshot?.strongCount ?? 0}
+        </span>
       </div>
+
       <div className="video-automation__controls">
-        <select value={provider} onChange={(event) => setProvider(event.target.value as "bilibili" | "douyin")}>
+        <select
+          value={provider}
+          disabled={running}
+          onChange={(event) => setProvider(event.currentTarget.value as Platform)}
+        >
           <option value="bilibili">B站推荐流</option>
-          <option value="douyin">抖音推荐流</option>
+          <option value="douyin">抖音推荐流（实验）</option>
         </select>
-        <label>间隔 <input type="number" min={15} max={600} value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value) || 45)} /> 秒</label>
-        <label>上限 <input type="number" min={1} max={240} value={maxMinutes} onChange={(event) => setMaxMinutes(Number(event.target.value) || 30)} /> 分钟</label>
-        {snapshot.running ? (
-          <button type="button" onClick={() => void stop()}>暂停</button>
+        <label>
+          每次翻页 <input type="number" min={15} max={600} value={pageInterval} onChange={(event) => setPageInterval(Number(event.currentTarget.value) || 45)} /> 秒
+        </label>
+        <label>
+          上限 <input type="number" min={1} max={240} value={maxMinutes} onChange={(event) => setMaxMinutes(Number(event.currentTarget.value) || 30)} /> 分钟
+        </label>
+        <label>
+          采集间隔 <input type="number" min={1} max={5} value={sampleInterval} onChange={(event) => setSampleInterval(Number(event.currentTarget.value) || 2)} /> 秒
+        </label>
+        <label>
+          每天投递 <input type="number" min={1} max={5} value={dailyDeliveries} onChange={(event) => setDailyDeliveries(Number(event.currentTarget.value) || 2)} /> 次
+        </label>
+        {running ? (
+          <button type="button" onClick={() => void stop()}>停下</button>
         ) : (
-          <button type="button" onClick={() => void start()}>开始</button>
+          <button type="button" onClick={() => void start()}>开始看</button>
         )}
+        <button type="button" onClick={() => void saveConfig()}>保存配置</button>
+        <button type="button" onClick={() => void openLogin()}>打开登录窗</button>
+        <button type="button" onClick={() => void video.loadSessions()}>刷新历史</button>
       </div>
+
       <p className="video-automation__hint">
-        打开有窗口浏览器并登录，保持视频页在前台；首次翻页约 6 秒后执行，之后按间隔翻页。
-        切到其他窗口时会自动暂停，不抢焦点、不乱按键。
+        小狗会用自己的浏览器实例看推荐流，不需要你盯着屏幕；窗口不会被提到前台。
+        首次使用请点「打开登录窗」登录一次。抖音适配仍是实验特性。
       </p>
-      <div className="video-automation__comment">
-        <div className="video-automation__comment-head">
-          <span className="assistant-panel__label">评论区</span>
-          <label className="video-automation__comment-toggle">
-            <input
-              type="checkbox"
-              checked={autoComment}
-              onChange={(event) => {
-                const next = event.currentTarget.checked;
-                setAutoComment(next);
-                try {
-                  window.localStorage.setItem("maltese-video-auto-comment", next ? "on" : "off");
-                } catch {
-                  // 忽略
-                }
-              }}
-            />
-            <span>每次翻页后自动准备一句评论</span>
-          </label>
-          <label className="video-automation__comment-toggle">
-            <input
-              type="checkbox"
-              checked={autoSendComment}
-              onChange={(event) => {
-                const next = event.currentTarget.checked;
-                setAutoSendComment(next);
-                try {
-                  window.localStorage.setItem("maltese-video-auto-send-comment", next ? "on" : "off");
-                } catch {
-                  // 忽略
-                }
-              }}
-            />
-            <span>自动发送（先把光标点进评论框）</span>
-          </label>
-        </div>
-        <textarea
-          value={comment}
-          rows={2}
-          placeholder="小狗会按当前视频写一句，也可以自己改"
-          onChange={(event) => setComment(event.currentTarget.value)}
-        />
-        <div className="video-automation__comment-actions">
-          <button type="button" disabled={commentBusy} onClick={() => void generateComment()}>
-            {commentBusy ? "生成中…" : "生成评论"}
-          </button>
-          <button
-            type="button"
-            disabled={!comment.trim()}
-            onClick={() =>
-              void copyComment(comment).then((ok) =>
-                onNotice(ok ? "评论已复制，点开评论框 Ctrl+V 即可" : "复制失败"),
-              )
-            }
-          >
-            复制
-          </button>
-          <button
-            type="button"
-            disabled={!comment.trim()}
-            onClick={() =>
-              void (async () => {
-                const ok = await copyComment(comment);
-                try {
-                  await invoke("type_text", { text: comment });
-                  onNotice("已把评论敲进当前输入框，回车发送即可");
-                } catch (error) {
-                  onNotice(`输入失败：${String(error)}${ok ? "（评论已复制）" : ""}`);
-                }
-              })()
-            }
-          >
-            输入到评论框
-          </button>
-        </div>
-        <p className="video-automation__hint">
-          先用鼠标点一下网页里的评论输入框，再点「输入到评论框」。勾选「自动发送」后，每轮会自动粘贴并回车；
-          光标不在评论框时不会乱发。
-        </p>
-        <div className="video-automation__publish">
-          <span className="assistant-panel__label">投稿 / 开播（半自动）</span>
-          <div className="video-automation__comment-actions">
-            <button
-              type="button"
-              onClick={() =>
-                void (async () => {
-                  const title = snapshot.foregroundTitle || "";
-                  const desc = comment || "（在这里补充简介）";
-                  await invoke("set_clipboard_text", {
-                    text: `${title}\n${desc}\n\n（由 Maltese 准备的标题与简介，粘贴到投稿页即可）`,
-                  }).catch(() => undefined);
-                  await invoke("open_local_path", {
-                    path:
-                      provider === "bilibili"
-                        ? "https://member.bilibili.com/platform/upload/video/frame"
-                        : "https://creator.douyin.com/creator-micro/content/upload",
-                  }).catch(() => undefined);
-                  onNotice("已打开投稿页，标题和简介已复制，粘贴即可；发布需要你本人确认。");
-                })()
-              }
-            >
-              准备投稿
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void (async () => {
-                  await invoke("open_local_path", {
-                    path:
-                      provider === "bilibili"
-                        ? "https://link.bilibili.com/p/center/index#/user-center/my-info/live-data"
-                        : "https://creator.douyin.com/creator-micro/content/manage?enter_from=live",
-                  }).catch(() => undefined);
-                  onNotice("已打开直播中心；开播的实名认证、推流信息需要你在网页里确认。");
-                })()
-              }
-            >
-              打开直播中心
-            </button>
-          </div>
-          <p className="video-automation__hint">
-            上传视频与开播涉及实名认证、版权与平台风控，Maltese 只帮你打开官方页面并准备好文案，
-            不会代替你点发布或推流。
-          </p>
-        </div>
-      </div>
-      {snapshot.running && snapshot.waitingForBrowser && snapshot.foregroundTitle && (
+      {snapshot?.currentUrl && (
+        <p className="video-automation__hint">当前页：{snapshot.currentUrl}</p>
+      )}
+      {snapshot?.degraded && (
         <p className="video-automation__hint video-automation__hint--warn">
-          当前前台：{snapshot.foregroundTitle}
-          {snapshot.foregroundProcess ? `（${snapshot.foregroundProcess}）` : ""}
-          ，请点一下浏览器里的 B 站/抖音页面。
+          当前使用较低能力通道，时长与互动可能不完整。
         </p>
       )}
+      {error && (
+        <p className="video-automation__hint video-automation__hint--warn">{error}</p>
+      )}
+
+      <VideoChannelCard
+        channel={video.channel}
+        diagnostics={video.diagnostics}
+        onProbe={() => void video.probeChannels()}
+      />
+
+      <VideoDigestList
+        pendingCount={snapshot?.pendingCount ?? 0}
+        preview={video.preview}
+        sessions={video.sessions}
+        onTake={() => void video.takePending()}
+        onLoadSessions={() => void video.loadSessions()}
+        onClear={(includeProfile) => void video.clearData(includeProfile)}
+      />
+
+      <div className="video-automation__section">
+        <div className="video-automation__comment-head">
+          <span className="assistant-panel__label">在视频下评论</span>
+          <span className="video-automation__hint">只有你点发送时才会发出去</span>
+        </div>
+        <textarea
+          rows={3}
+          maxLength={200}
+          value={commentDraft}
+          placeholder="写一条评论（1–200 字），发到当前打开的视频下面"
+          onChange={(event) => setCommentDraft(event.currentTarget.value)}
+        />
+        <div className="video-automation__comment-actions">
+          <button
+            type="button"
+            disabled={commentBusy || !commentDraft.trim()}
+            onClick={() => void postComment()}
+          >
+            {commentBusy ? "发送中…" : "发送评论"}
+          </button>
+          <span className="video-automation__hint">
+            {commentDraft.length > 0 ? `${commentDraft.length}/200` : ""}
+          </span>
+        </div>
+        {commentStatus && (
+          <p className="video-automation__hint" role="status">{commentStatus}</p>
+        )}
+      </div>
+      <div className="video-automation__section">
+        <div className="video-automation__comment-head">
+          <span className="assistant-panel__label">观后感草稿</span>
+          <button type="button" disabled={!draft} onClick={() => void copyDraft()}>复制草稿</button>
+        </div>
+        <textarea readOnly rows={3} value={draft} placeholder="小狗看完后会在这里整理一份只给你看的草稿" />
+        <p className="video-automation__hint">
+          草稿只用于预览和复制，小狗不会把它输入任何评论框，也不会代你点赞、关注或发布。
+        </p>
+        <div className="video-automation__comment-actions">
+          <button type="button" onClick={() => void openOfficial("publish")}>打开投稿页</button>
+          <button type="button" onClick={() => void openOfficial("live")}>打开直播中心</button>
+        </div>
+      </div>
     </section>
   );
 }

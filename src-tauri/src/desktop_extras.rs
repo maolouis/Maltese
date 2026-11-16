@@ -25,8 +25,10 @@ const BONGO_RATIO: f64 = 1037.0 / 1276.0;
 static CURSOR_ENABLED: AtomicBool = AtomicBool::new(false);
 static CURSOR_SIZE: AtomicU32 = AtomicU32::new(75);
 static CURSOR_LOOP: Once = Once::new();
-// 主桌宠被快捷键/托盘隐藏时，桌上其它小狗（Bongo、陪伴狗、跟随鼠标的小狗）也要一起消失。
+// 主桌宠被快捷键/托盘隐藏时，桌上其它小狗（陪伴狗、跟随鼠标的小狗）也要一起消失。
 static PETS_HIDDEN: AtomicBool = AtomicBool::new(false);
+// 全屏避让时 Bongo 单独一档：和主狗/陪伴狗解耦，用户可以自己选全屏时它留不留在桌上。
+static BONGO_HIDDEN: AtomicBool = AtomicBool::new(false);
 // 最近一次同步用的配置，用于「显示回来」时按原样恢复，而不是回到默认值。
 static LAST_CONFIG: Mutex<Option<DesktopExtrasConfig>> = Mutex::new(None);
 
@@ -50,27 +52,75 @@ fn pets_hidden() -> bool {
     PETS_HIDDEN.load(Ordering::SeqCst)
 }
 
-/// 主桌宠被隐藏时调用：Bongo、陪伴狗、跟随鼠标的小狗一起消失。
-pub fn hide_extra_pets(app: &AppHandle) {
-    PETS_HIDDEN.store(true, Ordering::SeqCst);
-    let labels = [
-        BONGO_LABEL,
-        CURSOR_LABEL,
-        "companion-1",
-        "companion-2",
-        "companion-3",
-        "companion-4",
-    ];
-    for label in labels {
+fn bongo_hidden() -> bool {
+    BONGO_HIDDEN.load(Ordering::SeqCst)
+}
+
+/// 全屏避让时只藏 Bongo；Bongo 的显隐独立于主狗和陪伴狗。
+pub fn hide_bongo(app: &AppHandle) {
+    BONGO_HIDDEN.store(true, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window(BONGO_LABEL) {
+        let _ = window.hide();
+    }
+}
+
+/// 全屏结束后按最近的配置把 Bongo 放回原位（开关没开就继续保持隐藏）。
+pub fn restore_bongo(app: &AppHandle) {
+    BONGO_HIDDEN.store(false, Ordering::SeqCst);
+    let config = LAST_CONFIG.lock().ok().and_then(|slot| slot.clone());
+    let Some(config) = config else {
+        return;
+    };
+    let _ = sync_bongo(app, &config);
+}
+
+const COMPANION_LABELS: [&str; 5] = [
+    "companion-1",
+    "companion-2",
+    "companion-3",
+    "companion-4",
+    CURSOR_LABEL,
+];
+
+fn hide_companion_windows(app: &AppHandle) {
+    for label in COMPANION_LABELS {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
     }
 }
 
+/// 全屏避让：只收陪伴狗和跟随小狗，Bongo 由 `hide_bongo` 单独决定。
+pub fn hide_companion_pets(app: &AppHandle) {
+    PETS_HIDDEN.store(true, Ordering::SeqCst);
+    hide_companion_windows(app);
+}
+
+/// 全屏结束：把陪伴狗和跟随小狗放回去（Bongo 由 `restore_bongo` 单独恢复）。
+pub fn restore_companion_pets(app: &AppHandle) {
+    PETS_HIDDEN.store(false, Ordering::SeqCst);
+    let config = LAST_CONFIG.lock().ok().and_then(|slot| slot.clone());
+    let Some(config) = config else {
+        return;
+    };
+    let _ = sync_companions(app, config.pet_count);
+    let _ = sync_cursor(app, &config);
+}
+
+/// 主桌宠被隐藏时调用：Bongo、陪伴狗、跟随鼠标的小狗一起消失。
+pub fn hide_extra_pets(app: &AppHandle) {
+    PETS_HIDDEN.store(true, Ordering::SeqCst);
+    BONGO_HIDDEN.store(true, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window(BONGO_LABEL) {
+        let _ = window.hide();
+    }
+    hide_companion_windows(app);
+}
+
 /// 主桌宠重新出现时调用：按最近一次同步的配置把其它小狗放回去。
 pub fn restore_extra_pets(app: &AppHandle) {
     PETS_HIDDEN.store(false, Ordering::SeqCst);
+    BONGO_HIDDEN.store(false, Ordering::SeqCst);
     let config = LAST_CONFIG.lock().ok().and_then(|slot| slot.clone());
     let Some(config) = config else {
         return;
@@ -127,7 +177,7 @@ fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Strin
     let height = (width * BONGO_RATIO).round();
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(width, height)));
     let _ = window.set_ignore_cursor_events(config.bongo_click_through);
-    if config.bongo_enabled && !pets_hidden() {
+    if config.bongo_enabled && !bongo_hidden() && !pets_hidden() {
         let (left, top, screen_w, screen_h, scale) = work_area(app);
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;

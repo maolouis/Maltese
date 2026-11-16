@@ -5,6 +5,8 @@ export type FullscreenAvoidMode = "tuck" | "hide" | "off";
 
 // 全屏避让：前台出现全屏窗口（游戏/视频）时，把小狗缩到屏幕边缘或临时隐藏，
 // 全屏结束后恢复原状。只处理收缩态，展开面板时不打扰。
+// hideExtras 控制陪伴狗 / 跟随小狗，hideBongo 单独控制 Bongo；两者互不牵连，
+// 即使主狗选择“不处理”，Bongo 也可以按自己的开关决定全屏时出现还是消失。
 export function useFullscreenAvoid(
   behavior: FullscreenAvoidMode,
   active: boolean,
@@ -13,13 +15,13 @@ export function useFullscreenAvoid(
   onTuck: () => void,
   onReveal: () => void,
   hideExtras = true,
+  hideBongo = true,
 ) {
-  // Bongo / 陪伴狗 / 跟随小狗也要跟着全屏避让，否则主狗藏起来了它们还在桌上。
-  const hideExtraPets = (hidden: boolean) => {
-    if (!isTauri) return;
-    void invoke("set_extra_pets_hidden", { hidden }).catch(() => undefined);
-  };
+  // 用 ref 记录已经下发过的显隐状态，避免每 2.5s 轮询都重复调用一次命令。
+  const extrasHiddenRef = useRef(false);
+  const bongoHiddenRef = useRef(false);
   const appliedRef = useRef<FullscreenAvoidMode | null>(null);
+  const insideFullscreenRef = useRef(false);
   const wasTuckedRef = useRef(false);
   // 用 ref 跟踪最新的 isTucked，避免 isTucked 变化导致 effect 反复重建、
   // 清理函数误把全屏避让的缩边状态还原（会产生缩边/展开抖动）。
@@ -27,10 +29,22 @@ export function useFullscreenAvoid(
   isTuckedRef.current = isTucked;
 
   useEffect(() => {
-    if (!isTauri || behavior === "off" || !active) {
+    if (!isTauri || !active) {
       return;
     }
     let disposed = false;
+
+    const setExtrasHidden = (hidden: boolean) => {
+      if (extrasHiddenRef.current === hidden) return;
+      extrasHiddenRef.current = hidden;
+      void invoke("set_extra_pets_hidden", { hidden }).catch(() => undefined);
+    };
+
+    const setBongoHidden = (hidden: boolean) => {
+      if (bongoHiddenRef.current === hidden) return;
+      bongoHiddenRef.current = hidden;
+      void invoke("set_bongo_hidden", { hidden }).catch(() => undefined);
+    };
 
     const restore = async (applied: FullscreenAvoidMode) => {
       if (applied === "hide") {
@@ -50,24 +64,29 @@ export function useFullscreenAvoid(
       if (disposed) {
         return;
       }
-      if (fullscreen && appliedRef.current === null) {
-        appliedRef.current = behavior;
-        wasTuckedRef.current = isTuckedRef.current;
-        if (behavior === "hide") {
-          await invoke("minimize_island").catch(() => undefined);
-        } else if (!isTuckedRef.current) {
-          onTuck();
+      if (fullscreen && !insideFullscreenRef.current) {
+        insideFullscreenRef.current = true;
+        // 主狗按 fullscreenAvoid 处理；Bongo / 陪伴狗各自按开关处理。
+        if (behavior !== "off") {
+          appliedRef.current = behavior;
+          wasTuckedRef.current = isTuckedRef.current;
+          if (behavior === "hide") {
+            await invoke("minimize_island").catch(() => undefined);
+          } else if (!isTuckedRef.current) {
+            onTuck();
+          }
         }
-        if (hideExtras) {
-          hideExtraPets(true);
-        }
-      } else if (!fullscreen && appliedRef.current !== null) {
+        setExtrasHidden(hideExtras);
+        setBongoHidden(hideBongo);
+      } else if (!fullscreen && insideFullscreenRef.current) {
+        insideFullscreenRef.current = false;
+        setExtrasHidden(false);
+        setBongoHidden(false);
         const applied = appliedRef.current;
         appliedRef.current = null;
-        if (hideExtras) {
-          hideExtraPets(false);
+        if (applied !== null) {
+          await restore(applied);
         }
-        await restore(applied);
       }
     };
 
@@ -79,13 +98,17 @@ export function useFullscreenAvoid(
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      insideFullscreenRef.current = false;
+      // 设置项被改掉时 effect 会重建：先确保小狗们回到“可见”，再交给下一次 effect。
+      setExtrasHidden(false);
+      setBongoHidden(false);
       const applied = appliedRef.current;
       appliedRef.current = null;
       if (applied !== null) {
         void restore(applied);
       }
     };
-  }, [active, behavior, isTauri, onReveal, onTuck]);
+  }, [active, behavior, hideBongo, hideExtras, isTauri, onReveal, onTuck]);
 }
 
 export function useTodoRotation(

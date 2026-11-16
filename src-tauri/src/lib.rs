@@ -25,6 +25,7 @@ mod wake_shortcut;
 mod shortcut_hotkeys;
 mod collapse_shortcut;
 mod custom_sound;
+mod video;
 mod video_automation;
 mod video_rules;
 mod actions;
@@ -110,6 +111,8 @@ const AGENT_STATUS_SCRIPT: &str = include_str!("../../scripts/focusd-agent-statu
 
 static WINDOW_STATE: OnceLock<Mutex<IslandWindowState>> = OnceLock::new();
 static POSITION_ANIMATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+// 位移动画是否还在跑：浮层打开前必须先让动画落定，否则会把动画中间位置当成锚点。
+static POSITION_ANIMATING: AtomicBool = AtomicBool::new(false);
 static NATIVE_GLASS_INITIALIZED: OnceLock<()> = OnceLock::new();
 
 #[derive(Clone, Copy, PartialEq)]
@@ -493,6 +496,8 @@ fn start_island_drag(app: AppHandle) -> Result<(), String> {
             if let Some(position) = final_position {
                 let _ = window.emit("island-position-changed", position);
             }
+            // 拖拽只改变位置，不改变层级：松手后重新断言置顶，窗口仍留在最顶层。
+            let _ = window.set_always_on_top(true);
         }
     });
 
@@ -517,13 +522,24 @@ fn minimize_island(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// 全屏避让等场景需要单独控制「其它小狗」（Bongo / 陪伴狗 / 跟随小狗）的显隐。
+// 全屏避让等场景需要单独控制「其它小狗」（陪伴狗 / 跟随小狗）的显隐。
+// Bongo 走 set_bongo_hidden，两者互不牵连，用户可以让 Bongo 在全屏时留在桌上。
 #[tauri::command]
 fn set_extra_pets_hidden(app: AppHandle, hidden: bool) {
     if hidden {
-        desktop_extras::hide_extra_pets(&app);
+        desktop_extras::hide_companion_pets(&app);
     } else {
-        desktop_extras::restore_extra_pets(&app);
+        desktop_extras::restore_companion_pets(&app);
+    }
+}
+
+// 全屏时 Bongo 单独一档开关：出现 / 不出现。
+#[tauri::command]
+fn set_bongo_hidden(app: AppHandle, hidden: bool) {
+    if hidden {
+        desktop_extras::hide_bongo(&app);
+    } else {
+        desktop_extras::restore_bongo(&app);
     }
 }
 
@@ -2890,6 +2906,8 @@ fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
     apply_stage_geometry(&window, read_window_state(), false)?;
     window.show().map_err(|error| error.to_string())?;
+    // 置顶是层级属性，与位置无关：重新显示后再断言一次，避免被其它窗口压到下面。
+    let _ = window.set_always_on_top(true);
     window.set_focus().map_err(|error| error.to_string())?;
     // 隐藏时一起收起的 Bongo / 陪伴狗 / 跟随小狗，显示时一并放回来。
     desktop_extras::restore_extra_pets(app);
@@ -3183,6 +3201,7 @@ fn apply_stage_geometry(
     }
 
     let window = window.clone();
+    POSITION_ANIMATING.store(true, Ordering::SeqCst);
     thread::spawn(move || {
         let started_at = Instant::now();
         loop {
@@ -3202,6 +3221,7 @@ fn apply_stage_geometry(
             }
             thread::sleep(Duration::from_millis(8));
         }
+        POSITION_ANIMATING.store(false, Ordering::SeqCst);
     });
     Ok(())
 }
@@ -4022,6 +4042,7 @@ pub fn run() {
             roam_island_step,
             minimize_island,
             set_extra_pets_hidden,
+            set_bongo_hidden,
             lyrics::fetch_lyrics,
             icons::get_shortcut_icon,
             desktop_extras::sync_desktop_extras,
@@ -4111,6 +4132,23 @@ pub fn run() {
             video_automation::set_video_automation_config,
             video_automation::start_video_automation,
             video_automation::stop_video_automation,
+            video::video_start_session,
+            video::video_stop_session,
+            video::video_get_snapshot,
+            video::video_update_config,
+            video::video_probe_channels,
+            video::video_list_sessions,
+            video::video_get_session,
+            video::video_get_profile,
+            video::video_update_profile,
+            video::video_take_pending_digest,
+            video::video_mark_delivery,
+            video::video_diagnostics,
+            video::video_clear_data,
+            video::video_post_comment,
+            video::video_open_login_window,
+            video::video_close_browser,
+            video::video_open_external_url,
         ])
         .build(context)
         .expect("error while building Maltese")

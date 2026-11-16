@@ -22,6 +22,61 @@ const RELATION_LABELS: Record<Relation, string> = {
   brother: "兄弟",
 };
 
+/** 心情：用户自己选，随 presence 消息一起同步给对方。 */
+type Emotion = "happy" | "calm" | "tired" | "upset" | "lonely";
+
+const EMOTIONS: Array<{ id: Emotion; label: string; emoji: string }> = [
+  { id: "happy", label: "开心", emoji: "😄" },
+  { id: "calm", label: "平静", emoji: "🙂" },
+  { id: "tired", label: "有点累", emoji: "😮‍💨" },
+  { id: "upset", label: "有点烦", emoji: "😤" },
+  { id: "lonely", label: "想人陪", emoji: "🥺" },
+];
+
+const EMOTION_LABELS: Record<Emotion, string> = {
+  happy: "开心",
+  calm: "平静",
+  tired: "有点累",
+  upset: "有点烦",
+  lonely: "想人陪",
+};
+
+const EMOTION_EMOJI: Record<Emotion, string> = {
+  happy: "😄",
+  calm: "🙂",
+  tired: "😮‍💨",
+  upset: "😤",
+  lonely: "🥺",
+};
+
+function isEmotion(value: unknown): value is Emotion {
+  return value === "happy" || value === "calm" || value === "tired" || value === "upset" || value === "lonely";
+}
+
+/** 本地工作状态：读前台窗口，失败就回退成「在忙」。 */
+async function readMyWork(): Promise<string> {
+  try {
+    const info = await invoke<{ kind: string; title: string }>("get_active_activity");
+    const labels: Record<string, string> = {
+      code: "在写代码",
+      video: "在看视频",
+      browser: "在逛网页",
+      meeting: "在开会",
+      chat: "在聊天",
+      game: "在打游戏",
+      music: "在听歌",
+      office: "在写文档",
+      design: "在画图",
+      idle: "在发呆",
+    };
+    const base = labels[info.kind] ?? "在忙";
+    const title = (info.title ?? "").trim().slice(0, 24);
+    return title ? `${base}（${title}）` : base;
+  } catch {
+    return "在忙";
+  }
+}
+
 const PAIR_KEY = "maltese-relationship:pair";
 const LOG_KEY = "maltese-relationship:log";
 const SENT_KEY = "maltese-relationship:sent";
@@ -37,6 +92,13 @@ type PairState = {
   peerRelation: Relation | null;
   since: string;
   lastSeenAt: number;
+  /** 我此刻的分享状态 */
+  myEmotion: Emotion | null;
+  myWork: string;
+  /** 对方最近一次上报的状态 */
+  peerEmotion: Emotion | null;
+  peerWork: string;
+  peerStatusAt: number;
 };
 
 type LogItem = {
@@ -56,6 +118,11 @@ const EMPTY_PAIR: PairState = {
   peerRelation: null,
   since: "",
   lastSeenAt: 0,
+  myEmotion: null,
+  myWork: "",
+  peerEmotion: null,
+  peerWork: "",
+  peerStatusAt: 0,
 };
 
 function readJson<T>(key: string, fallback: T): T {
@@ -106,6 +173,8 @@ export function RelationshipPlugin() {
   const sentRef = useRef<Set<string>>(new Set(readJson<string[]>(SENT_KEY, [])));
   const logRef = useRef(log);
   logRef.current = log;
+  // 收到对方 hello 后只回一次，避免双方互相回包形成 ping-pong。
+  const helloRepliedRef = useRef(false);
 
   const savePair = useCallback((next: PairState) => {
     setPair(next);
@@ -125,17 +194,17 @@ export function RelationshipPlugin() {
     writeJson(SENT_KEY, [...sentRef.current].slice(-200));
   }, []);
 
-  /** 发一条加密消息到中继。 */
+  /** 发一条加密消息到中继。code 显式传入，避免闭包抓到刚保存前的空配对码。 */
   const send = useCallback(
-    async (payload: Record<string, unknown>) => {
-      const code = pair.code;
-      if (!code || !isTauri()) return false;
+    async (code: string, payload: Record<string, unknown>) => {
+      const activeCode = code.trim().toUpperCase();
+      if (!activeCode || !isTauri()) return false;
       try {
         const sid = randomId();
-        const body = await encryptMessage(code, { ...payload, sid });
+        const body = await encryptMessage(activeCode, { ...payload, sid });
         await invoke("relay_publish", {
           base: relayBase(),
-          topic: await topicForCode(code),
+          topic: await topicForCode(activeCode),
           body,
         });
         rememberSent(sid);
@@ -145,7 +214,7 @@ export function RelationshipPlugin() {
         return false;
       }
     },
-    [pair.code, rememberSent],
+    [rememberSent],
   );
 
   /** 拉一次新消息并处理。 */
@@ -168,12 +237,24 @@ export function RelationshipPlugin() {
     let lastTime = Number(pair.since) || 0;
     let peerName = pair.peerName;
     let peerRelation = pair.peerRelation;
+    let peerWork = pair.peerWork;
+    let peerEmotion = pair.peerEmotion;
+    let peerStatusAt = pair.peerStatusAt;
     let touched = false;
 
     for (const message of messages) {
       lastTime = Math.max(lastTime, message.time);
       const payload = (await decryptMessage(code, message.body)) as
-        | { t?: string; sid?: string; name?: string; v?: string; text?: string; at?: number }
+        | {
+            t?: string;
+            sid?: string;
+            name?: string;
+            v?: string;
+            text?: string;
+            at?: number;
+            work?: string;
+            emotion?: string;
+          }
         | null;
       if (!payload) continue;
       if (payload.sid && sentRef.current.has(payload.sid)) continue;
@@ -182,6 +263,11 @@ export function RelationshipPlugin() {
         peerName = payload.name;
         touched = true;
         setStatus(`${payload.name} 已连接`);
+        // 对方首次报上线时回一次 hello，发起方的“已连接”状态才能点亮。
+        if (!helloRepliedRef.current) {
+          helloRepliedRef.current = true;
+          void send(pair.code, { t: "hello", name: pair.myName || "我", at: Date.now() });
+        }
       } else if (payload.t === "relation" && isRelation(payload.v)) {
         peerRelation = payload.v;
         touched = true;
@@ -191,6 +277,12 @@ export function RelationshipPlugin() {
           appendLog({ id: message.id, at: message.time * 1000 || Date.now(), mine: false, text });
           touched = true;
         }
+      } else if (payload.t === "presence") {
+        // 对方上报「正在做什么 / 心情怎么样」
+        if (typeof payload.work === "string") peerWork = payload.work.slice(0, 60);
+        if (isEmotion(payload.emotion)) peerEmotion = payload.emotion;
+        peerStatusAt = Date.now();
+        touched = true;
       } else if (payload.t === "bye") {
         peerName = "";
         peerRelation = null;
@@ -204,11 +296,41 @@ export function RelationshipPlugin() {
         ...pair,
         peerName,
         peerRelation,
+        peerWork,
+        peerEmotion,
+        peerStatusAt,
         since: String(lastTime),
         lastSeenAt: touched ? Date.now() : pair.lastSeenAt,
       });
     }
-  }, [appendLog, pair, savePair]);
+  }, [appendLog, pair, savePair, send]);
+
+  /** 把自己的工作状态 + 心情发给对方。 */
+  const shareStatus = useCallback(
+    async (emotion: Emotion | null) => {
+      if (!pair.code || !isTauri()) return;
+      const work = await readMyWork();
+      savePair({ ...pair, myEmotion: emotion, myWork: work });
+      await send(pair.code, {
+        t: "presence",
+        work,
+        emotion: emotion ?? undefined,
+        name: pair.myName || "我",
+        at: Date.now(),
+      });
+    },
+    [pair, savePair, send],
+  );
+
+  /** 配对后每 30 秒上报一次，对方就能看到「我刚才在做什么」。 */
+  useEffect(() => {
+    if (!pair.code || !isTauri()) return;
+    const push = () => {
+      void shareStatus(pair.myEmotion ?? null);
+    };
+    const timer = window.setInterval(push, 30_000);
+    return () => window.clearInterval(timer);
+  }, [pair.code, pair.myEmotion, shareStatus]);
 
   useEffect(() => {
     if (!pair.code || !isTauri()) return;
@@ -222,8 +344,10 @@ export function RelationshipPlugin() {
 
   const createCode = () => {
     const code = generatePairCode();
+    helloRepliedRef.current = false;
     savePair({ ...EMPTY_PAIR, code, myName, since: "" });
     setStatus("配对码已生成，把它发给对方，等对方输入后就能连上");
+    void send(code, { t: "hello", name: myName, at: Date.now() });
   };
 
   const join = async () => {
@@ -233,17 +357,23 @@ export function RelationshipPlugin() {
       return;
     }
     setBusy(true);
+    helloRepliedRef.current = false;
     savePair({ ...EMPTY_PAIR, code, myName, since: "" });
     setJoinCode("");
-    await send({ t: "hello", name: myName, at: Date.now() });
+    await send(code, { t: "hello", name: myName, at: Date.now() });
     setStatus("已加入这个配对码，正在等对方回应");
     setBusy(false);
   };
 
   const chooseRelation = async (relation: Relation) => {
     savePair({ ...pair, myRelation: relation, myName });
-    await send({ t: "relation", v: relation, name: myName, at: Date.now() });
+    await send(pair.code, { t: "relation", v: relation, name: myName, at: Date.now() });
     setStatus(`已选定：${RELATION_LABELS[relation]}`);
+  };
+
+  const chooseEmotion = async (emotion: Emotion) => {
+    setStatus(`心情已更新：${EMOTION_LABELS[emotion]}`);
+    await shareStatus(emotion);
   };
 
   const copyCode = async () => {
@@ -256,7 +386,8 @@ export function RelationshipPlugin() {
   };
 
   const disconnect = async () => {
-    await send({ t: "bye", at: Date.now() });
+    await send(pair.code, { t: "bye", at: Date.now() });
+    helloRepliedRef.current = false;
     savePair({ ...pair, peerName: "", peerRelation: null, since: "" });
     setLog([]);
     writeJson(LOG_KEY, []);
@@ -267,7 +398,7 @@ export function RelationshipPlugin() {
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    const ok = await send({ t: "chat", text, name: myName, at: Date.now() });
+    const ok = await send(pair.code, { t: "chat", text, name: myName, at: Date.now() });
     if (ok) appendLog({ id: randomId(), at: Date.now(), mine: true, text });
     else setDraft(text);
   };
@@ -368,6 +499,57 @@ export function RelationshipPlugin() {
                   ? "等对方也选一个，两边一致就确认关系"
                   : "先选一个关系，对方也选同一个就确认"}
           </p>
+
+          <div className="relationship__presence">
+            <div className="relationship__presence-card">
+              <span className="relationship__presence-label">
+                {pair.peerName || "对方"} 现在
+              </span>
+              {peerOnline ? (
+                <>
+                  <strong className="relationship__presence-work">
+                    {pair.peerWork || "还没上报状态"}
+                  </strong>
+                  <span className="relationship__presence-mood">
+                    {pair.peerEmotion ? (
+                      <>
+                        {EMOTION_EMOJI[pair.peerEmotion]} 心情：{EMOTION_LABELS[pair.peerEmotion]}
+                      </>
+                    ) : (
+                      "心情：还没说"
+                    )}
+                  </span>
+                  {pair.peerStatusAt > 0 && (
+                    <small className="relationship__presence-time">
+                      更新于 {Math.max(0, Math.round((Date.now() - pair.peerStatusAt) / 60000))} 分钟前
+                    </small>
+                  )}
+                </>
+              ) : (
+                <span className="relationship__presence-mood">对方还没连上</span>
+              )}
+            </div>
+            <div className="relationship__presence-mine">
+              <span className="relationship__presence-label">我现在的心情</span>
+              <div className="relationship__emotions">
+                {EMOTIONS.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={`relationship__emotion${pair.myEmotion === item.id ? " is-active" : ""}`}
+                    title={`告诉对方：${item.label}`}
+                    onClick={() => void chooseEmotion(item.id)}
+                  >
+                    <span aria-hidden="true">{item.emoji}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <small className="relationship__presence-time">
+                你的工作状态（{pair.myWork || "还没上报"}）会随心情一起同步，每 30 秒自动刷新一次。
+              </small>
+            </div>
+          </div>
 
           <div className="relationship__chat">
             <div className="relationship__log">

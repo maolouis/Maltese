@@ -85,6 +85,7 @@ import {
 import { PetChat } from "./PetChat";
 import { PluginsPanel } from "./PluginsPanel";
 import { VideoAutomationPanel } from "./plugins/video/VideoAutomationPlugin";
+import { useVideoDelivery } from "./useVideoDelivery";
 import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
@@ -114,6 +115,9 @@ import {
 import { playCustomSound } from "./customSound";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { usePetHitBox } from "./petHitBox";
+import {
+  type PetInteractionSession,
+} from "./petInteractions";
 import {
   loadShortcutAutoDetect,
   loadShortcutScanDir,
@@ -350,6 +354,8 @@ type IslandSettings = {
   fullscreenAvoid: FullscreenAvoidMode;
   /** 全屏时是否连 Bongo / 陪伴狗 / 跟随小狗一起隐藏。 */
   fullscreenHideExtras: boolean;
+  /** 全屏时 Bongo 是否也收起来（可与 fullscreenAvoid 的“不处理”并存）。 */
+  fullscreenHideBongo: boolean;
   fpsMode: PetFpsMode;
   bubbleOn: boolean;
   bubbleDurationMs: number;
@@ -413,6 +419,7 @@ type IslandShellProps = {
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
   petState: PetState;
+  petInteraction: PetInteractionSession | null;
   onPetAction: (action: PetAction) => void;
   onPetHoverStart: () => void;
   onPetHoverEnd: () => void;
@@ -593,6 +600,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   autoTuckSeconds: 30,
   fullscreenAvoid: "tuck",
   fullscreenHideExtras: true,
+  fullscreenHideBongo: true,
   fpsMode: "balanced",
   bubbleOn: true,
   bubbleDurationMs: 6000,
@@ -875,6 +883,7 @@ function normalizeSettings(
       ? settings.fullscreenAvoid
       : DEFAULT_SETTINGS.fullscreenAvoid,
     fullscreenHideExtras: settings?.fullscreenHideExtras !== false,
+    fullscreenHideBongo: settings?.fullscreenHideBongo !== false,
     fpsMode: settings?.fpsMode === "smooth" || settings?.fpsMode === "normal" || settings?.fpsMode === "saver"
       ? settings.fpsMode
       : DEFAULT_SETTINGS.fpsMode,
@@ -1319,6 +1328,7 @@ export function IslandShell({
   agentVisualState,
   agentStatusLabel,
   petState,
+  petInteraction,
   onPetAction,
   onPetHoverStart,
   onPetHoverEnd,
@@ -1478,6 +1488,20 @@ export function IslandShell({
   const showingTuckedGif = petState === "idle" && (restingAsleep || isTucked);
   // 「趴下睡」的姿势统一用这张图：闲置自动趴下、缩边、手动点「让小狗睡觉」都走它。
   const showingSleepPose = showingTuckedGif || petState === "sleeping";
+  const interactionPartnerState: PetState =
+    petInteraction?.kind === "kick-ball"
+      ? "chase"
+      : petInteraction?.kind === "comfort"
+        ? "relax"
+        : petInteraction?.kind === "celebrate"
+          ? "celebrate"
+          : "happy";
+  const interactionPartnerGif = petInteraction
+    ? characterFramesForState(petInteraction.secondary, interactionPartnerState)[0] ?? resolvePetGif(interactionPartnerState)
+    : null;
+  const interactionCloneGif = petInteraction
+    ? characterFramesForState(petInteraction.primary, "happy")[0] ?? resolvePetGif("happy")
+    : null;
   // 单击切表情：先固定一张，等自动轮播/状态变化时再交还给轮播。
   const [clickedFrame, setClickedFrame] = useState<string | null>(null);
   const basePetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
@@ -1760,6 +1784,30 @@ export function IslandShell({
         <div
           className="island__collapsed island__collapsed--pet-only"
         >
+          {petInteraction && interactionPartnerGif && (
+            <div
+              className={`pet-interaction pet-interaction--${petInteraction.kind}`}
+              aria-hidden="true"
+            >
+              <img
+                className="pet-interaction__partner"
+                src={interactionPartnerGif}
+                alt=""
+                draggable={false}
+              />
+              {petInteraction.kind === "clone-wave" && interactionCloneGif && (
+                <img
+                  className="pet-interaction__clone"
+                  src={interactionCloneGif}
+                  alt=""
+                  draggable={false}
+                />
+              )}
+              {petInteraction.kind === "kick-ball" && (
+                <span className="pet-interaction__ball">●</span>
+              )}
+            </div>
+          )}
           <span
             className={`maltese-pet maltese-pet--large${petSquash ? " maltese-pet--squash" : ""}${isTucked && tuckEdge === "top" ? " maltese-pet--flip" : ""}`}
             role="button"
@@ -2443,9 +2491,15 @@ function LayoutEditor({
             </button>
           </div>
         </div>
+        {/* Bongo 单独一档：即使主狗选择“不处理”，也可以让它全屏时消失。 */}
+        <ToggleControl
+          label="全屏时 Bongo 也收起来"
+          checked={settings.fullscreenHideBongo}
+          onChange={(fullscreenHideBongo) => onSettingsChange({ ...settings, fullscreenHideBongo })}
+        />
         {settings.fullscreenAvoid !== "off" && (
           <ToggleControl
-            label="全屏时连 Bongo 一起隐藏"
+            label="全屏时连陪伴狗 / 跟随小狗一起隐藏"
             checked={settings.fullscreenHideExtras}
             onChange={(fullscreenHideExtras) => onSettingsChange({ ...settings, fullscreenHideExtras })}
           />
@@ -4828,6 +4882,9 @@ type CustomShortcut = { label: string; path: string };
 const CUSTOM_SHORTCUTS_KEY = "maltese-custom-shortcuts";
 const HIDDEN_SHORTCUTS_KEY = "maltese-hidden-shortcuts";
 const HIDDEN_SHORTCUT_ACTIONS_KEY = "maltese-hidden-shortcut-actions";
+// 快捷入口的显示顺序：卡片 key 数组（内置工具 tool:<id>、文件快捷方式 path:<规范化路径>）。
+// 只记录顺序，不存内容；删除/隐藏某条后它的 key 会自然失效。
+const SHORTCUT_ORDER_KEY = "maltese-shortcut-order";
 
 const PAGE_LABELS: Record<string, string> = {
   chat: "聊天",
@@ -4844,6 +4901,29 @@ function shortcutPathKey(path: string): string {
     .replace(/\//g, "\\")
     .replace(/^\\\\\?\\/, "")
     .toLowerCase();
+}
+
+// 快捷卡片 key：内置工具和文件快捷方式统一成字符串，用来记住拖动后的顺序。
+function shortcutToolKey(id: string): string {
+  return `tool:${id}`;
+}
+
+function shortcutFileKey(path: string): string {
+  return `path:${shortcutPathKey(path)}`;
+}
+
+function loadShortcutOrder(): string[] {
+  try {
+    const raw = window.localStorage.getItem(SHORTCUT_ORDER_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string" && item.length > 0)
+      .slice(0, 200);
+  } catch {
+    return [];
+  }
 }
 
 function loadHiddenShortcuts(): string[] {
@@ -5017,6 +5097,20 @@ export function AssistantPanel() {
   const [appResults, setAppResults] = useState<Array<{ label: string; path: string; kind: string; category: string }>>([]);
   const [appSearching, setAppSearching] = useState(false);
   const [appActiveIndex, setAppActiveIndex] = useState(-1);
+  // 卡片顺序（拖动排序的结果），持久化在 localStorage 里。
+  const [shortcutOrder, setShortcutOrder] = useState<string[]>(loadShortcutOrder);
+  const shortcutOrderRef = useRef(shortcutOrder);
+  shortcutOrderRef.current = shortcutOrder;
+  const [draggingShortcutKey, setDraggingShortcutKey] = useState<string | null>(null);
+  const shortcutDragRef = useRef<{
+    key: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  const suppressShortcutClickRef = useRef(false);
+  const shortcutCardsRef = useRef<Array<{ key: string }>>([]);
 
   // 结果刷新后重置选中项，避免上下键停在一个已经不存在的位置。
   useEffect(() => {
@@ -5356,6 +5450,165 @@ export function AssistantPanel() {
     discoveredShortcuts.filter((shortcut) => !hiddenShortcutSet.has(shortcutPathKey(shortcut.path))).length +
     customShortcuts.length;
 
+  // 三批卡片合成一条列表：顺序 = 用户拖动后记下的顺序，新出现的条目排在末尾。
+  const shortcutCards = (() => {
+    const cards: Array<{
+      key: string;
+      kind: "tool" | "discovered" | "custom";
+      label: string;
+      detail: string;
+      detailTitle?: string;
+      path?: string;
+      actionId?: string;
+      tool?: string;
+    }> = [];
+    for (const action of visibleActions) {
+      cards.push({
+        key: shortcutToolKey(action.id),
+        kind: "tool",
+        label: action.label,
+        detail: action.detail,
+        actionId: action.id,
+        tool: action.tool,
+      });
+    }
+    for (const shortcut of discoveredActions) {
+      cards.push({
+        key: shortcutFileKey(shortcut.path),
+        kind: "discovered",
+        label: shortcut.label,
+        detail: shortcut.kind === "lnk" ? "桌面快捷方式" : `自动发现 · .${shortcut.kind}`,
+        detailTitle: shortcut.path,
+        path: shortcut.path,
+      });
+    }
+    for (const shortcut of customShortcuts) {
+      cards.push({
+        key: shortcutFileKey(shortcut.path),
+        kind: "custom",
+        label: shortcut.label,
+        detail: "自定义快捷方式",
+        detailTitle: shortcut.path,
+        path: shortcut.path,
+      });
+    }
+    const rank = new Map(shortcutOrder.map((key, index) => [key, index] as const));
+    const tail = Number.MAX_SAFE_INTEGER;
+    return cards
+      .map((card, index) => ({ card, index, rank: rank.get(card.key) ?? tail }))
+      .sort((a, b) => (a.rank === b.rank ? a.index - b.index : a.rank - b.rank))
+      .map((entry) => entry.card);
+  })();
+  shortcutCardsRef.current = shortcutCards;
+
+  const persistShortcutOrder = (next: string[]) => {
+    const unique = [...new Set(next)].slice(0, 200);
+    setShortcutOrder(unique);
+    shortcutOrderRef.current = unique;
+    try {
+      window.localStorage.setItem(SHORTCUT_ORDER_KEY, JSON.stringify(unique));
+    } catch {
+      // 忽略写入失败
+    }
+  };
+
+  // 拖动时把卡片移到目标卡片的左/右半侧，只改顺序、不改内容。
+  const moveShortcutCard = (draggedKey: string, targetKey: string, after: boolean) => {
+    setShortcutOrder((current) => {
+      const base = shortcutCardsRef.current.map((card) => card.key);
+      const merged = [
+        ...current.filter((key) => base.includes(key)),
+        ...base.filter((key) => !current.includes(key)),
+      ];
+      const withoutDragged = merged.filter((key) => key !== draggedKey);
+      const targetIndex = withoutDragged.indexOf(targetKey);
+      if (targetIndex < 0) {
+        return current;
+      }
+      const next = [...withoutDragged];
+      next.splice(after ? targetIndex + 1 : targetIndex, 0, draggedKey);
+      shortcutOrderRef.current = next;
+      return next;
+    });
+  };
+
+  const beginShortcutDrag = (event: React.PointerEvent<HTMLDivElement>, key: string) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element && target.closest(".assistant-card__remove")) {
+      return;
+    }
+    shortcutDragRef.current = {
+      key,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+  };
+
+  useEffect(() => {
+    const handleMove = (event: PointerEvent) => {
+      const drag = shortcutDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      if (!drag.active) {
+        // 小位移仍然算点击，避免“想点一下却变成拖动”。
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 8) {
+          return;
+        }
+        drag.active = true;
+        setDraggingShortcutKey(drag.key);
+        // 第一次拖动时把当前可见顺序固化下来，之后的插入都基于它。
+        persistShortcutOrder(shortcutCardsRef.current.map((card) => card.key));
+      }
+      const cards = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-shortcut-key]"),
+      );
+      for (const element of cards) {
+        const key = element.dataset.shortcutKey;
+        if (!key || key === drag.key) {
+          continue;
+        }
+        const rect = element.getBoundingClientRect();
+        if (
+          event.clientX >= rect.left
+          && event.clientX <= rect.right
+          && event.clientY >= rect.top
+          && event.clientY <= rect.bottom
+        ) {
+          moveShortcutCard(drag.key, key, event.clientX > rect.left + rect.width / 2);
+          break;
+        }
+      }
+    };
+    const finish = () => {
+      const drag = shortcutDragRef.current;
+      shortcutDragRef.current = null;
+      if (!drag?.active) {
+        return;
+      }
+      setDraggingShortcutKey(null);
+      persistShortcutOrder(shortcutOrderRef.current);
+      // 拖动结束后的那次 click 不应该触发启动。
+      suppressShortcutClickRef.current = true;
+      window.setTimeout(() => {
+        suppressShortcutClickRef.current = false;
+      }, 0);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+  }, []);
+
   useEffect(() => {
     if (!recordingPanelHotkey) return;
     const handler = (event: KeyboardEvent) => {
@@ -5513,106 +5766,81 @@ export function AssistantPanel() {
           )}
         </div>
       </div>
-      <div className="assistant-panel__grid">
-        {visibleActions.map((action) => (
-          <div key={action.id} className="assistant-card assistant-card--custom">
-            <button
-              type="button"
-              className="assistant-card__launch"
+      <div
+        className="assistant-panel__grid"
+        onClickCapture={(event) => {
+          // 刚拖动过的那一次 click 不当作“启动”。
+          if (suppressShortcutClickRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+      >
+        {shortcutCards.map((card) => {
+          const launching = card.kind === "tool"
+            ? launchingKey === `tool:${card.actionId}`
+            : launchingKey === card.path;
+          return (
+            <div
+              key={card.key}
+              data-shortcut-key={card.key}
               data-window-drag="false"
-              disabled={launchingKey === `tool:${action.id}`}
-              onClick={() => handleAction(action.tool, action.label)}
+              title={shortcutCards.length > 1 ? "按住卡片拖动可以调整顺序" : undefined}
+              className={`assistant-card assistant-card--custom${draggingShortcutKey === card.key ? " assistant-card--dragging" : ""}`}
+              onPointerDown={(event) => beginShortcutDrag(event, card.key)}
             >
-              <span className="assistant-card__copy">
-                <strong>{action.label}</strong>
-                <small>{launchingKey === `tool:${action.id}` ? "正在启动…" : action.detail}</small>
-              </span>
-              {launchingKey === `tool:${action.id}` ? (
-                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              className="assistant-card__remove"
-              title="从快捷入口移除"
-              aria-label={`从快捷入口移除 ${action.label}`}
-              onClick={() => hideShortcutAction(action.id, action.label)}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        {discoveredActions.map((shortcut) => (
-          <div key={shortcut.path} className="assistant-card assistant-card--custom">
-            <button
-              type="button"
-              className="assistant-card__launch"
-              data-window-drag="false"
-              disabled={launchingKey === shortcut.path}
-              onClick={() => launchPath(shortcut.label, shortcut.path)}
-            >
-              {renderIcon(shortcut.path)}
-              <span className="assistant-card__copy">
-                <strong title={shortcut.label}>{shortcut.label}</strong>
-                <small title={shortcut.path}>
-                  {launchingKey === shortcut.path
-                    ? "正在启动…"
-                    : shortcut.kind === "lnk"
-                      ? "桌面快捷方式"
-                      : `自动发现 · .${shortcut.kind}`}
-                </small>
-              </span>
-              {launchingKey === shortcut.path ? (
-                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              className="assistant-card__remove"
-              title="从列表移除（不删除桌面文件）"
-              aria-label={`从列表移除 ${shortcut.label}`}
-              onClick={() => hideShortcut(shortcut.label, shortcut.path)}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        {customShortcuts.map((shortcut) => (
-          <div key={`custom-${shortcut.path}`} className="assistant-card assistant-card--custom">
-            <button
-              type="button"
-              className="assistant-card__launch"
-              disabled={launchingKey === shortcut.path}
-              onClick={() => launchPath(shortcut.label, shortcut.path)}
-            >
-              {renderIcon(shortcut.path)}
-              <span className="assistant-card__copy">
-                <strong title={shortcut.label}>{shortcut.label}</strong>
-                <small title={shortcut.path}>
-                  {launchingKey === shortcut.path ? "正在启动…" : "自定义快捷方式"}
-                </small>
-              </span>
-              {launchingKey === shortcut.path ? (
-                <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              className="assistant-card__remove"
-              title="删除这个快捷方式"
-              aria-label="删除这个快捷方式"
-              onClick={() => persistCustomShortcuts(customShortcuts.filter((item) => item.path !== shortcut.path))}
-            >
-              ×
-            </button>
-          </div>
-        ))}
+              <button
+                type="button"
+                className="assistant-card__launch"
+                data-window-drag="false"
+                disabled={Boolean(launching)}
+                onClick={() => {
+                  if (card.kind === "tool" && card.tool) {
+                    handleAction(card.tool, card.label);
+                  } else if (card.path) {
+                    launchPath(card.label, card.path);
+                  }
+                }}
+              >
+                {card.path ? renderIcon(card.path) : null}
+                <span className="assistant-card__copy">
+                  <strong title={card.label}>{card.label}</strong>
+                  <small title={card.detailTitle}>
+                    {launching ? "正在启动…" : card.detail}
+                  </small>
+                </span>
+                {launching ? (
+                  <Loader2 className="assistant-card__spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+                ) : (
+                  <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" />
+                )}
+              </button>
+              <button
+                type="button"
+                className="assistant-card__remove"
+                title={card.kind === "tool"
+                  ? "从快捷入口移除"
+                  : card.kind === "discovered"
+                    ? "从列表移除（不删除桌面文件）"
+                    : "删除这个快捷方式"}
+                aria-label={card.kind === "tool"
+                  ? `从快捷入口移除 ${card.label}`
+                  : `移除 ${card.label}`}
+                onClick={() => {
+                  if (card.kind === "tool" && card.actionId) {
+                    hideShortcutAction(card.actionId, card.label);
+                  } else if (card.kind === "discovered" && card.path) {
+                    hideShortcut(card.label, card.path);
+                  } else if (card.path) {
+                    persistCustomShortcuts(customShortcuts.filter((item) => item.path !== card.path));
+                  }
+                }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
       <div className="assistant-panel__manage">
         <div className="assistant-panel__section-head">
@@ -5726,6 +5954,7 @@ function IslandApp({
   onLocaleChange: (locale: LocaleCode) => void;
 }) {
   const t = useTranslation();
+  useVideoDelivery();
   const proactiveCharacter = usePetCharacter();
   const [mode, setMode] = useState<IslandMode>("collapsed");
   const [isTucked, setIsTucked] = useState(false);
@@ -5822,9 +6051,11 @@ function IslandApp({
   const [agentStatus, setAgentStatus] =
     useState<AgentStatusSnapshot>(DEFAULT_AGENT_STATUS);
   const [petAction, setPetAction] = useState<PetAction | null>(null);
+  const [petInteraction, setPetInteraction] = useState<PetInteractionSession | null>(null);
   const [activityMood, setActivityMood] = useState<PetState | null>(null);
   const activityMoodTimer = useRef<number | null>(null);
   const petActionTimer = useRef<number | null>(null);
+  const petInteractionTimer = useRef<number | null>(null);
   const isRefreshingAgentStatus = useRef(false);
   const isRefreshingMediaState = useRef(false);
   const isRefreshingAudioLevel = useRef(false);
@@ -5834,6 +6065,24 @@ function IslandApp({
     expiresAt: number;
   } | null>(null);
   const [settings, setSettings] = useState<IslandSettings>(loadSettings);
+  const startPetInteraction = useCallback(
+    (kind: PetInteractionKind, emotion?: PetInteractionSession["emotion"]) => {
+      const next = createPetInteraction({
+        kind,
+        primary: proactiveCharacter,
+        emotion,
+      });
+      setPetInteraction(next);
+      if (petInteractionTimer.current !== null) {
+        window.clearTimeout(petInteractionTimer.current);
+      }
+      petInteractionTimer.current = window.setTimeout(() => {
+        petInteractionTimer.current = null;
+        setPetInteraction(null);
+      }, next.durationMs);
+    },
+    [proactiveCharacter],
+  );
   const showActivityMood = useCallback((mood: PetState | undefined) => {
     if (!mood) {
       return;
@@ -6391,6 +6640,7 @@ function IslandApp({
     tuckForFullscreen,
     revealForFullscreen,
     settings.fullscreenHideExtras,
+    settings.fullscreenHideBongo,
   );
 
   // ---------- 小狗侧边浮层（hover 互动面板 + 云朵消息框 + 右键菜单） ----------
@@ -8699,6 +8949,7 @@ function IslandApp({
         onReveal={revealIsland}
         onSleepTuck={tuckForSleep}
         onSleepReveal={revealForSleep}
+        petInteraction={null}
         onPageChange={setPage}
       >
         {page === "qq" && (

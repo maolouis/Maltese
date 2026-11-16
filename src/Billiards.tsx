@@ -33,6 +33,9 @@ type Ball = {
   vy: number;
   r: number;
   pocketed: boolean;
+  /** 图标格子中心到左上角的半格偏移（开局按真实格子尺寸记录） */
+  halfX: number;
+  halfY: number;
   /** 上一次同步给桌面的位置，用来减少消息量 */
   sentX: number;
   sentY: number;
@@ -75,6 +78,8 @@ export default function Billiards() {
   const startedAtRef = useRef<number | null>(null);
   const syncAtRef = useRef(0);
   const runningRef = useRef(false);
+  // 桌面 ListView 的屏幕原点：摆位和逐帧同步都以它为基准，不再混用窗口 screenX/Y。
+  const originRef = useRef({ x: 0, y: 0 });
   // 是否已经进入一局。隐藏的台球窗口会随应用一起挂载，
   // 绝不能在挂载时就开局（否则一启动应用桌面图标就被搬走，见 issue #1）。
   const [inGame, setInGame] = useState(false);
@@ -102,7 +107,8 @@ export default function Billiards() {
       const height = canvas?.clientHeight ?? window.innerHeight;
       sizeRef.current = { w: width, h: height, dpr: window.devicePixelRatio || 1 };
 
-      const windowPos = { x: layout.areaX, y: layout.areaY };
+      originRef.current = { x: layout.areaX, y: layout.areaY };
+      const windowPos = originRef.current;
       const cells = layout.cells.slice(0, 45);
       const total = cells.length;
       setCount(total);
@@ -134,6 +140,8 @@ export default function Billiards() {
           vy: 0,
           r: radius,
           pocketed: false,
+          halfX: (cell.w ?? 48) / 2,
+          halfY: (cell.h ?? 48) / 2,
           sentX: Number.NaN,
           sentY: Number.NaN,
         };
@@ -154,12 +162,11 @@ export default function Billiards() {
       dogRef.current = { x: width / 2 + 70, y: height * 0.82, t: 0, happy: 0 };
 
       // 立刻把真实图标摆到三角位置（图标左上角 = 球心 - 半个格子）
-      const half = { x: (cells[0]?.w ?? 48) / 2, y: (cells[0]?.h ?? 48) / 2 };
       await invoke("desktop_icons_move", {
         moves: ballsRef.current.map((ball) => ({
           index: ball.index,
-          x: Math.round(windowPos.x + ball.x - half.x),
-          y: Math.round(windowPos.y + ball.y - half.y),
+          x: Math.round(windowPos.x + ball.x - ball.halfX),
+          y: Math.round(windowPos.y + ball.y - ball.halfY),
         })),
       });
 
@@ -483,11 +490,13 @@ export default function Billiards() {
       if (runningRef.current && now - syncAtRef.current > 40) {
         syncAtRef.current = now;
         const layout = ballsRef.current;
-        const moves = layout.map((ball) => ({
-          index: ball.index,
-          x: Math.round(window.screenX + ball.x - ball.r),
-          y: Math.round(window.screenY + ball.y - ball.r * 0.92),
-        }));
+        const moves = layout
+          .filter((ball) => !ball.pocketed)
+          .map((ball) => ({
+            index: ball.index,
+            x: Math.round(originRef.current.x + ball.x - ball.halfX),
+            y: Math.round(originRef.current.y + ball.y - ball.halfY),
+          }));
         void invoke("desktop_icons_move", { moves }).catch(() => undefined);
         for (const ball of layout) {
           ball.sentX = ball.x;
