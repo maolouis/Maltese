@@ -55,6 +55,16 @@ node scripts/build-pet-manifest.mjs
 设置页「专属形象」卡片现在按形象分开保存：`maltese-pet-gif-rotation:<角色>`。
 旧版按状态保存的配置会自动迁移到小白，其他形象第一次使用时直接用素材默认值。
 
+## 微博官方表情包（独立素材池）
+
+`assets/pets/stickers/weibo/` 存了一份从官方微博 [@线条小狗Maltese](https://weibo.com/u/7776232700) 收集的表情包，第 30–33 弹共 35 张，已归一化成 240×240、保留透明底的多帧 GIF，命名 `p<弹数>-<序号>.gif`。
+
+- 这一池**没有被代码引用**，不影响现有动作轮播；`scripts/build-pet-manifest.mjs` 只扫 `assets/pets/chars/`，也不会把它算进角色清单。
+- 想让它变成桌宠素材：按画面复制到 `assets/pets/chars/shared/<动作>/`（或 `xiaobai` / `xiaojimao`），再跑一次清单脚本。
+- 逐张规格、帧数、来源原图地址见 `assets/pets/stickers/weibo/index.json`，缩略总览见同目录 `preview.png`，采集与归一化脚本在 `work/weibo-stickers/`（`work/` 不进版本库）。
+- 因为 `tauri.conf.json` 把整个 `assets/pets` 打进安装包资源，这一池会让安装包多约 4 MB；不想带上就把目录移出 `assets/pets`。
+- 版权归 ©MALTESE / 线条小狗官方，随安装包分发或商用需自行取得授权。
+
 ## 趴下睡觉那张图
 
 主狗多久没动静自动趴下、缩到屏幕边缘、手动点「让小狗睡觉」时，都会单独播这一张「趴睡」帧。
