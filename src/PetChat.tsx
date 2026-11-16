@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Sparkles, Trash2, Wrench, X } from "lucide-react";
+import { Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
 import { PetSkillsSettings } from "./PetSkillsSettings";
@@ -14,7 +14,8 @@ import {
   runSkill,
   skillsPrompt,
 } from "./petSkills";
-import { usePetCharacter } from "./petCharacters";
+import { usePetCharacter, PET_CHARACTER_LABELS } from "./petCharacters";
+import { petAvatarUrl } from "./petAvatars";
 import {
   loadLocalChatConfig,
   LOCAL_CHAT_UPDATED_EVENT,
@@ -101,6 +102,8 @@ function loadMessages(): ChatMessage[] {
 export function PetChat() {
   const t = useTranslation();
   const character = usePetCharacter();
+  const avatarSrc = petAvatarUrl(character);
+  const avatarName = PET_CHARACTER_LABELS[character];
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages);
   const [sessionId, setSessionId] = useState<string | null>(() =>
     window.localStorage.getItem(SESSION_KEY),
@@ -562,7 +565,13 @@ export function PetChat() {
     <section className="pet-chat" aria-label={t.chat.title}>
       <header className="pet-chat__header">
         <div className="pet-chat__heading">
-          <span className="pet-chat__spark"><Sparkles size={15} strokeWidth={1.9} /></span>
+          <img
+            className="pet-chat__avatar pet-chat__avatar--header"
+            src={avatarSrc}
+            alt={avatarName}
+            title={avatarName}
+            draggable={false}
+          />
           <div>
             <strong>{t.chat.title}</strong>
             <small>
@@ -639,7 +648,12 @@ export function PetChat() {
       <div className="pet-chat__list" ref={listRef} role="log" aria-live="polite">
         {messages.length === 0 && (
           <div className="pet-chat__empty">
-            <span className="pet-chat__empty-dog" aria-hidden="true">🐶</span>
+            <img
+              className="pet-chat__avatar pet-chat__avatar--empty"
+              src={avatarSrc}
+              alt={avatarName}
+              draggable={false}
+            />
             <p>{t.chat.empty}</p>
             <small>{t.chat.emptyHint}</small>
           </div>
@@ -647,64 +661,95 @@ export function PetChat() {
         {messages.map((message) => (
           <div
             key={message.id}
-            className={`pet-chat__bubble pet-chat__bubble--${message.role}`}
+            className={`pet-chat__row pet-chat__row--${message.role}`}
           >
-            {message.thumbnails && message.thumbnails.length > 0 && (
-              <div className="pet-chat__thumbs">
-                {message.thumbnails.map((thumb, index) => (
-                  <img key={index} src={thumb} alt={t.chat.imageAttached(index + 1)} />
-                ))}
-              </div>
+            {message.role === "assistant" && (
+              <img
+                className="pet-chat__avatar"
+                src={avatarSrc}
+                alt={avatarName}
+                title={avatarName}
+                draggable={false}
+              />
             )}
-            {showThinking && message.reasoning ? (
-              <ChatReasoning text={message.reasoning} />
-            ) : null}
-            {message.text && <ChatText text={message.text} />}
-            {message.toolNote ? (
-              <small className="pet-chat__tool-note">{message.toolNote}</small>
-            ) : null}
-            <div className="pet-chat__meta">
-              <time dateTime={new Date(message.at).toISOString()}>
-                {new Date(message.at).toLocaleTimeString(t.localeTag, {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </time>
-              <button
-                type="button"
-                className="pet-chat__copy"
-                title="复制这条消息"
-                aria-label="复制这条消息"
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      await navigator.clipboard.writeText(message.text);
-                    } catch {
-                      await invoke("set_clipboard_text", { text: message.text }).catch(() => undefined);
-                    }
-                  })();
-                }}
-              >
-                <Copy size={11} strokeWidth={2} />
-              </button>
+            <div
+              className={`pet-chat__bubble pet-chat__bubble--${message.role}`}
+            >
+              {message.thumbnails && message.thumbnails.length > 0 && (
+                <div className="pet-chat__thumbs">
+                  {message.thumbnails.map((thumb, index) => (
+                    <img key={index} src={thumb} alt={t.chat.imageAttached(index + 1)} />
+                  ))}
+                </div>
+              )}
+              {showThinking && message.reasoning ? (
+                <ChatReasoning text={message.reasoning} />
+              ) : null}
+              {message.text && <ChatText text={message.text} />}
+              {message.toolNote ? (
+                <small className="pet-chat__tool-note">{message.toolNote}</small>
+              ) : null}
+              <div className="pet-chat__meta">
+                <time dateTime={new Date(message.at).toISOString()}>
+                  {new Date(message.at).toLocaleTimeString(t.localeTag, {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+                <button
+                  type="button"
+                  className="pet-chat__copy"
+                  title="复制这条消息"
+                  aria-label="复制这条消息"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await navigator.clipboard.writeText(message.text);
+                      } catch {
+                        await invoke("set_clipboard_text", { text: message.text }).catch(() => undefined);
+                      }
+                    })();
+                  }}
+                >
+                  <Copy size={11} strokeWidth={2} />
+                </button>
+              </div>
             </div>
           </div>
         ))}
         {busy && (streamingReasoning || streamingReply) && (
-          <div className="pet-chat__bubble pet-chat__bubble--assistant">
-            {showThinking && streamingReasoning ? (
-              <ChatReasoning text={streamingReasoning} streaming />
-            ) : null}
-            {streamingReply ? <ChatText text={streamingReply} /> : null}
+          <div className="pet-chat__row pet-chat__row--assistant">
+            <img
+              className="pet-chat__avatar"
+              src={avatarSrc}
+              alt={avatarName}
+              title={avatarName}
+              draggable={false}
+            />
+            <div className="pet-chat__bubble pet-chat__bubble--assistant">
+              {showThinking && streamingReasoning ? (
+                <ChatReasoning text={streamingReasoning} streaming />
+              ) : null}
+              {streamingReply ? <ChatText text={streamingReply} /> : null}
+            </div>
           </div>
         )}
         {busy && (
-          <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
-            <LoaderCircle size={15} className="pet-chat__spin" />
-            <span>
-              {thinkingOn ? "小狗正在思考…" : t.chat.thinking}
-              {waitSeconds >= 1 ? `（${waitSeconds}s）` : ""}
-            </span>
+          <div className="pet-chat__row pet-chat__row--assistant">
+            <img
+              className="pet-chat__avatar"
+              src={avatarSrc}
+              alt={avatarName}
+              title={avatarName}
+              draggable={false}
+            />
+            <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
+              <LoaderCircle size={15} className="pet-chat__spin" />
+              <span>
+                {thinkingOn ? "小狗正在思考…" : t.chat.thinking}
+                {waitSeconds >= 1 ? `（${waitSeconds}s）` : ""}
+              </span>
+            </div>
           </div>
         )}
         {busy && thinkingOn && waitSeconds >= 3 && !streamingReasoning && (

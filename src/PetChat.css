@@ -116,13 +116,55 @@
   line-height: 1.5;
 }
 
+.pet-chat__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.pet-chat__row--user {
+  justify-content: flex-end;
+}
+
+.pet-chat__row--assistant {
+  justify-content: flex-start;
+}
+
+.pet-chat__avatar {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 1px;
+  border: 1px solid rgba(20, 24, 35, 0.09);
+  border-radius: 50%;
+  background: #ffffff;
+  object-fit: contain;
+  box-shadow: 0 1px 3px rgba(20, 24, 35, 0.07);
+}
+
+.pet-chat__avatar--header {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+}
+
+.pet-chat__avatar--empty {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  margin-bottom: 4px;
+  border-radius: 18px;
+  padding: 3px;
+}
+
 .pet-chat__bubble {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   width: fit-content;
-  max-width: 88%;
-  margin: 0 0 8px;
+  max-width: calc(100% - 34px);
+  margin: 0;
   padding: 9px 11px;
   border-radius: 14px;
   box-shadow: none;

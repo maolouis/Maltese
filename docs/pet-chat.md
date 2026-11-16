@@ -7,6 +7,14 @@
 
 聊天记录保存在浏览器 `localStorage`（`focusd-island-pet-chat-messages`），DSH 会话 id 保存在 `focusd-island-pet-chat-session`；点右上角垃圾桶会清空这两项。模型后端配置保存在 `maltese-local-chat-settings`，两种后端共用同一份聊天记录。每次请求还会带上当前桌宠形象（小白 / 小鸡毛 / 两只一起），所以切换形象后，新回复会使用对应的性格。
 
+## 头像
+
+小狗回复的每一行左边都带当前形象的头像，标题栏和空状态也用同一张；切换形象后立即跟着换。
+
+- 三张头像是从对应角色的 GIF 里截的正面帧，统一裁成 160×160 透明 PNG，放在 `assets/pets/avatars/{xiaobai,xiaojimao,duo}.png`（会随 `assets/pets` 一起打进安装包）。
+- 解析走 `src/petAvatars.ts` 的 `petAvatarUrl()`，与 GIF 同一套资源目录逻辑，开发 / 安装路径都能加载。
+- 想换头像：直接替换同名 PNG 即可（建议方形、透明底）；小鸡毛和小白各自的头像互不影响。
+
 ## 主动聊天（会弹气泡）
 
 在设置 →「感知与陪伴」或独立设置窗口「陪伴与感知」里打开「让模型观察并主动找你聊天」，再选方式和间隔（5–240 分钟，默认 30）。

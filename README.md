@@ -89,7 +89,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 - 展开面板切到 **聊天**，通过本机 DSH CLI 的 `headless` profile 对话；聊天会跟随当前形象，让小白、小鸡毛或两只小狗一起回应。
 - **本地模型**：点击聊天右上角的模型设置，可切换到 Ollama / LM Studio / llama.cpp / Strata 等 OpenAI 兼容接口。接口地址与模型名**默认留空**，点预设按钮或手动填写；选 Strata 时地址是 `http://127.0.0.1:8080/v1`，设置里可以直接按 Qwen3.6 配置启动 Strata、调整输出长度、温度、Top-P、思考和流式输出。桌宠支持本地图片输入，Strata 的视觉编码器使用 CPU 模式以保留显存；内容只在本机流转。
-- 支持多轮会话、Enter 发送、Shift+Enter 换行、清空对话；聊天记录只保存在本机 `localStorage`。
+- 支持多轮会话、Enter 发送、Shift+Enter 换行、清空对话；聊天记录只保存在本机 `localStorage`。小狗每条回复左边都带当前形象的头像（小白 / 小鸡毛 / 两只一起各一张，`assets/pets/avatars/`），切形象即时跟着换。
 - 自动探测 DSH CLI；也可用 `MALTESE_DSH_CLI` 指定 `dsh.cmd` 路径。
 - headless 默认用桌面端登录的账号路由（`deepseek-account` + `deepseek-flash`），不需要另外配 `DEEPSEEK_API_KEY`；之前直接报 `MISSING_CREDENTIAL` 的情况已修掉。
 - 选择「小白和小鸡毛」时，回复会分别以「小白：」「小鸡毛：」开头，让两只小狗各说一句；选择单只形象时使用对应性格。
