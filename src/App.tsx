@@ -181,7 +181,13 @@ type PetState =
   | "chase"
   | "peek"
   | "happy"
-  | "relax";
+  | "relax"
+  | "angry"
+  | "cry"
+  | "love"
+  | "ride"
+  | "bath"
+  | "costume";
 type PetAction = Exclude<PetState, "idle" | "listening" | "working" | "attention">;
 type TodoPageMode = "today" | "daily" | "archive" | "review";
 type ArchiveLayout = "cards" | "timeline";
@@ -1966,6 +1972,12 @@ export function IslandShell({
                       ["chase", "🏃 追球"],
                       ["eating", "🍖 喂食"],
                       ["sleeping", "😴 睡觉"],
+                      ["angry", "😤 生气"],
+                      ["cry", "😭 委屈"],
+                      ["love", "💗 比心"],
+                      ["ride", "🚴 兜风"],
+                      ["bath", "🛁 泡澡"],
+                      ["costume", "🎭 装扮"],
                     ] as const).map(([action, label]) => (
                       <button key={action} type="button" onClick={() => onPetAction(action)}>
                         {label}
@@ -8922,7 +8934,7 @@ function IslandApp({
     let cancelled = false;
     void listen<{ action?: string }>("maltese-pet-action", (event) => {
       const action = event.payload?.action;
-      const allowed: PetAction[] = ["pet", "eating", "pickup", "scared", "sleeping", "celebrate", "chin", "spin", "play", "hide", "chase"];
+      const allowed: PetAction[] = ["pet", "eating", "pickup", "scared", "sleeping", "celebrate", "chin", "spin", "play", "hide", "chase", "angry", "cry", "love", "ride", "bath", "costume"];
       if (action && allowed.includes(action as PetAction)) {
         triggerPetAction(action as PetAction);
       }

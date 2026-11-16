@@ -60,6 +60,12 @@ const STATE_TO_ACTION: Record<string, string> = {
   hide: "hide",
   chase: "chase",
   peek: "peek",
+  angry: "angry",
+  cry: "cry",
+  love: "love",
+  ride: "ride",
+  bath: "bath",
+  costume: "costume",
 };
 
 /** 动作缺素材时的视觉近似回退链（取自 LineDogPet 的 ACTION_FALLBACK）。 */
@@ -85,6 +91,12 @@ const ACTION_FALLBACK: Record<string, string[]> = {
   peek: ["play", "idle"],
   play: ["happy", "idle"],
   hide: ["scared", "idle"],
+  angry: ["nervous", "scared", "idle"],
+  cry: ["scared", "nervous", "idle"],
+  love: ["pet", "happy", "idle"],
+  ride: ["play", "walk", "idle"],
+  bath: ["relax", "idle"],
+  costume: ["happy", "idle"],
 };
 
 /** 招牌动作固定播共享池里的那一张，和 LineDogPet 手感一致。 */

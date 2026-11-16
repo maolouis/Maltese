@@ -470,6 +470,12 @@ const en: Translations = {
       peek: "peekaboo",
       happy: "a happy tail wag",
       relax: "quiet company",
+      angry: "a fake grumble",
+      cry: "a tiny sulk",
+      love: "a heart",
+      ride: "a scooter ride",
+      bath: "a bubble bath",
+      costume: "a costume change",
     },
   },
 

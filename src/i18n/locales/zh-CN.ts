@@ -473,6 +473,12 @@ const zhCN: Translations = {
       peek: "探头探脑",
       happy: "开心摇尾巴",
       relax: "安静陪着",
+      angry: "假装生气",
+      cry: "委屈巴巴",
+      love: "对你比心",
+      ride: "骑车兜风",
+      bath: "泡个澡",
+      costume: "换装打扮",
     },
   },
 

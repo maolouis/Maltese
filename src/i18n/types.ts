@@ -451,6 +451,12 @@ export type Translations = {
       peek: string;
       happy: string;
       relax: string;
+      angry: string;
+      cry: string;
+      love: string;
+      ride: string;
+      bath: string;
+      costume: string;
     };
   };
 
