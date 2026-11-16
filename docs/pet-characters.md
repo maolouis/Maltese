@@ -8,12 +8,12 @@ Maltese 现在支持 LineDogPet 的两只小狗形象，并把「两只同框」
 
 ```
 assets/pets/chars/
-├── xiaobai/    小白，26 个动作、384 张 GIF
-├── xiaojimao/  小鸡毛，24 个动作、228 张 GIF
-└── shared/     两只小狗同框，21 个动作、176 张 GIF（不是可选角色）
+├── xiaobai/    小白，25 个动作、380 张 GIF
+├── xiaojimao/  小鸡毛，24 个动作、225 张 GIF
+└── shared/     两只小狗同框，21 个动作、180 张 GIF（不是可选角色）
 ```
 
-2026-11-16 做过一次角色归位：`shared` 里原先混入的单只小白 / 单只小鸡毛素材，按画面颜色和人工抽检分回 `xiaobai` / `xiaojimao`；`shared` 只保留同框素材。三张完全重复的 GIF 已移到 `work/shared-split-duplicates/`，因此总数从 791 变为 788。抱起 / 转圈 / 追逐的固定招牌图仍留在 `shared`。
+2026-11-16 做过一次角色归位：`shared` 里原先混入的单只小白 / 单只小鸡毛素材，按画面颜色和人工抽检分回 `xiaobai` / `xiaojimao`；`shared` 只保留同框素材。三张完全重复的 GIF 已移到 `work/shared-split-duplicates/`，另有三张不属于单只角色的素材（两张多狗群像、一张灰狗）移到 `work/shared-nonduo/`，因此总数从 791 变为 785。抱起 / 转圈 / 追逐的固定招牌图仍留在 `shared`。
 
 文件名保留原始中文，路径在生成清单时做了 URL 编码。素材清单由脚本生成：
 
@@ -73,7 +73,7 @@ node scripts/build-pet-manifest.mjs
 
 - **按动作分目录**：`weibo/<动作>/<组>-<序号>.gif`，动作名对齐 `assets/pets/chars/` 现有的 `idle / happy / pet / sleep / eat / relax / play / nervous / scared / peek / hide / work / paper / hop / walk`，另按画面补了 6 个新动作名 `angry`、`cry`、`love`、`ride`、`bath`、`costume`，共 21 类。逐张清单见同目录 `by-action.md`。
 - 每张还带情绪标签（开心 / 亲昵 / 难过 / 生气 / 惊讶 / 困倦 / 无语 / 害羞 / 进食 / 玩耍 / 中性），清单见 `by-emotion.md`。
-- **整库已并入轮播池**：21 类 296 张全部并入 `assets/pets/chars/shared/<动作>/`，随后按角色归位——单只小白 / 小鸡毛回到各自目录，`shared` 只留同框素材（当前 176 张）。默认形象每 3 张本角色图插 1 张同框图，所以官方表情包会自然混进轮播。
+- **整库已并入轮播池**：21 类 296 张全部并入 `assets/pets/chars/shared/<动作>/`，随后按角色归位——单只小白 / 小鸡毛回到各自目录，`shared` 只留同框素材（当前 180 张）。默认形象每 3 张本角色图插 1 张同框图，所以官方表情包会自然混进轮播。
   `src/petCharacters.ts` 的 `STATE_TO_ACTION` 与 `ACTION_FALLBACK` 已挂上 6 个新动作
   （回退链分别是 `angry → nervous → scared → idle`、`cry → scared → nervous → idle`、`love → pet → happy → idle`、
   `ride → play → walk → idle`、`bath → relax → idle`、`costume → happy → idle`），

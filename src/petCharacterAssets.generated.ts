@@ -60,7 +60,6 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
     ],
     "happy": [
       "/assets/pets/chars/xiaobai/happy/p12-1.gif",
-      "/assets/pets/chars/xiaobai/happy/p15-9.gif",
       "/assets/pets/chars/xiaobai/happy/p19-2.gif",
       "/assets/pets/chars/xiaobai/happy/p19-6.gif",
       "/assets/pets/chars/xiaobai/happy/p2-8.gif",
@@ -280,7 +279,6 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/xiaobai/idle/%E9%9D%9E%E5%B8%B8%E5%A5%BD.gif",
       "/assets/pets/chars/xiaobai/idle/%E9%9E%A0%E8%BA%AC.gif",
       "/assets/pets/chars/xiaobai/idle/%E9%9E%A0%E8%BA%AC_3.gif",
-      "/assets/pets/chars/xiaobai/idle/%E9%A3%9E%E6%9C%BA.gif",
       "/assets/pets/chars/xiaobai/idle/%E9%A6%8B.gif",
       "/assets/pets/chars/xiaobai/idle/%E9%AA%84%E5%82%B2.gif",
     ],
@@ -375,9 +373,6 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/xiaobai/relax/%E8%B6%B4%E8%B6%B4_2.gif",
       "/assets/pets/chars/xiaobai/relax/%E9%9C%B2%E8%82%9A%E7%9A%AE.gif",
     ],
-    "ride": [
-      "/assets/pets/chars/xiaobai/ride/sp-comic-4.gif",
-    ],
     "scared": [
       "/assets/pets/chars/xiaobai/scared/p1-1.gif",
       "/assets/pets/chars/xiaobai/scared/p11-3.gif",
@@ -393,7 +388,6 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/xiaobai/sleep/p19-7.gif",
       "/assets/pets/chars/xiaobai/sleep/p19-9.gif",
       "/assets/pets/chars/xiaobai/sleep/p2-1.gif",
-      "/assets/pets/chars/xiaobai/sleep/p21-1.gif",
       "/assets/pets/chars/xiaobai/sleep/p22-2.gif",
       "/assets/pets/chars/xiaobai/sleep/p26-27-1.gif",
       "/assets/pets/chars/xiaobai/sleep/p26-27-7.gif",
@@ -489,7 +483,6 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
     ],
     "happy": [
       "/assets/pets/chars/xiaojimao/happy/p16-1.gif",
-      "/assets/pets/chars/xiaojimao/happy/p16-8.gif",
       "/assets/pets/chars/xiaojimao/happy/p23-1.gif",
       "/assets/pets/chars/xiaojimao/happy/p23-2.gif",
       "/assets/pets/chars/xiaojimao/happy/p25-1.gif",
@@ -548,13 +541,11 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/xiaojimao/idle/p31-2.gif",
       "/assets/pets/chars/xiaojimao/idle/p33-4.gif",
       "/assets/pets/chars/xiaojimao/idle/sp-emoji-7.gif",
-      "/assets/pets/chars/xiaojimao/idle/sp-supp-202301-1.gif",
       "/assets/pets/chars/xiaojimao/idle/sp-xxgold-1-1.gif",
       "/assets/pets/chars/xiaojimao/idle/sp-xxgold-1-7.gif",
       "/assets/pets/chars/xiaojimao/idle/sp-xxgold-2-1.gif",
       "/assets/pets/chars/xiaojimao/idle/sp-xxgold-2-3.gif",
       "/assets/pets/chars/xiaojimao/idle/%E4%B8%BE%E9%87%8D.gif",
-      "/assets/pets/chars/xiaojimao/idle/%E4%BC%9A%E5%A5%BD%E7%9A%84.gif",
       "/assets/pets/chars/xiaojimao/idle/%E5%80%92%E4%B8%8B_2.gif",
       "/assets/pets/chars/xiaojimao/idle/%E5%86%99.gif",
       "/assets/pets/chars/xiaojimao/idle/%E5%87%86%E5%A4%87.gif",
@@ -790,6 +781,8 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/shared/idle/p32-5.gif",
       "/assets/pets/chars/shared/idle/p7-7.gif",
       "/assets/pets/chars/shared/idle/p7-8.gif",
+      "/assets/pets/chars/shared/idle/sp-supp-202301-1.gif",
+      "/assets/pets/chars/shared/idle/%E4%BC%9A%E5%A5%BD%E7%9A%84.gif",
       "/assets/pets/chars/shared/idle/%E5%90%83%E8%8D%AF.gif",
       "/assets/pets/chars/shared/idle/%E5%90%B9%E9%A3%8E.gif",
       "/assets/pets/chars/shared/idle/%E5%90%B9%E9%A3%8E_2.gif",
@@ -812,6 +805,7 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
       "/assets/pets/chars/shared/idle/%E8%B9%AD%E8%B9%AD.gif",
       "/assets/pets/chars/shared/idle/%E8%B9%AD%E8%B9%AD_2.gif",
       "/assets/pets/chars/shared/idle/%E9%83%81%E9%97%B7_2.gif",
+      "/assets/pets/chars/shared/idle/%E9%A3%9E%E6%9C%BA.gif",
     ],
     "love": [
       "/assets/pets/chars/shared/love/p17-3.gif",
@@ -912,6 +906,7 @@ export const PET_CHARACTER_ASSETS: Record<string, Record<string, string[]>> = {
     ],
     "ride": [
       "/assets/pets/chars/shared/ride/p31-5.gif",
+      "/assets/pets/chars/shared/ride/sp-comic-4.gif",
     ],
     "scared": [
       "/assets/pets/chars/shared/scared/p2-teaser-7.gif",
