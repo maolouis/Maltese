@@ -178,6 +178,7 @@ impl ChannelManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::model::now_seconds;
 
     #[test]
     fn degrades_after_three_parser_mismatches() {

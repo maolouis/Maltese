@@ -28,6 +28,7 @@ pub struct BrowserHandle {
     pub executable: String,
 }
 
+#[derive(Debug)]
 pub struct BrowserProcess {
     pub handle: BrowserHandle,
     child: Child,

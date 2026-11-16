@@ -114,6 +114,25 @@ body,
   overflow-y: auto;
 }
 
+/* 宠物正文和系统通知使用不同的语义样式。宠物说话直接读正文，字号更大，
+   系统通知保留标题来说明来源。 */
+.pet-bubble-cloud--pet .pet-bubble-cloud__body {
+  margin-top: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  font-weight: 500;
+  color: #2b2f3a;
+  opacity: 1;
+}
+
+.pet-bubble-cloud--pet {
+  border: 1px solid rgba(127, 195, 144, 0.38);
+}
+
+.pet-bubble-cloud--system {
+  border: 1px solid rgba(247, 188, 125, 0.32);
+}
+
 /* ---------- hover 互动面板（云朵形） ---------- */
 
 .pet-bubble-panel {

@@ -11,6 +11,7 @@ export type PetEmotion =
   | "listen";
 
 export type PetInteractionKind =
+  | "single-hop"
   | "kick-ball"
   | "duo-wave"
   | "comfort"
@@ -127,13 +128,22 @@ export function createPetInteraction(input: {
     primary: input.primary,
     secondary: secondaryCharacter(input.primary),
     startedAt: now,
-    durationMs: input.durationMs ?? (input.kind === "comfort" ? 3200 : 4200),
+    durationMs: input.durationMs ?? (input.kind === "comfort" ? 3200 : input.kind === "single-hop" ? 2400 : 4200),
   };
 }
 
 export function interactionFromAction(action: string): PetInteractionKind | undefined {
+  if (action === "pet") return "single-hop";
   if (action === "chase" || action === "play") return "kick-ball";
   if (action === "celebrate" || action === "spin") return "celebrate";
   if (action === "pickup" || action === "chin") return "comfort";
   return undefined;
+}
+
+export function interactionFromEmotion(emotion: PetEmotion): PetInteractionKind {
+  if (emotion === "celebrate" || emotion === "happy") return "celebrate";
+  if (emotion === "comfort" || emotion === "listen" || emotion === "sleepy") return "comfort";
+  if (emotion === "curious") return "duo-wave";
+  if (emotion === "encourage") return "clone-wave";
+  return "duo-wave";
 }

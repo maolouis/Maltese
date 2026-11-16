@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Link2, RefreshCw, Send, Unlink } from "lucide-react";
-import { decryptMessage, encryptMessage, generatePairCode, topicForCode } from "./pairing";
+import { decryptMessage, encryptMessage, generatePairCode, isPresenceFresh, topicForCode } from "./pairing";
 import "./RelationshipPlugin.css";
 
 type Relation = "couple" | "friend" | "brother";
@@ -286,6 +286,9 @@ export function RelationshipPlugin() {
       } else if (payload.t === "bye") {
         peerName = "";
         peerRelation = null;
+        peerWork = "";
+        peerEmotion = null;
+        peerStatusAt = 0;
         setStatus("对方已断开");
         touched = true;
       }
@@ -388,7 +391,15 @@ export function RelationshipPlugin() {
   const disconnect = async () => {
     await send(pair.code, { t: "bye", at: Date.now() });
     helloRepliedRef.current = false;
-    savePair({ ...pair, peerName: "", peerRelation: null, since: "" });
+    savePair({
+      ...pair,
+      peerName: "",
+      peerRelation: null,
+      peerWork: "",
+      peerEmotion: null,
+      peerStatusAt: 0,
+      since: "",
+    });
     setLog([]);
     writeJson(LOG_KEY, []);
     setStatus("已断开，配对码仍然保留，可以再连回来");
@@ -403,7 +414,9 @@ export function RelationshipPlugin() {
     else setDraft(text);
   };
 
-  const peerOnline = Boolean(pair.peerName) || Boolean(pair.peerRelation);
+  const peerFresh = pair.lastSeenAt === 0 || isPresenceFresh(pair.lastSeenAt);
+  const peerOnline = (Boolean(pair.peerName) || Boolean(pair.peerRelation)) && peerFresh;
+  const peerPresenceFresh = isPresenceFresh(pair.peerStatusAt);
   const relationConfirmed =
     pair.myRelation && pair.peerRelation && pair.myRelation === pair.peerRelation;
 
@@ -508,10 +521,10 @@ export function RelationshipPlugin() {
               {peerOnline ? (
                 <>
                   <strong className="relationship__presence-work">
-                    {pair.peerWork || "还没上报状态"}
+                    {peerPresenceFresh ? pair.peerWork || "还没上报状态" : "状态暂未更新"}
                   </strong>
                   <span className="relationship__presence-mood">
-                    {pair.peerEmotion ? (
+                    {peerPresenceFresh && pair.peerEmotion ? (
                       <>
                         {EMOTION_EMOJI[pair.peerEmotion]} 心情：{EMOTION_LABELS[pair.peerEmotion]}
                       </>
@@ -519,7 +532,7 @@ export function RelationshipPlugin() {
                       "心情：还没说"
                     )}
                   </span>
-                  {pair.peerStatusAt > 0 && (
+                  {peerPresenceFresh && pair.peerStatusAt > 0 && (
                     <small className="relationship__presence-time">
                       更新于 {Math.max(0, Math.round((Date.now() - pair.peerStatusAt) / 60000))} 分钟前
                     </small>

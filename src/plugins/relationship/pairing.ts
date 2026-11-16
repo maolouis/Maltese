@@ -8,6 +8,12 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+export const PRESENCE_MAX_AGE_MS = 120_000;
+
+export function isPresenceFresh(lastSeenAt: number, now = Date.now()): boolean {
+  return lastSeenAt > 0 && now - lastSeenAt < PRESENCE_MAX_AGE_MS;
+}
+
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return new Uint8Array(digest);

@@ -116,6 +116,13 @@ import { playCustomSound } from "./customSound";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { usePetHitBox } from "./petHitBox";
 import {
+  createPetInteraction,
+  inferPetEmotion,
+  interactionFromAction,
+  interactionFromEmotion,
+  parsePetReply,
+  type PetEmotion,
+  type PetInteractionKind,
   type PetInteractionSession,
 } from "./petInteractions";
 import {
@@ -146,7 +153,14 @@ import "./App.css";
 
 export type IslandMode = "collapsed" | "expanded";
 
-type PetOverlay = { mode: "hover" | "cloud"; title?: string; body?: string; image?: string; todoTitle?: string };
+type PetOverlay = {
+  mode: "hover" | "cloud";
+  title?: string;
+  body?: string;
+  image?: string;
+  todoTitle?: string;
+  bubbleKind?: "pet" | "system";
+};
 
 type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq" | "assistant" | "chat" | "video" | "onboarding";
 type PetState =
@@ -1497,9 +1511,12 @@ export function IslandShell({
           ? "celebrate"
           : "happy";
   const interactionPartnerGif = petInteraction
+    && petInteraction.kind !== "single-hop"
+    && petInteraction.primary !== "duo"
     ? characterFramesForState(petInteraction.secondary, interactionPartnerState)[0] ?? resolvePetGif(interactionPartnerState)
     : null;
   const interactionCloneGif = petInteraction
+    && petInteraction.primary !== "duo"
     ? characterFramesForState(petInteraction.primary, "happy")[0] ?? resolvePetGif("happy")
     : null;
   // 单击切表情：先固定一张，等自动轮播/状态变化时再交还给轮播。
@@ -1809,7 +1826,7 @@ export function IslandShell({
             </div>
           )}
           <span
-            className={`maltese-pet maltese-pet--large${petSquash ? " maltese-pet--squash" : ""}${isTucked && tuckEdge === "top" ? " maltese-pet--flip" : ""}`}
+            className={`maltese-pet maltese-pet--large${petSquash ? " maltese-pet--squash" : ""}${isTucked && tuckEdge === "top" ? " maltese-pet--flip" : ""}${petInteraction?.kind === "single-hop" ? " maltese-pet--interaction-hop" : ""}`}
             role="button"
             tabIndex={0}
             aria-label={collapsedLabel}
@@ -1924,7 +1941,11 @@ export function IslandShell({
             onContextMenu={(event) => event.stopPropagation()}
           >
             {overlay.mode === "cloud" ? (
-              <div className="pet-cloud pet-bubble-cloud" role="status">
+              <div
+                className={`pet-cloud pet-bubble-cloud${overlay.bubbleKind === "pet" ? " pet-bubble-cloud--pet" : " pet-bubble-cloud--system"}`}
+                data-bubble-kind={overlay.bubbleKind ?? "system"}
+                role="status"
+              >
                 {overlay.title && <strong className="pet-bubble-cloud__title">{overlay.title}</strong>}
                 {overlay.image && <img className="pet-bubble-cloud__image" src={overlay.image} alt="" draggable={false} />}
                 {overlay.body && <p className="pet-bubble-cloud__body">{overlay.body}</p>}
@@ -6083,6 +6104,19 @@ function IslandApp({
     },
     [proactiveCharacter],
   );
+  useEffect(() => () => {
+    if (petInteractionTimer.current !== null) {
+      window.clearTimeout(petInteractionTimer.current);
+    }
+  }, []);
+  useEffect(() => {
+    if (mode === "collapsed" && !isTucked) return;
+    if (petInteractionTimer.current !== null) {
+      window.clearTimeout(petInteractionTimer.current);
+      petInteractionTimer.current = null;
+    }
+    setPetInteraction(null);
+  }, [isTucked, mode]);
   const showActivityMood = useCallback((mood: PetState | undefined) => {
     if (!mood) {
       return;
@@ -6821,7 +6855,7 @@ function IslandApp({
   }, [scheduleBubbleHide]);
 
   // 统一的云朵气泡出口：收起态才浮出；被自动缩边（tucked）时先悄悄把小狗露出来。
-  const showCloudBubble = useCallback((title: string, body: string, image?: string) => {
+  const showCloudBubble = useCallback((title: string, body: string, image?: string, bubbleKind: "pet" | "system" = "system") => {
     if (!isTauri() || !settings.bubbleOn || mode !== "collapsed") {
       return;
     }
@@ -6829,7 +6863,7 @@ function IslandApp({
       revealIsland();
     }
     void invoke("show_island_no_focus").catch(() => undefined);
-    applyPetOverlay({ mode: "cloud", title, body, image });
+    applyPetOverlay({ mode: "cloud", title, body, image, bubbleKind });
     if (overlayHideTimerRef.current !== null) {
       window.clearTimeout(overlayHideTimerRef.current);
     }
@@ -6837,6 +6871,11 @@ function IslandApp({
       hidePetOverlay();
     }, settings.bubbleDurationMs);
   }, [applyPetOverlay, hidePetOverlay, isTucked, mode, revealIsland, settings.bubbleDurationMs, settings.bubbleOn]);
+
+  const showPetSpeech = useCallback(
+    (body: string, image?: string) => showCloudBubble("", body, image, "pet"),
+    [showCloudBubble],
+  );
 
   // 让模型观察本机状态并主动说一句；说完弹云朵气泡，聊天记录里也留一条。
   // 支持两种模式：
@@ -6977,14 +7016,6 @@ function IslandApp({
       // 流式生成：一有开头就把气泡弹出来，边生成边更新正文。
       // 之前是等整句生成完才弹，本机大模型要好几秒，看起来就是「回话后很久才冒出气泡」。
       const onFirstTextRef = { fired: false };
-      const bubbleTitle =
-        observe.kind === "code"
-          ? "小狗在旁边"
-          : observe.kind === "video" || observe.kind === "browser"
-            ? "小狗也在看"
-            : observe.kind === "meeting"
-              ? "陪你开会"
-              : "小狗想你了";
       const askOnce = async (extra: string, silent = false) => {
         const prompt = buildProactivePrompt(observe, avoid, angle) + extra;
         const config = loadLocalChatConfig();
@@ -7002,13 +7033,13 @@ function IslandApp({
               // 够 6 个字就先把气泡弹出来（标题按场景），后面继续补全。
               if (!onFirstTextRef.fired && streamed.trim().length >= 6) {
                 onFirstTextRef.fired = true;
-                const partial = streamed.trim().replace(/^["「『]/, "");
-                showCloudBubble(bubbleTitle, partial);
+                const partial = parsePetReply(streamed.trim().replace(/^["「『]/, "")).text;
+                showPetSpeech(partial);
               } else if (onFirstTextRef.fired) {
-                const partial = streamed.trim().replace(/^["「『]/, "");
+                const partial = parsePetReply(streamed.trim().replace(/^["「『]/, "")).text;
                 if (partial) {
                   // 同一个 mode 只更新 DOM，不会反复调整窗口。
-                  applyPetOverlay({ mode: "cloud", title: bubbleTitle, body: partial });
+                  applyPetOverlay({ mode: "cloud", title: "", body: partial, bubbleKind: "pet" });
                 }
               }
             },
@@ -7047,6 +7078,8 @@ function IslandApp({
         return reply.text;
       };
       let line = "";
+      let replyEmotion: PetEmotion | undefined;
+      let replyInteraction: PetInteractionKind | undefined;
       try {
         // 本地模型没启动时先拉起 Strata，否则会一路退化成模板台词。
         const config = loadLocalChatConfig();
@@ -7066,6 +7099,12 @@ function IslandApp({
         line = "";
       }
       line = line.trim().replace(/^["「『]|["」』]$/g, "");
+      {
+        const parsed = parsePetReply(line);
+        line = parsed.text;
+        replyEmotion = parsed.emotion;
+        replyInteraction = parsed.interaction;
+      }
       if (line && isRepeatedProactiveLine(line, avoid)) {
         // 撞车了：连续要两次，措辞一次比一次强硬，温度也更高。
         for (const hint of [
@@ -7074,9 +7113,12 @@ function IslandApp({
         ]) {
           try {
             const retry = (await askOnce(hint, true)) ?? "";
-            const cleaned = retry.trim().replace(/^["「『]|["」』]$/g, "");
+            const parsed = parsePetReply(retry.trim().replace(/^["「『]|["」』]$/g, ""));
+            const cleaned = parsed.text;
             if (cleaned && !isRepeatedProactiveLine(cleaned, avoid)) {
               line = cleaned;
+              replyEmotion = parsed.emotion ?? replyEmotion;
+              replyInteraction = parsed.interaction ?? replyInteraction;
               break;
             }
           } catch {
@@ -7088,13 +7130,16 @@ function IslandApp({
         line = pickProactiveFallback(observe, avoid, angle);
       }
       if (!line) return;
+      replyEmotion ??= inferPetEmotion(line, observe.kind);
+      replyInteraction ??= interactionFromEmotion(replyEmotion);
+      startPetInteraction(replyInteraction, replyEmotion);
       rememberProactiveLine(line, { kind: observe.kind, angle });
       recordSpeakTime(Date.now());
       // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
       if (modeRef.current !== "collapsed") return;
       if (onFirstTextRef.fired) {
         // 气泡已经在流式阶段弹出来了，这里只把正文补成最终版本（不重复弹窗）。
-        applyPetOverlay({ mode: "cloud", title: bubbleTitle, body: line });
+        applyPetOverlay({ mode: "cloud", title: "", body: line, bubbleKind: "pet" });
         appendChat(line);
         try {
           window.localStorage.setItem("maltese-proactive-last", String(Date.now()));
@@ -7104,28 +7149,7 @@ function IslandApp({
         }
         return;
       }
-      // 标题也给点变化，不要永远是「小狗想你了」。
-      const greetingPool =
-        kind === "code"
-          ? ["小狗在旁边", "偷偷看你写代码", "小狗想搭把手"]
-          : kind === "video" || kind === "browser"
-            ? ["小狗也在看", "凑过来一起看", "小狗探头"]
-            : kind === "meeting"
-              ? ["陪你开会", "小狗安静陪着"]
-              : ["小狗想你了", "小狗探头", "突然想起你"];
-      // 上次用过的标题不再连着用，避免「小狗想你了」刷屏。
-      let greeting = greetingPool[Math.floor(Math.random() * greetingPool.length)];
-      try {
-        const lastTitle = window.localStorage.getItem("maltese-proactive-last-title") || "";
-        const alternatives = greetingPool.filter((item) => item !== lastTitle);
-        if (alternatives.length > 0) {
-          greeting = alternatives[Math.floor(Math.random() * alternatives.length)];
-        }
-        window.localStorage.setItem("maltese-proactive-last-title", greeting);
-      } catch {
-        // 忽略
-      }
-      showCloudBubble(greeting, line);
+      showPetSpeech(line);
       appendChat(line);
       try {
         window.localStorage.setItem("maltese-proactive-last", String(Date.now()));
@@ -7147,7 +7171,8 @@ function IslandApp({
     settings.proactiveChat,
     settings.proactiveChatMinutes,
     settings.proactiveChatMode,
-    showCloudBubble,
+    showPetSpeech,
+    startPetInteraction,
   ]);  // 收起态收到新版本时主动弹一次云朵气泡；展开态由 UpdateBanner 提示。
   useEffect(() => {
     if (
@@ -7191,6 +7216,7 @@ function IslandApp({
           settings.todoReminderMinutes,
         ),
       );
+      startPetInteraction("comfort", "encourage");
     }
 
     const timer = window.setInterval(() => {
@@ -7202,6 +7228,7 @@ function IslandApp({
           formatTodoElapsed(elapsed, t.localeTag),
         ),
       );
+      startPetInteraction("comfort", "encourage");
     }, reminderInterval);
 
     return () => {
@@ -7216,6 +7243,7 @@ function IslandApp({
     settings.bubbleOn,
     settings.todoReminderMinutes,
     showCloudBubble,
+    startPetInteraction,
     t,
   ]);
 
@@ -7249,8 +7277,9 @@ function IslandApp({
       return;
     }
     lastCloudAtRef.current = candidate.at;
+    startPetInteraction("duo-wave", "curious");
     showCloudBubble(candidate.title, candidate.body);
-  }, [mode, qqMail.preview, qqMail.previewReceivedAt, qqNotifications.preview, qqNotifications.previewReceivedAt, settings.bubbleOn, showCloudBubble, wechatReminders.previewReceivedAt, wechatReminders.snapshot.body, wechatReminders.snapshot.title]);
+  }, [mode, qqMail.preview, qqMail.previewReceivedAt, qqNotifications.preview, qqNotifications.previewReceivedAt, settings.bubbleOn, showCloudBubble, startPetInteraction, wechatReminders.previewReceivedAt, wechatReminders.snapshot.body, wechatReminders.snapshot.title]);
 
   // 正在播放的曲目切换 → 云朵气泡（带一点情感互动）
   const lastTrackRef = useRef<string | null>(null);
@@ -7271,10 +7300,11 @@ function IslandApp({
     }
     if (lastTrackRef.current !== null) {
       const artist = mediaState.artist ? `，${mediaState.artist} 唱得真好听` : "";
-      showCloudBubble(`🎵 ${mediaState.title}`, `你也喜欢听《${mediaState.title}》呀${artist}～ 我陪你一起听`);
+      startPetInteraction("celebrate", "happy");
+      showPetSpeech(`你也喜欢听《${mediaState.title}》呀${artist}～ 我陪你一起听`);
     }
     lastTrackRef.current = key;
-  }, [mediaLooksLikeVideo, mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showCloudBubble]);
+  }, [mediaLooksLikeVideo, mediaState.artist, mediaState.playbackStatus, mediaState.title, mode, settings.bubbleOn, settings.musicChat, settings.proactiveBubbles, showPetSpeech, startPetInteraction]);
 
   // 剪贴板新增内容 → 云朵气泡（显示内容摘要）
   const lastClipboardIdRef = useRef<string | null>(null);
@@ -7328,7 +7358,9 @@ function IslandApp({
           ) {
             lastActivityRef.current = { kind: info.kind, at: now };
             showActivityMood(ACTIVITY_MOODS[info.kind]);
-            showCloudBubble("小狗观察中", lines[Math.floor(Math.random() * lines.length)]);
+            const line = lines[Math.floor(Math.random() * lines.length)];
+            showPetSpeech(line);
+            startPetInteraction(interactionFromEmotion(inferPetEmotion(line, info.kind)), inferPetEmotion(line, info.kind));
           }
         })
         .catch(() => undefined);
@@ -7340,7 +7372,7 @@ function IslandApp({
       window.clearTimeout(first);
       window.clearInterval(timer);
     };
-  }, [mode, settings.bubbleOn, settings.observeApps, settings.proactiveBubbles, showActivityMood, showCloudBubble]);
+  }, [mode, settings.bubbleOn, settings.observeApps, settings.proactiveBubbles, showActivityMood, showPetSpeech, startPetInteraction]);
 
   // 整点轻轻叫一声
   useEffect(() => {
@@ -7364,11 +7396,11 @@ function IslandApp({
       if (settings.soundOn) {
         playPetChirp("happy");
       }
-      showCloudBubble("汪汪～", `${now.getHours()} 点啦，起来喝口水、伸个懒腰吧`);
+      showPetSpeech(`${now.getHours()} 点啦，起来喝口水、伸个懒腰吧`);
     };
     const timer = window.setInterval(tick, 20_000);
     return () => window.clearInterval(timer);
-  }, [settings.bubbleOn, settings.hourlyChime, settings.proactiveBubbles, settings.soundOn, showCloudBubble]);
+  }, [settings.bubbleOn, settings.hourlyChime, settings.proactiveBubbles, settings.soundOn, showPetSpeech]);
 
   // 时间感知 / 夜间陪伴：每天第一次启动时问候一句
   useEffect(() => {
@@ -7388,7 +7420,7 @@ function IslandApp({
     }
     const hour = now.getHours();
     if ((hour >= 23 || hour < 5) && settings.nightCompanion) {
-      showCloudBubble("夜深了", "这么晚还在忙呀，早点休息，我在旁边陪着你");
+      showPetSpeech("这么晚还在忙呀，早点休息，我在旁边陪着你");
     } else if (settings.senseTime) {
       const line =
         hour < 9
@@ -7400,9 +7432,9 @@ function IslandApp({
               : hour < 18
                 ? "下午好，累了就摸摸我，充个电"
                 : "晚上好，今天辛苦了，剩下的明天再说";
-      showCloudBubble("小狗问候", line);
+      showPetSpeech(line);
     }
-  }, [settings.bubbleOn, settings.nightCompanion, settings.senseTime, showCloudBubble]);
+  }, [settings.bubbleOn, settings.nightCompanion, settings.senseTime, showPetSpeech]);
 
   // 气泡文字颜色存到 localStorage，气泡窗口读取后应用。
   useEffect(() => {
@@ -8850,6 +8882,10 @@ function IslandApp({
     }
     recordDiaryEvent("pet", t.diary.pet(t.diary.petActions[action]));
     setPetAction(action);
+    const interaction = interactionFromAction(action);
+    if (interaction) {
+      startPetInteraction(interaction, action === "celebrate" ? "celebrate" : undefined);
+    }
     if (action === "sleeping") {
       // 睡觉不是五秒动作：立刻缩到最近的屏幕边缘，保持趴睡，鼠标靠近才醒。
       tuckIsland("manual");
@@ -8861,7 +8897,7 @@ function IslandApp({
       petActionTimer.current = null;
       setPetAction(null);
     }, action === "sleeping" ? 5000 : 2600);
-  }, [recordDiaryEvent, t, tuckIsland]);
+  }, [recordDiaryEvent, startPetInteraction, t, tuckIsland]);
   useEffect(() => {
     if (!isTauri()) {
       return;
@@ -8927,6 +8963,7 @@ function IslandApp({
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
         petState={petState}
+        petInteraction={petInteraction}
         onPetAction={triggerPetAction}
         onPetHoverStart={showPetHoverBubble}
         onPetHoverEnd={scheduleBubbleHide}
@@ -8949,7 +8986,6 @@ function IslandApp({
         onReveal={revealIsland}
         onSleepTuck={tuckForSleep}
         onSleepReveal={revealForSleep}
-        petInteraction={null}
         onPageChange={setPage}
       >
         {page === "qq" && (

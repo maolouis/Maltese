@@ -12,6 +12,14 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { X } from "lucide-react";
 import { loadLocalChatConfig } from "./localChat";
+import {
+  addClearDuration,
+  averageDurationMs,
+  clearRank,
+  formatDuration,
+  normalizedBallCount,
+  type ClearHistory,
+} from "./billiardsMetrics";
 import "./Billiards.css";
 
 type DesktopIconCell = { index: number; x: number; y: number; w: number; h: number };
@@ -27,6 +35,7 @@ type DesktopIconLayout = {
 
 type Ball = {
   index: number;
+  virtual: boolean;
   x: number;
   y: number;
   vx: number;
@@ -51,10 +60,89 @@ const MIN_SPEED = 0.05;
 const MAX_POWER = 26;
 const WALL_BOUNCE = 0.74;
 const POCKET_RADIUS = 26;
+const CLEAR_HISTORY_KEY = "maltese-billiards-clear-history";
+
+type GuidePrediction = {
+  points: Array<{ x: number; y: number }>;
+  hitBall: Ball | null;
+};
+
+function predictGuide(cue: { x: number; y: number }, aim: { x: number; y: number }, balls: Ball[], width: number, height: number): GuidePrediction {
+  const rawX = cue.x - aim.x;
+  const rawY = cue.y - aim.y;
+  const rawLength = Math.hypot(rawX, rawY);
+  if (rawLength < 4) return { points: [{ x: cue.x, y: cue.y }], hitBall: null };
+  let direction = { x: rawX / rawLength, y: rawY / rawLength };
+  let position = { x: cue.x, y: cue.y };
+  const points = [position];
+  let hitBall: Ball | null = null;
+  const margin = CUE_RADIUS;
+
+  for (let bounce = 0; bounce < 3; bounce += 1) {
+    let wallDistance = Number.POSITIVE_INFINITY;
+    let wallAxis: "x" | "y" | null = null;
+    if (direction.x > 0) {
+      wallDistance = (width - margin - position.x) / direction.x;
+      wallAxis = "x";
+    } else if (direction.x < 0) {
+      wallDistance = (margin - position.x) / direction.x;
+      wallAxis = "x";
+    }
+    if (direction.y > 0) {
+      const distance = (height - margin - position.y) / direction.y;
+      if (distance < wallDistance) {
+        wallDistance = distance;
+        wallAxis = "y";
+      }
+    } else if (direction.y < 0) {
+      const distance = (margin - position.y) / direction.y;
+      if (distance < wallDistance) {
+        wallDistance = distance;
+        wallAxis = "y";
+      }
+    }
+
+    let ballDistance = Number.POSITIVE_INFINITY;
+    let nextBall: Ball | null = null;
+    for (const ball of balls) {
+      if (ball.pocketed) continue;
+      const offsetX = ball.x - position.x;
+      const offsetY = ball.y - position.y;
+      const along = offsetX * direction.x + offsetY * direction.y;
+      if (along <= 0) continue;
+      const perpendicular = Math.abs(offsetX * direction.y - offsetY * direction.x);
+      const radius = ball.r + CUE_RADIUS + 3;
+      if (perpendicular > radius) continue;
+      const approach = Math.sqrt(Math.max(0, radius * radius - perpendicular * perpendicular));
+      const distance = along - approach;
+      if (distance > 3 && distance < ballDistance) {
+        ballDistance = distance;
+        nextBall = ball;
+      }
+    }
+
+    if (nextBall && ballDistance < wallDistance) {
+      const hit = { x: position.x + direction.x * ballDistance, y: position.y + direction.y * ballDistance };
+      points.push(hit);
+      hitBall = nextBall;
+      break;
+    }
+    if (!wallAxis || !Number.isFinite(wallDistance) || wallDistance <= 0) break;
+    position = { x: position.x + direction.x * wallDistance, y: position.y + direction.y * wallDistance };
+    points.push(position);
+    if (wallAxis === "x") direction = { x: -direction.x, y: direction.y };
+    else direction = { x: direction.x, y: -direction.y };
+    position = { x: position.x + direction.x * 2, y: position.y + direction.y * 2 };
+    points.push(position);
+  }
+  if (points.length < 2) points.push({ x: cue.x + direction.x * 180, y: cue.y + direction.y * 180 });
+  return { points, hitBall };
+}
 /** 图标左上角到球心的偏移：图标格子的中心就是球心 */
 export default function Billiards() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [count, setCount] = useState(0);
+  const [realCount, setRealCount] = useState(0);
   const [phase, setPhase] = useState<Phase>("aiming");
   const [turn, setTurn] = useState<Turn>("you");
   const [youScore, setYouScore] = useState(0);
@@ -64,6 +152,12 @@ export default function Billiards() {
   const [tip, setTip] = useState("按住左键往后拉，松手击球");
   const [dogLine, setDogLine] = useState("");
   const [errorText, setErrorText] = useState("");
+  const [showGuides, setShowGuides] = useState(true);
+  const [clearCard, setClearCard] = useState<{
+    rank: string;
+    elapsedMs: number;
+    averageMs: number | null;
+  } | null>(null);
 
   const ballsRef = useRef<Ball[]>([]);
   const cueRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
@@ -84,6 +178,33 @@ export default function Billiards() {
   // 绝不能在挂载时就开局（否则一启动应用桌面图标就被搬走，见 issue #1）。
   const [inGame, setInGame] = useState(false);
 
+  const readClearHistory = useCallback((): ClearHistory => {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(CLEAR_HISTORY_KEY) || "{}");
+      if (Array.isArray(parsed?.durationsMs)) return { durationsMs: parsed.durationsMs };
+    } catch {
+      // 忽略损坏的本地记录，当前局仍可正常结算。
+    }
+    return { durationsMs: [] };
+  }, []);
+
+  const rememberClear = useCallback(
+    (durationMs: number) => {
+      const next = addClearDuration(readClearHistory(), durationMs);
+      try {
+        window.localStorage.setItem(CLEAR_HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // 隐私模式或存储受限时只显示本局成绩。
+      }
+      return {
+        rank: clearRank(durationMs),
+        elapsedMs: durationMs,
+        averageMs: averageDurationMs(next),
+      };
+    },
+    [readClearHistory],
+  );
+
   phaseRef.current = phase;
   turnRef.current = turn;
 
@@ -98,6 +219,7 @@ export default function Billiards() {
       const layout = await invoke<DesktopIconLayout>("desktop_icons_begin_game");
       if (!layout.visible) {
         setErrorText(layout.error ?? "没有读到桌面图标（图标可能被隐藏了）");
+        setRealCount(0);
         setCount(0);
         setRemaining(0);
         return;
@@ -110,9 +232,12 @@ export default function Billiards() {
       originRef.current = { x: layout.areaX, y: layout.areaY };
       const windowPos = originRef.current;
       const cells = layout.cells.slice(0, 45);
-      const total = cells.length;
+      const realCount = cells.length;
+      const total = normalizedBallCount(realCount);
+      setRealCount(realCount);
       setCount(total);
       setRemaining(total);
+      setClearCard(null);
 
       // 三角摆球：以窗口内坐标计算，再换算成屏幕坐标。
       const radius = Math.max(16, Math.min(26, width / 42));
@@ -130,10 +255,11 @@ export default function Billiards() {
         row += 1;
       }
 
-      ballsRef.current = cells.map((cell, i) => {
+      const realBalls = cells.map((cell, i) => {
         const target = positions[i] ?? { x: width / 2, y: rackTop };
         return {
           index: cell.index,
+          virtual: false,
           x: target.x,
           y: target.y,
           vx: 0,
@@ -146,6 +272,25 @@ export default function Billiards() {
           sentY: Number.NaN,
         };
       });
+      const virtualBalls: Ball[] = Array.from({ length: total - realCount }, (_, offset) => {
+        const index = realCount + offset;
+        const target = positions[index] ?? { x: width / 2, y: rackTop };
+        return {
+          index: -1 - offset,
+          virtual: true,
+          x: target.x,
+          y: target.y,
+          vx: 0,
+          vy: 0,
+          r: radius,
+          pocketed: false,
+          halfX: radius,
+          halfY: radius,
+          sentX: Number.NaN,
+          sentY: Number.NaN,
+        };
+      });
+      ballsRef.current = [...realBalls, ...virtualBalls];
 
       // 六洞
       const inset = 8;
@@ -163,7 +308,7 @@ export default function Billiards() {
 
       // 立刻把真实图标摆到三角位置（图标左上角 = 球心 - 半个格子）
       await invoke("desktop_icons_move", {
-        moves: ballsRef.current.map((ball) => ({
+        moves: ballsRef.current.filter((ball) => !ball.virtual).map((ball) => ({
           index: ball.index,
           x: Math.round(windowPos.x + ball.x - ball.halfX),
           y: Math.round(windowPos.y + ball.y - ball.halfY),
@@ -178,6 +323,7 @@ export default function Billiards() {
       setTip("按住左键往后拉，松手击球");
       startedAtRef.current = null;
       setElapsed(0);
+      setClearCard(null);
       runningRef.current = true;
       setInGame(true);
     } catch (error) {
@@ -491,7 +637,7 @@ export default function Billiards() {
         syncAtRef.current = now;
         const layout = ballsRef.current;
         const moves = layout
-          .filter((ball) => !ball.pocketed)
+          .filter((ball) => !ball.pocketed && !ball.virtual)
           .map((ball) => ({
             index: ball.index,
             x: Math.round(originRef.current.x + ball.x - ball.halfX),
@@ -519,6 +665,8 @@ export default function Billiards() {
           if (left === 0) {
             setPhase("cleared");
             dogRef.current.happy = 1;
+            const finishedAt = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
+            setClearCard(rememberClear(finishedAt));
           } else {
             setTurn("dog");
             setTip("轮到小狗了…");
@@ -530,6 +678,8 @@ export default function Billiards() {
           if (left === 0) {
             setPhase("cleared");
             dogRef.current.happy = 1;
+            const finishedAt = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
+            setClearCard(rememberClear(finishedAt));
           } else {
             setTurn("you");
             setTip("轮到你了：按住左键往后拉，松手击球");
@@ -565,6 +715,25 @@ export default function Billiards() {
         context.stroke();
       }
 
+      // 虚拟球没有对应的桌面图标，用高对比度圆球补在覆盖层里。
+      for (const ball of balls) {
+        if (ball.pocketed || !ball.virtual) continue;
+        context.beginPath();
+        context.arc(ball.x, ball.y, ball.r * 0.72, 0, Math.PI * 2);
+        context.fillStyle = "rgba(251, 191, 36, 0.9)";
+        context.fill();
+        context.strokeStyle = "rgba(120, 53, 15, 0.95)";
+        context.lineWidth = 2;
+        context.stroke();
+        context.fillStyle = "rgba(69, 26, 3, 0.95)";
+        context.font = "700 10px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(String(Math.abs(ball.index)), ball.x, ball.y);
+        context.textAlign = "start";
+        context.textBaseline = "alphabetic";
+      }
+
       context.beginPath();
       context.arc(cue.x, cue.y, CUE_RADIUS, 0, Math.PI * 2);
       context.fillStyle = "rgba(255, 255, 255, 0.96)";
@@ -573,23 +742,28 @@ export default function Billiards() {
       context.lineWidth = 2;
       context.stroke();
 
-      if (aimRef.current.active && phaseRef.current === "aiming") {
+      if (showGuides && aimRef.current.active && phaseRef.current === "aiming") {
         const aim = aimRef.current;
         const dx = cue.x - aim.x;
         const dy = cue.y - aim.y;
         const distance = Math.hypot(dx, dy);
         if (distance > 4) {
-          const nx = dx / distance;
-          const ny = dy / distance;
-          const length = Math.min(520, distance * 1.8);
+          const prediction = predictGuide(cue, aim, balls, w, h);
           context.beginPath();
+          context.moveTo(prediction.points[0].x, prediction.points[0].y);
+          for (const point of prediction.points.slice(1)) context.lineTo(point.x, point.y);
           context.setLineDash([10, 8]);
-          context.moveTo(cue.x, cue.y);
-          context.lineTo(cue.x + nx * length, cue.y + ny * length);
           context.strokeStyle = "rgba(250, 204, 21, 0.8)";
           context.lineWidth = 2;
           context.stroke();
           context.setLineDash([]);
+          if (prediction.hitBall) {
+            context.beginPath();
+            context.arc(prediction.hitBall.x, prediction.hitBall.y, prediction.hitBall.r + 6, 0, Math.PI * 2);
+            context.strokeStyle = "rgba(248, 113, 113, 0.9)";
+            context.lineWidth = 2;
+            context.stroke();
+          }
           const power = Math.min(1, distance / 260);
           context.fillStyle = "rgba(15, 23, 42, 0.5)";
           context.fillRect(cue.x - 42, cue.y + 24, 84, 6);
@@ -643,7 +817,7 @@ export default function Billiards() {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
     };
-  }, [dogLine, fireDogShot]);
+  }, [dogLine, fireDogShot, rememberClear, showGuides]);
 
   const pointOf = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -706,6 +880,15 @@ export default function Billiards() {
             </span>
             <span>剩余 {remaining}</span>
             <span>{Math.floor(elapsed / 1000)}s</span>
+            <button
+              type="button"
+              className={`billiards__btn${showGuides ? " billiards__btn--active" : ""}`}
+              aria-pressed={showGuides}
+              onClick={() => setShowGuides((value) => !value)}
+              title="显示或隐藏反弹预估与碰撞圈"
+            >
+              {showGuides ? "辅助线开" : "辅助线关"}
+            </button>
             <button type="button" className="billiards__btn" onClick={() => void start()} title="重开（R）">
               重开
             </button>
@@ -729,12 +912,25 @@ export default function Billiards() {
         </div>
       )}
 
+      {clearCard && phase === "cleared" && (
+        <div className="billiards__scorecard" role="status">
+          <div className="billiards__scorecard-rank">{clearCard.rank} 段</div>
+          <div className="billiards__scorecard-stats">
+            <span>本局 {formatDuration(clearCard.elapsedMs)}</span>
+            <span>平均 {formatDuration(clearCard.averageMs)}</span>
+          </div>
+          <button type="button" className="billiards__btn billiards__btn--primary" onClick={() => void start()}>
+            再来一局
+          </button>
+        </div>
+      )}
+
       <p className="billiards__tip">
         {inGame
           ? errorText ||
             (phase === "cleared"
               ? `清台完成：你 ${youScore} 分，小狗 ${dogScore} 分（退出后桌面自动恢复）`
-              : `${tip}${count > 0 ? ` · 桌面 ${count} 个图标就是 ${count} 颗球` : ""}`)
+              : `${tip}${count > 0 ? ` · ${realCount} 个桌面图标 + ${count - realCount} 个虚拟球` : ""}`)
           : "只有点「开始这一局」才会动桌面图标"}
       </p>
 
