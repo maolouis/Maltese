@@ -5008,6 +5008,14 @@ html.maltese-page-opening .island__collapsed {
 /* 快捷卡片支持按住拖动排序：拖动期间给出明确的视觉反馈，并让光标变成“抓着”。 */
 .assistant-card--custom {
   cursor: grab;
+  /* 拖动排序时不要选中卡片文字、也不要让卡片里的图标触发原生拖拽。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.assistant-card--custom img {
+  -webkit-user-drag: none;
+  pointer-events: none;
 }
 
 .assistant-card--custom:active {
