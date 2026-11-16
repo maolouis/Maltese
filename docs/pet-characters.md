@@ -57,11 +57,13 @@ node scripts/build-pet-manifest.mjs
 
 ## 微博官方表情包（独立素材池）
 
-`assets/pets/stickers/weibo/` 存了一份从官方微博 [@线条小狗Maltese](https://weibo.com/u/7776232700) 收集的整套表情包：第 1–33 弹加 emoji、漫画、新春、小小狗/小小金毛、补充包等特辑，共 36 组 296 张，已归一化成 240×240、保留透明底的多帧 GIF，命名 `<组>-<序号>.gif`。每组按情绪人工打了标签（开心 / 亲昵 / 难过 / 生气 / 惊讶 / 困倦 / 无语 / 害羞 / 进食 / 玩耍 / 中性），逐张清单见同目录 `by-emotion.md`。
+`assets/pets/stickers/weibo/` 存了一份从官方微博 [@线条小狗Maltese](https://weibo.com/u/7776232700) 收集的整套表情包：第 1–33 弹加 emoji、漫画、新春、小小狗/小小金毛、补充包等特辑，共 36 组 296 张，已归一化成 240×240、保留透明底的多帧 GIF。
 
+- **按动作分目录**：`weibo/<动作>/<组>-<序号>.gif`，动作名对齐 `assets/pets/chars/` 现有的 `idle / happy / pet / sleep / eat / relax / play / nervous / scared / peek / hide / work / paper / hop / walk`，另按画面补了 6 个新动作名 `angry`、`cry`、`love`、`ride`、`bath`、`costume`，共 21 类。逐张清单见同目录 `by-action.md`。
+- 每张还带情绪标签（开心 / 亲昵 / 难过 / 生气 / 惊讶 / 困倦 / 无语 / 害羞 / 进食 / 玩耍 / 中性），清单见 `by-emotion.md`。
 - 这一池**没有被代码引用**，不影响现有动作轮播；`scripts/build-pet-manifest.mjs` 只扫 `assets/pets/chars/`，也不会把它算进角色清单。
-- 想让它变成桌宠素材：按画面复制到 `assets/pets/chars/shared/<动作>/`（或 `xiaobai` / `xiaojimao`），再跑一次清单脚本。
-- 逐张规格、帧数、来源原图地址、情绪见 `assets/pets/stickers/weibo/index.json`，分组总览见同目录 `preview.png`，采集与归一化脚本在 `work/weibo-stickers/`（`work/` 不进版本库）。
+- 想让它变成桌宠素材：把某个动作目录整类复制到 `assets/pets/chars/xiaobai/<动作>/` 或 `shared/<动作>/`，再跑一次清单脚本；新加的 6 个动作名还得在 `src/petCharacters.ts` 的 `STATE_TO_ACTION` 里挂上状态才会被触发。
+- 逐张规格、帧数、来源原图地址、动作与情绪见 `assets/pets/stickers/weibo/index.json`，总览见同目录 `preview.png`，采集与归一化脚本在 `work/weibo-stickers/`（`work/` 不进版本库）。
 - 因为 `tauri.conf.json` 把整个 `assets/pets` 打进安装包资源，这一池会让安装包多约 30 MB；不想带上就把目录移出 `assets/pets`。
 - 版权归 ©MALTESE / 线条小狗官方，随安装包分发或商用需自行取得授权。
 
