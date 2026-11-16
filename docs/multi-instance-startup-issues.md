@@ -227,4 +227,3 @@ AppStarted
 
 - `notification_diagnostics::verification_identifier()` 的环境变量来源与使用场景（哪个构建/脚本会设置）。
 - 用户机器上两个旧进程分别来自哪个构建（安装版 / 旧 debug / 测试包），需要 `Get-Process` + `Path` 才能定论。
-- 表情包拆分已完成并已更新 `docs/pet-characters.md`（779 张 / `shared` 152 张），此处保留为历史待办。
