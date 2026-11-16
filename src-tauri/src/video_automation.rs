@@ -42,7 +42,7 @@ pub async fn start_video_automation(
     let platform = video::model::Platform::parse(&provider)
         .ok_or_else(|| video::VideoError::new("INVALID_PROVIDER", "只支持 bilibili 或 douyin。"))?;
     let engine = video::session::engine(&app);
-    engine.start(app, platform, None).await
+    engine.start(app, platform, None, None).await
 }
 
 #[tauri::command]

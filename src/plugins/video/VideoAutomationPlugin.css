@@ -172,3 +172,60 @@
   background: #fff6f5;
   color: #b64238;
 }
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px solid #cfe0d2;
+  border-radius: 14px;
+  background: #f7fbf7;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form input,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row select {
+  min-width: 150px;
+  flex: 1 1 150px;
+  height: 36px;
+  padding: 7px 10px;
+  border: 1px solid #bcd6c6;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #17302a;
+  font: inherit;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row button,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid #bcd6c6;
+  border-radius: 10px;
+  background: #eef6ef;
+  color: #1f473a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row button:hover,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form button:hover {
+  background: #dcecdf;
+}
+
+.video-automation__account-status {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #e9f4ea;
+  color: #2d6044;
+  font-size: 13px;
+  font-weight: 600;
+}

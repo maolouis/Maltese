@@ -71,6 +71,22 @@ pub fn profile_dir() -> PathBuf {
         .join("video-profile")
 }
 
+/// 每个小狗账号拥有独立 profile，避免和主人的登录态混用。
+pub fn account_profile_dir(account_id: &str) -> PathBuf {
+    let safe = account_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '_')
+        .take(64)
+        .collect::<String>();
+    let safe = if safe.is_empty() { "default" } else { safe.as_str() };
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Maltese")
+        .join("video-accounts")
+        .join(safe)
+}
+
 pub fn candidate_paths() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(value) = std::env::var_os("MALTESE_TEST_BROWSER_PATH") {
@@ -345,6 +361,15 @@ mod tests {
     fn profile_dir_is_under_local_app_data() {
         let dir = profile_dir();
         assert!(dir.ends_with("video-profile"));
+    }
+
+    #[test]
+    fn account_profiles_are_separate_and_sanitized() {
+        let first = account_profile_dir("dog-a");
+        let second = account_profile_dir("dog/b");
+        assert!(first.ends_with("video-accounts/dog-a"));
+        assert!(second.ends_with("video-accounts/dogb"));
+        assert_ne!(first, second);
     }
 
     #[test]

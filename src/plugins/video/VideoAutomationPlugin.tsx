@@ -45,6 +45,11 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [sampleInterval, setSampleInterval] = useState(2);
   const [dailyDeliveries, setDailyDeliveries] = useState(2);
   const [error, setError] = useState("");
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [accountName, setAccountName] = useState("小狗运营号");
+  const [accountHandle, setAccountHandle] = useState("");
+  const [accountPersona, setAccountPersona] = useState("温柔记录每天看到的内容，偶尔分享一条小狗视角的观察。");
+  const [accountGoals, setAccountGoals] = useState("每天观看并整理内容，形成运营日志草稿。");
 
   useEffect(() => {
     const snapshot = video.snapshot;
@@ -54,17 +59,22 @@ export function VideoAutomationPanel({ onNotice }: Props) {
     setMaxMinutes(snapshot.maxMinutes);
   }, [video.snapshot]);
 
+  useEffect(() => {
+    const selected = video.accounts.find((item) => item.id === selectedAccountId);
+    if (selected && selected.platform !== provider) setSelectedAccountId("");
+  }, [provider, selectedAccountId, video.accounts]);
+
   const start = useCallback(async () => {
     setError("");
     try {
-      await video.start(provider);
+      await video.start(provider, selectedAccountId || undefined);
       onNotice(provider === "bilibili" ? "小狗开始看 B 站了" : "小狗开始看抖音了");
     } catch (reason) {
       const message = errorMessageForCode(codeOf(reason), String(reason));
       setError(message);
       onNotice(`启动失败：${message}`);
     }
-  }, [onNotice, provider, video]);
+  }, [onNotice, provider, selectedAccountId, video]);
 
   const stop = useCallback(async () => {
     setError("");
@@ -79,12 +89,37 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const openLogin = useCallback(async () => {
     if (!isTauri()) return;
     try {
-      await invoke("video_open_login_window", { provider });
-      onNotice("已打开小狗专用浏览器，请登录一次");
+      const account = video.accounts.find((item) => item.id === selectedAccountId);
+      if (account) {
+        await video.openAccountLogin(account);
+        onNotice(`已打开「${account.displayName}」的专用浏览器，请完成注册或登录`);
+      } else {
+        await invoke("video_open_login_window", { provider });
+        onNotice("已打开小狗专用浏览器，请登录一次");
+      }
     } catch (reason) {
       setError(errorMessageForCode(codeOf(reason), String(reason)));
     }
-  }, [onNotice, provider]);
+  }, [onNotice, provider, selectedAccountId, video]);
+
+  const createAccount = useCallback(async () => {
+    setError("");
+    try {
+      const account = await video.createAccount({
+        platform: provider,
+        displayName: accountName,
+        handle: accountHandle,
+        persona: accountPersona,
+        goals: accountGoals,
+      });
+      setSelectedAccountId(account.id);
+      onNotice(`已创建「${account.displayName}」账号档案`);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }, [accountGoals, accountHandle, accountName, accountPersona, onNotice, provider, video]);
+
+  const selectedAccount = video.accounts.find((item) => item.id === selectedAccountId) ?? null;
 
   const saveConfig = useCallback(async () => {
     setError("");
@@ -207,6 +242,47 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         <button type="button" onClick={() => void saveConfig()}>保存配置</button>
         <button type="button" onClick={() => void openLogin()}>打开登录窗</button>
         <button type="button" onClick={() => void video.loadSessions()}>刷新历史</button>
+      </div>
+
+      <div className="video-automation__account">
+        <div className="video-automation__comment-head">
+          <span className="assistant-panel__label">小狗自媒体账号</span>
+          <span className="video-automation__hint">每个账号使用独立浏览器 profile</span>
+        </div>
+        <div className="video-automation__account-row">
+          <select
+            value={selectedAccountId}
+            onChange={(event) => {
+              const id = event.currentTarget.value;
+              setSelectedAccountId(id);
+              if (id) void video.setActiveAccount(id);
+            }}
+          >
+            <option value="">临时观看，不绑定账号</option>
+            {video.accounts.filter((item) => item.platform === provider).map((item) => (
+              <option key={item.id} value={item.id}>{item.displayName} · {item.status}</option>
+            ))}
+          </select>
+          {selectedAccount && (
+            <span className="video-automation__account-status">
+              {selectedAccount.status === "ready" ? "已就绪" : selectedAccount.status === "awaitingLogin" ? "等待登录" : "请完成登录"}
+            </span>
+          )}
+          <button type="button" onClick={() => void openLogin()}>打开账号登录窗</button>
+          {selectedAccount?.status === "awaitingLogin" && (
+            <button type="button" onClick={() => void video.markAccountReady(selectedAccount.id)}>我已登录</button>
+          )}
+        </div>
+        <div className="video-automation__account-form">
+          <input value={accountName} maxLength={32} placeholder="账号名称" onChange={(event) => setAccountName(event.currentTarget.value)} />
+          <input value={accountHandle} maxLength={64} placeholder="平台昵称或账号（可选）" onChange={(event) => setAccountHandle(event.currentTarget.value)} />
+          <input value={accountPersona} maxLength={500} placeholder="小狗人设" onChange={(event) => setAccountPersona(event.currentTarget.value)} />
+          <input value={accountGoals} maxLength={500} placeholder="运营目标" onChange={(event) => setAccountGoals(event.currentTarget.value)} />
+          <button type="button" onClick={() => void createAccount()}>创建小狗账号档案</button>
+        </div>
+        <p className="video-automation__hint">
+          创建档案不会替你绕过手机号、邮箱或验证码。打开官方登录窗完成注册后点「我已登录」，小狗才会使用这个账号刷视频和生成运营草稿。
+        </p>
       </div>
 
       <p className="video-automation__hint">

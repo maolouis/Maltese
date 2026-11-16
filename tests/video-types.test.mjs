@@ -18,6 +18,7 @@ function validSnapshot() {
   return {
     sessionId: "bili-20261114-abc123",
     provider: "bilibili",
+    accountId: null,
     phase: "collecting",
     running: true,
     intervalSeconds: 45,

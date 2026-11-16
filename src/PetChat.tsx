@@ -439,24 +439,40 @@ export function PetChat() {
       // 关键是这一步必须“短”：只给紧凑的技能清单、关思考、限 96 token，
       // 判断完再走正常的流式回复。之前把完整聊天历史 + 长提示词都塞进去，
       // 每句话都要等两轮完整生成才开始出字，看起来就是「回话很慢」。
-      if (agentEnabled && chatConfig.backend === "local" && sendImages.length === 0) {
-        const decision = await askModel(
-          `${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`,
-          [],
-          null,
-          { maxTokens: 128, temperature: 0.1 },
-        );
+      if (agentEnabled && sendImages.length === 0) {
+        // 本地模型和 DSH 都能「动手」。决策走独立短会话（sessionId 置空），
+        // 只给紧凑技能清单、限 128 token，避免拖慢正常聊天。
+        const askAgent = async (prompt: string, maxTokens: number, temperature: number) => {
+          if (chatConfig.backend === "local") {
+            return askModel(prompt, [], null, { maxTokens, temperature });
+          }
+          const reply = await invoke<DshChatReply>("dsh_chat", {
+            message: prompt,
+            sessionId: null,
+            character,
+          });
+          return reply.text;
+        };
+        let decision = "";
+        try {
+          decision = await askAgent(
+            `${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`,
+            128,
+            0.1,
+          );
+        } catch {
+          decision = "";
+        }
         const call = parseSkillCall(decision);
         if (call) {
           const result = await runSkill(call.action, call.args);
           const toolNote = result.ok ? result.message : `没做成：${result.message}`;
           let summary = "";
           try {
-            summary = await askModel(
-              `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用一句不超过 30 字的中文口语回复主人，不要输出 JSON，也不要重复格式。`,
-              [],
-              null,
-              { maxTokens: 96, temperature: 0.8 },
+            summary = await askAgent(
+              `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用简洁中文回答主人；如果结果里有搜索资料，就根据资料直接回答，不要输出 JSON。`,
+              400,
+              0.7,
             );
           } catch {
             summary = "";
@@ -476,8 +492,7 @@ export function PetChat() {
           setBusy(false);
           return;
         }
-        // 不需要动手：丢掉这次判断结果，继续走正常流式回复，
-        // 让用户第一秒就能看到字，而不是等决策那句话变成长回复。
+        // 不需要动手：丢掉这次判断结果，继续走正常流式回复。
       }
       if (chatConfig.backend === "local") {
         replyText = await streamLocalReply(text, messages, sendImages);

@@ -419,7 +419,11 @@ fn handle_request_inner(
             let app = APP.get().cloned().ok_or_else(|| {
                 ApiResponse::error(503, "APP_NOT_READY", "Maltese 尚未就绪。")
             })?;
-            let snapshot = tauri::async_runtime::block_on(engine.start(app, platform, patch))
+            let account_id = payload
+                .get("accountId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let snapshot = tauri::async_runtime::block_on(engine.start(app, platform, patch, account_id))
                 .map_err(video_error)?;
             serde_json::to_value(snapshot).unwrap_or_else(|_| json!({}))
         }

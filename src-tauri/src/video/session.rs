@@ -4,9 +4,10 @@
 //! CDP 不可用时降级到前台窗口标题（弱通道，只作主题线索）。
 
 use super::adapter::adapter_for;
+use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserProcess};
 use super::cdp::{CdpSession, EVALUATE_TIMEOUT};
-use super::channel::{ChannelAction, ChannelManager};
+use super::channel::ChannelManager;
 use super::CommentReport;
 use super::config::{apply_patch, validate_config, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
@@ -34,12 +35,15 @@ pub const MAX_ITEMS_HARD_CAP: usize = 500;
 pub const SAMPLE_BURST_WINDOW_SECONDS: u64 = 60;
 pub const SAMPLE_BURST_LIMIT: usize = 30;
 pub const SAMPLE_BURST_KEEP: usize = 10;
+const MAX_CDP_FAILURES: u32 = 3;
+const MAX_RECONNECT_FAILURES: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSnapshot {
     pub session_id: String,
     pub provider: String,
+    pub account_id: Option<String>,
     pub phase: Phase,
     pub running: bool,
     pub interval_seconds: u64,
@@ -68,6 +72,7 @@ impl Default for VideoSnapshot {
         Self {
             session_id: String::new(),
             provider: "bilibili".to_string(),
+            account_id: None,
             phase: Phase::Idle,
             running: false,
             interval_seconds: 45,
@@ -277,6 +282,7 @@ struct RuntimeState {
     phase: Phase,
     platform: Platform,
     provider: String,
+    account_id: Option<String>,
     interval_seconds: u64,
     max_minutes: u64,
     sample_interval_seconds: u64,
@@ -309,6 +315,7 @@ impl Default for RuntimeState {
             phase: Phase::Idle,
             platform: Platform::Bilibili,
             provider: "bilibili".to_string(),
+            account_id: None,
             interval_seconds: 45,
             max_minutes: 30,
             sample_interval_seconds: 2,
@@ -337,6 +344,7 @@ impl Default for RuntimeState {
 
 pub struct SessionEngine {
     store: StoreHandle,
+    accounts: Mutex<AccountStore>,
     state: Mutex<RuntimeState>,
     config: Mutex<VideoConfig>,
     channel: Mutex<ChannelManager>,
@@ -360,6 +368,7 @@ pub fn engine(app: &AppHandle) -> Arc<SessionEngine> {
         .get_or_init(|| {
             Arc::new(SessionEngine {
                 store: StoreHandle::new(data_root(app)),
+                accounts: Mutex::new(AccountStore::load(&data_root(app))),
                 state: Mutex::new(RuntimeState::default()),
                 config: Mutex::new(VideoConfig::default()),
                 channel: Mutex::new(ChannelManager::new()),
@@ -385,6 +394,7 @@ impl SessionEngine {
         VideoSnapshot {
             session_id: state.session_id.clone(),
             provider: state.provider.clone(),
+            account_id: state.account_id.clone(),
             phase: state.phase,
             running: matches!(
                 state.phase,
@@ -423,11 +433,67 @@ impl SessionEngine {
         }
     }
 
+    fn browser_alive(&self) -> bool {
+        match self.browser.lock() {
+            Ok(mut browser) => browser.as_mut().map(|process| process.is_alive()).unwrap_or(false),
+            Err(poisoned) => poisoned.into_inner().as_mut().map(|process| process.is_alive()).unwrap_or(false),
+        }
+    }
+
+    fn set_runtime_error(&self, code: &str, message: &str) {
+        let mut state = lock_state(&self.state);
+        state.error_code = Some(code.to_string());
+        state.error_message = Some(message.to_string());
+        state.waiting_for_browser = false;
+    }
+
     pub fn config(&self) -> VideoConfig {
         match self.config.lock() {
             Ok(config) => config.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
+    }
+
+    pub fn accounts(&self) -> Vec<AgentAccount> {
+        self.accounts.lock().map(|accounts| accounts.list()).unwrap_or_default()
+    }
+
+    pub fn create_account(
+        &self,
+        platform: Platform,
+        display_name: String,
+        handle: String,
+        persona: String,
+        goals: String,
+    ) -> VideoResult<AgentAccount> {
+        let mut accounts = self.accounts.lock().map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?;
+        let profile_id = format!("dog-{}-{}", now_seconds(), accounts.list().len() + 1);
+        accounts
+            .create(
+                platform,
+                display_name,
+                handle,
+                persona,
+                goals,
+                browser::account_profile_dir(&profile_id),
+            )
+            .map_err(|message| VideoError::new("ACCOUNT_INVALID", message))
+    }
+
+    pub fn set_active_account(&self, account_id: &str) -> VideoResult<AgentAccount> {
+        self.accounts
+            .lock()
+            .map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?
+            .set_active(account_id)
+            .map_err(|message| VideoError::new("ACCOUNT_NOT_FOUND", message))
+    }
+
+    pub fn mark_account_ready(&self, account_id: &str) -> VideoResult<AgentAccount> {
+        self.accounts
+            .lock()
+            .map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?
+            .mark_ready(account_id)
+            .map_err(|message| VideoError::new("ACCOUNT_NOT_FOUND", message))
     }
 
     pub fn update_config(&self, patch: &VideoConfigPatch) -> VideoResult<VideoConfig> {
@@ -446,6 +512,7 @@ impl SessionEngine {
         app: AppHandle,
         provider: Platform,
         patch: Option<VideoConfigPatch>,
+        requested_account_id: Option<String>,
     ) -> VideoResult<VideoSnapshot> {
         if let Some(patch) = patch.as_ref() {
             self.update_config(patch)?;
@@ -453,6 +520,26 @@ impl SessionEngine {
         let config = self.config();
         validate_config(&config)
             .map_err(|message| VideoError::new("INVALID_CONFIG", message))?;
+
+        let account = {
+            let accounts = self.accounts.lock().map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?;
+            let selected = requested_account_id
+                .as_deref()
+                .and_then(|id| accounts.list().into_iter().find(|item| item.id == id));
+            if let Some(account) = selected {
+                if account.platform != provider {
+                    return Err(VideoError::new("ACCOUNT_PLATFORM_MISMATCH", "小狗账号的平台和当前刷视频平台不一致。"));
+                }
+                if account.status != AccountStatus::Ready {
+                    return Err(VideoError::new("ACCOUNT_NOT_READY", "请先打开小狗账号的专用登录窗，完成注册或登录后点“我已登录”。"));
+                }
+                Some(account)
+            } else {
+                None
+            }
+        };
+        let account_id = account.as_ref().map(|item| item.id.clone());
+        let profile = account.as_ref().map(|item| std::path::PathBuf::from(&item.profile_dir));
 
         {
             let already_running = {
@@ -476,6 +563,7 @@ impl SessionEngine {
                 phase: Phase::Preparing,
                 platform: provider,
                 provider: provider.as_str().to_string(),
+                account_id: account_id.clone(),
                 interval_seconds: config.page_interval_seconds,
                 max_minutes: config.max_minutes,
                 sample_interval_seconds: config.sample_interval_seconds,
@@ -500,7 +588,7 @@ impl SessionEngine {
                 return Err(error);
             }
         };
-        let profile = browser::profile_dir();
+        let profile = profile.unwrap_or_else(browser::profile_dir);
         let process = match browser::launch(provider, port, &profile, false) {
             Ok(process) => process,
             Err(error) => {
@@ -523,6 +611,9 @@ impl SessionEngine {
         {
             let mut state = self.state.lock().expect("video state lock");
             state.cdp_port = port;
+        }
+        if let Some(account_id) = account_id.as_deref() {
+            let _ = self.accounts.lock().map_err(|_| ()).and_then(|mut accounts| accounts.mark_run(account_id).map_err(|_| ())); 
         }
 
         let engine = self.clone();
@@ -576,9 +667,10 @@ impl SessionEngine {
         loop {
             match CdpSession::connect(port, platform).await {
                 Ok(mut cdp) => {
-                    let _ = cdp.navigate(adapter.feed_url()).await;
-                    session = Some(cdp);
-                    break;
+                    if cdp.navigate(adapter.feed_url()).await.is_ok() {
+                        session = Some(cdp);
+                        break;
+                    }
                 }
                 Err(_) => {
                     if Instant::now() >= connect_deadline {
@@ -598,15 +690,23 @@ impl SessionEngine {
                     runtime.channel = state;
                 }
             }
-        } else if let Ok(mut channel) = self.channel.lock() {
-            channel.record_failure(FailureReason::NoResponse, now_seconds());
-            let state = channel.active();
-            drop(channel);
-            if let Ok(mut runtime) = self.state.lock() {
-                runtime.channel = state;
-                runtime.degraded = true;
+        } else {
+            if let Ok(mut channel) = self.channel.lock() {
+                channel.record_failure(FailureReason::NoResponse, now_seconds());
+                let state = channel.active();
+                drop(channel);
+                if let Ok(mut runtime) = self.state.lock() {
+                    runtime.channel = state;
+                    runtime.degraded = true;
+                }
             }
+            self.set_runtime_error("CDP_UNAVAILABLE", "小狗浏览器没有在 15 秒内准备好，已停止本轮。 ");
+            self.finish(&app, StopReason::Crash, false);
+            return;
         }
+
+        let mut cdp_failures = 0u32;
+        let mut reconnect_failures = 0u32;
 
         loop {
             if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
@@ -619,6 +719,12 @@ impl SessionEngine {
                 (state.phase, state.started_at, state.items.len())
             };
             if !matches!(phase, Phase::Collecting | Phase::AwaitingLogin | Phase::UserTakeover) {
+                break;
+            }
+
+            if !self.browser_alive() {
+                self.set_runtime_error("BROWSER_CLOSED", "小狗浏览器已关闭，已停止本轮并保留已采集内容。");
+                self.finish(&app, StopReason::BrowserClosed, false);
                 break;
             }
 
@@ -642,24 +748,50 @@ impl SessionEngine {
 
             if should_sample {
                 let mut facts_result: Option<Result<(PageFacts, usize), ExtractIssue>> = None;
-                if let Some(cdp) = session.as_mut() {
-                    match cdp.evaluate(adapter.extract_script(), EVALUATE_TIMEOUT).await {
+                if session.is_none() {
+                    match CdpSession::connect(port, platform).await {
+                        Ok(cdp) => {
+                            session = Some(cdp);
+                            reconnect_failures = 0;
+                        }
+                        Err(_) => {
+                            reconnect_failures = reconnect_failures.saturating_add(1);
+                            if reconnect_failures >= MAX_RECONNECT_FAILURES {
+                                self.set_runtime_error("CDP_RECONNECT_FAILED", "小狗浏览器连接连续失败，已停止本轮。");
+                                self.finish(&app, StopReason::Crash, false);
+                                break;
+                            }
+                        }
+                    }
+                }
+                let evaluate_result = if let Some(cdp) = session.as_mut() {
+                    Some(cdp.evaluate(adapter.extract_script(), EVALUATE_TIMEOUT).await)
+                } else {
+                    None
+                };
+                if let Some(result) = evaluate_result {
+                    match result {
                         Ok(value) => {
+                            cdp_failures = 0;
                             facts_result = Some(normalize_value(&value, platform, 1.0));
                             if let Ok(mut channel) = self.channel.lock() {
                                 channel.record_success(now);
                             }
                         }
                         Err(reason) => {
-                            let action = {
+                            cdp_failures = cdp_failures.saturating_add(1);
+                            let _action = {
                                 let mut channel = match self.channel.lock() {
                                     Ok(channel) => channel,
                                     Err(poisoned) => poisoned.into_inner(),
                                 };
                                 channel.record_failure(reason, now)
                             };
-                            if matches!(action, ChannelAction::Degrade) {
-                                session = None;
+                            session = None;
+                            if cdp_failures >= MAX_CDP_FAILURES {
+                                self.set_runtime_error("CDP_STALLED", "页面连续无响应，已停止本轮以避免桌宠卡死。");
+                                self.finish(&app, StopReason::Crash, false);
+                                break;
                             }
                         }
                     }
@@ -754,15 +886,31 @@ impl SessionEngine {
                 last_turn = Instant::now();
                 first_turn = false;
                 let mut turned = false;
-                if let Some(cdp) = session.as_mut() {
-                    if let Ok(value) =
-                        cdp.evaluate(adapter.next_action_script(), EVALUATE_TIMEOUT).await
-                    {
+                let next_result = if let Some(cdp) = session.as_mut() {
+                    Some(cdp.evaluate(adapter.next_action_script(), EVALUATE_TIMEOUT).await)
+                } else {
+                    None
+                };
+                match next_result {
+                    Some(Ok(value)) => {
                         turned = value.as_bool().unwrap_or(false);
+                        cdp_failures = 0;
                     }
+                    Some(Err(_)) => {
+                        cdp_failures = cdp_failures.saturating_add(1);
+                        session = None;
+                    }
+                    None => {}
+                }
+                if let Some(cdp) = session.as_mut() {
                     if !turned {
                         turned = cdp.dispatch_key(super::rules::page_key(platform)).await.is_ok();
                     }
+                }
+                if cdp_failures >= MAX_CDP_FAILURES {
+                    self.set_runtime_error("CDP_STALLED", "翻页页面连续无响应，已停止本轮以避免桌宠卡死。");
+                    self.finish(&app, StopReason::Crash, false);
+                    break;
                 }
                 if turned {
                     let mut state = lock_state(&self.state);
@@ -1087,6 +1235,10 @@ impl SessionEngine {
         if include_browser_profile {
             let profile = browser::profile_dir();
             let _ = std::fs::remove_dir_all(profile);
+            let accounts = browser::account_profile_dir("..");
+            if let Some(root) = accounts.parent() {
+                let _ = std::fs::remove_dir_all(root);
+            }
         }
         Ok(report)
     }
@@ -1106,18 +1258,34 @@ impl SessionEngine {
     }
 
     /// 首次登录：这是唯一允许把窗口提到前台的路径。
-    pub fn open_login_window(&self, platform: Platform) -> VideoResult<()> {
-        let has_browser = match self.browser.lock() {
-            Ok(browser) => browser.is_some(),
-            Err(poisoned) => poisoned.into_inner().is_some(),
-        };
-        if has_browser {
-            if browser::focus_browser_window(platform) {
-                return Ok(());
+    pub fn open_login_window(&self, platform: Platform, account_id: Option<&str>) -> VideoResult<()> {
+        let profile = if let Some(account_id) = account_id {
+            let mut accounts = self.accounts.lock().map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?;
+            let account = accounts
+                .list()
+                .into_iter()
+                .find(|item| item.id == account_id)
+                .ok_or_else(|| VideoError::new("ACCOUNT_NOT_FOUND", "找不到这个小狗账号。"))?;
+            if account.platform != platform {
+                return Err(VideoError::new("ACCOUNT_PLATFORM_MISMATCH", "小狗账号的平台和登录窗口不一致。"));
             }
+            let profile = std::path::PathBuf::from(account.profile_dir);
+            let _ = accounts.mark_login_started(account_id);
+            profile
+        } else {
+            browser::profile_dir()
+        };
+        let same_profile = match self.browser.lock() {
+            Ok(browser) => browser.as_ref().map(|process| process.handle.profile_dir == profile.to_string_lossy()).unwrap_or(false),
+            Err(poisoned) => poisoned.into_inner().as_ref().map(|process| process.handle.profile_dir == profile.to_string_lossy()).unwrap_or(false),
+        };
+        if same_profile && browser::focus_browser_window(platform) {
+            return Ok(());
+        }
+        if !same_profile {
+            self.close_browser()?;
         }
         let port = browser::pick_port(browser::DEFAULT_PORT)?;
-        let profile = browser::profile_dir();
         let process = browser::launch(platform, port, &profile, true)?;
         match self.browser.lock() {
             Ok(mut browser) => *browser = Some(process),

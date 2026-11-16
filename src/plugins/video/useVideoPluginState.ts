@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   isVideoSnapshot,
   type ChannelState,
+  type AgentAccount,
   type DiagnosticEntry,
   type DigestDraft,
   type SessionSummary,
@@ -35,14 +36,25 @@ const OLD_KEYS = [`${LEGACY_KEY_PREFIX}comment`, `${LEGACY_KEY_PREFIX}send-comme
 export type VideoPluginState = {
   snapshot: VideoSnapshot | null;
   config: VideoConfig;
+  accounts: AgentAccount[];
   channel: ChannelState | null;
   diagnostics: DiagnosticEntry[];
   sessions: SessionSummary[];
   preview: DigestDraft | null;
   refresh: () => Promise<void>;
-  start: (provider: "bilibili" | "douyin") => Promise<void>;
+  start: (provider: "bilibili" | "douyin", accountId?: string) => Promise<void>;
   stop: () => Promise<void>;
   updateConfig: (patch: Partial<VideoConfig>) => Promise<void>;
+  createAccount: (input: {
+    platform: "bilibili" | "douyin";
+    displayName: string;
+    handle: string;
+    persona: string;
+    goals: string;
+  }) => Promise<AgentAccount>;
+  openAccountLogin: (account: AgentAccount) => Promise<void>;
+  markAccountReady: (accountId: string) => Promise<void>;
+  setActiveAccount: (accountId: string) => Promise<void>;
   probeChannels: () => Promise<void>;
   loadSessions: () => Promise<void>;
   takePending: () => Promise<void>;
@@ -52,6 +64,7 @@ export type VideoPluginState = {
 export function useVideoPluginState(): VideoPluginState {
   const [snapshot, setSnapshot] = useState<VideoSnapshot | null>(null);
   const [config, setConfig] = useState<VideoConfig>(DEFAULT_VIDEO_CONFIG);
+  const [accounts, setAccounts] = useState<AgentAccount[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [preview, setPreview] = useState<DigestDraft | null>(null);
@@ -71,6 +84,8 @@ export function useVideoPluginState(): VideoPluginState {
     try {
       const next: unknown = await invoke("video_get_snapshot");
       if (isVideoSnapshot(next)) setSnapshot(next);
+      const listed = await invoke<AgentAccount[]>("video_list_accounts");
+      if (Array.isArray(listed)) setAccounts(listed);
     } catch {
       // 保留上一次状态，面板显示「暂时不可用」。
     }
@@ -92,7 +107,7 @@ export function useVideoPluginState(): VideoPluginState {
     };
   }, []);
 
-  const start = useCallback(async (provider: "bilibili" | "douyin") => {
+  const start = useCallback(async (provider: "bilibili" | "douyin", accountId?: string) => {
     await invoke("video_start_session", {
       provider,
       config: {
@@ -103,9 +118,37 @@ export function useVideoPluginState(): VideoPluginState {
         dailyDeliveries: config.dailyDeliveries,
         modelSummary: config.modelSummary,
       },
+      accountId: accountId || undefined,
     });
     await refresh();
   }, [config, refresh]);
+
+  const createAccount = useCallback(async (input: {
+    platform: "bilibili" | "douyin";
+    displayName: string;
+    handle: string;
+    persona: string;
+    goals: string;
+  }) => {
+    const account = await invoke<AgentAccount>("video_create_account", input);
+    setAccounts((current) => [...current.filter((item) => item.id !== account.id), account]);
+    return account;
+  }, []);
+
+  const openAccountLogin = useCallback(async (account: AgentAccount) => {
+    await invoke("video_open_login_window", { provider: account.platform, accountId: account.id });
+    setAccounts((current) => current.map((item) => item.id === account.id ? { ...item, status: "awaitingLogin" } : item));
+  }, []);
+
+  const markAccountReady = useCallback(async (accountId: string) => {
+    const account = await invoke<AgentAccount>("video_mark_account_ready", { accountId });
+    setAccounts((current) => current.map((item) => item.id === account.id ? account : item));
+  }, []);
+
+  const setActiveAccount = useCallback(async (accountId: string) => {
+    await invoke("video_set_active_account", { accountId });
+    await refresh();
+  }, [refresh]);
 
   const stop = useCallback(async () => {
     await invoke("video_stop_session");
@@ -168,6 +211,7 @@ export function useVideoPluginState(): VideoPluginState {
   return {
     snapshot,
     config,
+    accounts,
     channel: snapshot?.channel ?? null,
     diagnostics,
     sessions,
@@ -176,6 +220,10 @@ export function useVideoPluginState(): VideoPluginState {
     start,
     stop,
     updateConfig,
+    createAccount,
+    openAccountLogin,
+    markAccountReady,
+    setActiveAccount,
     probeChannels,
     loadSessions,
     takePending,

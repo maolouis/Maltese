@@ -8587,6 +8587,22 @@ function IslandApp({
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // 小狗技能（petSkills）在同一个窗口写 localStorage，不会触发 storage 事件，
+  // 用自定义事件让待办和日记面板立刻刷新。
+  useEffect(() => {
+    const syncTodos = () => {
+      setTodos(loadTodos());
+      setActiveTodoId(loadActiveTodoId());
+    };
+    const syncDiary = () => setDiaryEvents(loadDiaryEvents());
+    window.addEventListener("maltese-todos-updated", syncTodos);
+    window.addEventListener("maltese-diary-updated", syncDiary);
+    return () => {
+      window.removeEventListener("maltese-todos-updated", syncTodos);
+      window.removeEventListener("maltese-diary-updated", syncDiary);
+    };
+  }, []);
+
   useEffect(() => {
     window.localStorage.setItem(DAILY_NOTE_STORAGE_KEY, dailyNote);
   }, [dailyNote]);

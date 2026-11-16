@@ -7,8 +7,16 @@
 // - 所有技能都在前端执行，复用已有的 localStorage 存储与 Tauri 命令，
 //   不需要额外的权限面。
 import { invoke } from "@tauri-apps/api/core";
+import { savePetCharacter, type PetCharacterId } from "./petCharacters";
 
 export type SkillAction =
+  | "todo_start"
+  | "todo_pause"
+  | "diary_add"
+  | "diary_read"
+  | "music_play"
+  | "pet_settings"
+  | "web_search"
   | "todo_add"
   | "todo_list"
   | "todo_done"
@@ -22,7 +30,7 @@ export type SkillAction =
 export type SkillDefinition = {
   action: SkillAction;
   /** 内置分类：待办 / 电脑 / 媒体 / 剪贴板 / 时间 */
-  group: "todo" | "system" | "media" | "clipboard" | "time";
+  group: "todo" | "system" | "media" | "clipboard" | "time" | "diary" | "settings" | "web";
   title: string;
   description: string;
   /** 给模型看的调用说明与示例 */
@@ -30,6 +38,55 @@ export type SkillDefinition = {
 };
 
 export const SKILLS: SkillDefinition[] = [
+  {
+    action: "todo_start",
+    group: "todo",
+    title: "开始专注",
+    description: "开始给某件事计时（没有这条待办就顺手新建），其它进行中的待办自动暂停",
+    example: '{"tool":"todo_start","args":{"text":"雅思口语"}}',
+  },
+  {
+    action: "todo_pause",
+    group: "todo",
+    title: "暂停计时",
+    description: "暂停正在计时的待办并累计本次时长",
+    example: '{"tool":"todo_pause","args":{"keyword":"雅思"}}',
+  },
+  {
+    action: "diary_add",
+    group: "diary",
+    title: "记日记",
+    description: "把一段话写进今天的时间线日记",
+    example: '{"tool":"diary_add","args":{"text":"今天把台球插件拆出来了，很有成就感"}}',
+  },
+  {
+    action: "diary_read",
+    group: "diary",
+    title: "看今天日记",
+    description: "读出今天已经记下的内容",
+    example: '{"tool":"diary_read","args":{}}',
+  },
+  {
+    action: "music_play",
+    group: "media",
+    title: "播放音乐",
+    description: "开始播放系统当前播放器的音乐；没在放就唤起播放",
+    example: '{"tool":"music_play","args":{}}',
+  },
+  {
+    action: "pet_settings",
+    group: "settings",
+    title: "调整自己的设置",
+    description: "改小狗自己的设置，目前支持 character（形象：小白 / 小鸡毛 / 双狗）",
+    example: '{"tool":"pet_settings","args":{"key":"character","value":"小鸡毛"}}',
+  },
+  {
+    action: "web_search",
+    group: "web",
+    title: "联网查资料",
+    description: "上网搜索资料，拿到结果后用自己的话回答主人",
+    example: '{"tool":"web_search","args":{"query":"2026 雅思口语换题季时间"}}',
+  },
   {
     action: "todo_add",
     group: "todo",
@@ -132,9 +189,31 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
+/** 这次新增的技能：老用户的已存清单里一次性补进去（之后仍可手动关闭）。 */
+const SKILL_MIGRATION_KEY = "maltese-skills-migrated-20261114";
+const NEW_SKILL_ACTIONS: SkillAction[] = [
+  "todo_start",
+  "todo_pause",
+  "diary_add",
+  "diary_read",
+  "music_play",
+  "pet_settings",
+  "web_search",
+];
+
 export function loadEnabledSkills(): SkillAction[] {
   const stored = readJson<SkillAction[] | null>(SKILLS_STORAGE_KEY, null);
   if (!stored) return SKILLS.filter((skill) => skill.group !== "clipboard").map((s) => s.action);
+  if (!window.localStorage.getItem(SKILL_MIGRATION_KEY)) {
+    const merged = Array.from(new Set([...stored, ...NEW_SKILL_ACTIONS]));
+    writeJson(SKILLS_STORAGE_KEY, merged);
+    try {
+      window.localStorage.setItem(SKILL_MIGRATION_KEY, "1");
+    } catch {
+      // 忽略
+    }
+    return merged;
+  }
   return stored;
 }
 
@@ -167,6 +246,7 @@ export function skillsPrompt(enabled: SkillAction[], custom: CustomSkill[]): str
     "可用的动作：",
     ...active.map((skill) => `- ${skill.action}：${skill.description}；示例 ${skill.example}`),
     "如果不需要动手（只是聊天），就直接用中文回答，不要输出 JSON。",
+    "判断口诀：「我要开始学/做…」→ todo_start；「休息一下 / 暂停」→ todo_pause；「记一下今天… / 写日记」→ diary_add；「今天都记了什么」→ diary_read；「放点音乐 / 播放音乐」→ music_play；「换个形象 / 换成小鸡毛」→ pet_settings；「帮我查 / 搜一下 / 网上看看…」→ web_search。",
     "一次只调用一个动作。动作执行完会告诉你结果，再据此用中文回答主人。",
   ];
   if (custom.length > 0) {
@@ -181,6 +261,22 @@ export function skillsPrompt(enabled: SkillAction[], custom: CustomSkill[]): str
 export type SkillResult = { ok: boolean; message: string };
 
 const TODOS_KEY = "focusd-island-todos";
+const ACTIVE_TODO_KEY = "focusd-island-active-todo";
+const DIARY_KEY = "focusd-island-diary-events";
+
+type DiaryEntry = { id: string; date: string; at: number; kind: string; text: string };
+
+function todayString(at: Date = new Date()): string {
+  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+}
+
+function appendDiary(kind: string, text: string) {
+  const events = readJson<DiaryEntry[]>(DIARY_KEY, []);
+  const at = Date.now();
+  events.push({ id: createId(), date: todayString(new Date(at)), at, kind, text });
+  writeJson(DIARY_KEY, events.slice(-500));
+  window.dispatchEvent(new Event("maltese-diary-updated"));
+}
 
 type StoredTodo = {
   id: string;
@@ -248,6 +344,129 @@ export async function runSkill(
         writeTodos(todos);
         return { ok: true, message: `已完成 ${hit} 条包含「${keyword}」的待办。` };
       }
+      case "todo_start": {
+        const text = String(args.text ?? args.keyword ?? "").trim();
+        if (!text) return { ok: false, message: "没有说要开始做什么。" };
+        const todos = readTodos();
+        let target = todos.find((todo) => !todo.completed && todo.title.includes(text));
+        if (!target) {
+          target = { id: createId(), title: text, completed: false, createdAt: Date.now() };
+          todos.push(target);
+        }
+        const now = Date.now();
+        for (const todo of todos) {
+          if (todo.id !== target.id && todo.activeSince) {
+            todo.elapsedMs = (todo.elapsedMs ?? 0) + (now - todo.activeSince);
+            todo.activeSince = null;
+          }
+        }
+        target.startedAt = target.startedAt ?? now;
+        target.activeSince = now;
+        writeTodos(todos);
+        try {
+          window.localStorage.setItem(ACTIVE_TODO_KEY, target.id);
+        } catch {
+          // 忽略
+        }
+        appendDiary("todo", `开始专注「${target.title}」`);
+        return { ok: true, message: `已开始给「${target.title}」计时，其它进行中的待办已暂停。` };
+      }
+      case "todo_pause": {
+        const keyword = String(args.keyword ?? args.text ?? "").trim();
+        const todos = readTodos();
+        const now = Date.now();
+        let hit = 0;
+        let lastTitle = "";
+        for (const todo of todos) {
+          if (todo.activeSince && (!keyword || todo.title.includes(keyword))) {
+            todo.elapsedMs = (todo.elapsedMs ?? 0) + (now - todo.activeSince);
+            todo.activeSince = null;
+            hit += 1;
+            lastTitle = todo.title;
+            appendDiary("todo", `暂停「${todo.title}」，本次累计 ${Math.round((todo.elapsedMs ?? 0) / 60000)} 分钟`);
+          }
+        }
+        if (hit === 0) return { ok: false, message: keyword ? `没有正在计时的「${keyword}」待办。` : "现在没有在计时的待办。" };
+        try {
+          window.localStorage.removeItem(ACTIVE_TODO_KEY);
+        } catch {
+          // 忽略
+        }
+        writeTodos(todos);
+        return { ok: true, message: `已暂停 ${hit} 条待办的计时（${lastTitle}）。` };
+      }
+      case "diary_add": {
+        const text = String(args.text ?? "").trim();
+        if (!text) return { ok: false, message: "没有要记的内容。" };
+        appendDiary("pet", text);
+        return { ok: true, message: `已写进今天的日记：${text}` };
+      }
+      case "diary_read": {
+        const today = todayString();
+        const events = readJson<DiaryEntry[]>(DIARY_KEY, []).filter((event) => event.date === today);
+        if (events.length === 0) return { ok: true, message: "今天还没有记录，说「记一下…」就能写。" };
+        return {
+          ok: true,
+          message: `今天记了 ${events.length} 条：${events
+            .map((event) => `${new Date(event.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} ${event.text}`)
+            .join("；")}`,
+        };
+      }
+      case "music_play": {
+        const state = await invoke<{ available: boolean; playbackStatus: string; title: string | null }>(
+          "get_media_state",
+          { target: null },
+        ).catch(() => null);
+        if (state && !state.available) {
+          // 一个播放器都没有：帮忙把常见的音乐软件叫起来。
+          const players = await invoke<Array<{ label: string; appId: string }>>("discover_start_apps", {
+            query: "音乐",
+          }).catch(() => []);
+          const player = players.find((app) => /音乐|music|spotify/i.test(app.label));
+          if (player) {
+            await invoke("launch_start_app", { appId: player.appId });
+            return { ok: true, message: `已帮你打开 ${player.label}，进去点一下播放就有音乐了。` };
+          }
+          return { ok: false, message: "没找到正在运行的播放器，也没找到音乐软件，先打开一个再叫我。" };
+        }
+        if (state && state.playbackStatus === "playing") {
+          return { ok: true, message: `音乐已经在放了${state.title ? `：${state.title}` : ""}。` };
+        }
+        await invoke("media_play_pause", { target: null });
+        return { ok: true, message: "已帮你开始播放音乐。" };
+      }
+      case "pet_settings": {
+        const key = String(args.key ?? "").trim().toLowerCase();
+        const value = String(args.value ?? "").trim();
+        if (key === "character" || key === "形象") {
+          const map: Record<string, string> = {
+            小白: "xiaobai",
+            小鸡毛: "xiaojimao",
+            双狗: "duo",
+            两只: "duo",
+            xiaobai: "xiaobai",
+            xiaojimao: "xiaojimao",
+            duo: "duo",
+          };
+          const id = map[value] ?? map[value.toLowerCase()];
+          if (!id) return { ok: false, message: "形象只支持：小白 / 小鸡毛 / 双狗。" };
+          savePetCharacter(id as PetCharacterId);
+          return { ok: true, message: `已把形象换成${value}。` };
+        }
+        return { ok: false, message: "目前只能帮我换形象（character），其它设置请在设置面板里改。" };
+      }
+      case "web_search": {
+        const query = String(args.query ?? "").trim();
+        if (!query) return { ok: false, message: "没有给出要搜索的内容。" };
+        const hits = await invoke<Array<{ title: string; url: string; snippet: string }>>("web_search", { query });
+        if (hits.length === 0) return { ok: false, message: `没搜到「${query}」的结果。` };
+        const text = hits
+          .slice(0, 5)
+          .map((hit, index) => `${index + 1}. ${hit.title}：${hit.snippet}（${hit.url}）`)
+          .join("\n");
+        return { ok: true, message: `关于「${query}」搜到这些资料：
+${text}` };
+      }
       case "open_url": {
         const url = String(args.url ?? "").trim();
         if (!/^https?:\/\//i.test(url)) return { ok: false, message: "只支持 http/https 链接。" };
@@ -257,16 +476,37 @@ export async function runSkill(
       case "open_app": {
         const name = String(args.name ?? "").trim();
         if (!name) return { ok: false, message: "没有给出应用名。" };
-        const apps = await invoke<Array<{ label: string; appId: string }>>(
-          "discover_start_apps",
-          { query: null },
-        );
-        const target = apps.find(
-          (app) => app.label === name || app.label.includes(name) || name.includes(app.label),
-        );
-        if (!target) return { ok: false, message: `没找到叫「${name}」的应用。` };
-        await invoke("launch_start_app", { appId: target.appId });
-        return { ok: true, message: `已经打开 ${target.label}` };
+        const needle = name.toLowerCase();
+        // 开始菜单登记的商店应用 + 桌面/开始菜单里的 exe、lnk，两路一起找。
+        const [storeApps, fileApps] = await Promise.all([
+          invoke<Array<{ label: string; appId: string }>>("discover_start_apps", { query: null }).catch(() => []),
+          invoke<Array<{ label: string; path: string }>>("discover_installed_apps", { query: null }).catch(() => []),
+        ]);
+        const score = (label: string) => {
+          const lower = label.toLowerCase();
+          if (lower === needle) return 0;
+          if (lower.startsWith(needle)) return 1;
+          if (lower.includes(needle)) return 2;
+          if (needle.includes(lower)) return 3;
+          return 99;
+        };
+        const storeHit = storeApps
+          .map((app) => ({ app, rank: score(app.label) }))
+          .filter((item) => item.rank < 99)
+          .sort((a, b) => a.rank - b.rank)[0];
+        const fileHit = fileApps
+          .map((app) => ({ app, rank: score(app.label) }))
+          .filter((item) => item.rank < 99)
+          .sort((a, b) => a.rank - b.rank)[0];
+        if (storeHit && (!fileHit || storeHit.rank <= fileHit.rank)) {
+          await invoke("launch_start_app", { appId: storeHit.app.appId });
+          return { ok: true, message: `已经打开 ${storeHit.app.label}` };
+        }
+        if (fileHit) {
+          await invoke("launch_custom_shortcut", { path: fileHit.app.path });
+          return { ok: true, message: `已经打开 ${fileHit.app.label}` };
+        }
+        return { ok: false, message: `没找到叫「${name}」的应用，可以说得再具体一点。` };
       }
       case "media_control": {
         const requested = String(args.command ?? "play_pause").toLowerCase();

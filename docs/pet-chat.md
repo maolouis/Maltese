@@ -113,3 +113,31 @@
 - DSH 的消息会发送给其当前配置的模型提供方；本地模型的消息只发送到填写的地址。
 - 本地模型的 API Key 只保存在本机 `localStorage`，请求时通过 `Authorization: Bearer` 发给配置的服务；不会上传到 GitHub 或 Maltese 服务器。
 - 本功能不注入 DSH GUI 进程，也不依赖 GUI 是否打开。
+
+
+## 2026-11-14 小狗技能扩展（六项）
+
+新增/调整的技能动作（`src/petSkills.ts`，默认全部开启，可在技能设置里关）：
+
+| 动作 | 用途 | 触发话术示例 |
+| --- | --- | --- |
+| `todo_start` | 开始给待办计时，没有这条待办就新建；其它进行中的待办自动暂停 | 「我要开始学雅思口语」 |
+| `todo_pause` | 暂停计时并累计时长 | 「休息一下」「暂停雅思」 |
+| `diary_add` | 写进今天的时间线日记 | 「记一下今天…」 |
+| `diary_read` | 读出今天记了什么 | 「今天都记了什么」 |
+| `music_play` | 播放系统当前播放器；一个播放器都没有时尝试唤起音乐软件 | 「帮我播放音乐」 |
+| `open_app` | 改为「开始菜单应用 + 桌面/开始菜单 exe、lnk」双通道匹配打开 | 「打开微信」 |
+| `pet_settings` | 调整小狗自己的设置，目前支持形象（小白/小鸡毛/双狗） | 「换成小鸡毛」 |
+| `web_search` | 联网搜资料，再由模型整理成回答 | 「帮我查一下…」 |
+
+实现要点：
+
+- 待办/日记直接写主窗口同一份 localStorage（`focusd-island-todos`、
+  `focusd-island-active-todo`、`focusd-island-diary-events`），并派发
+  `maltese-todos-updated` / `maltese-diary-updated`；`App.tsx` 监听这两个事件即时刷新，
+  因为之前同窗口写入不会触发 `storage` 事件，技能改了数据面板却不动。
+- `web_search` 是新增 Rust 命令（`src-tauri/src/web_search.rs`）：DuckDuckGo HTML 版优先、
+  Bing 兜底，只取标题/链接/摘要，过滤广告跳转位；不依赖任何 API Key。
+- **DSH 后端也能用技能了**：之前技能决策只在 `backend === "local"` 时执行，默认 DSH 下技能形同虚设。
+  现在决策与总结都按当前后端走（DSH 用 `sessionId: null` 的独立短会话，不污染聊天上下文），
+  决策失败会自动退回普通聊天。

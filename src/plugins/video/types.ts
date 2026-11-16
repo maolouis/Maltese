@@ -2,6 +2,22 @@
 
 export type Platform = "bilibili" | "douyin";
 
+export type AgentAccountStatus = "draft" | "awaitingLogin" | "ready" | "paused";
+
+export type AgentAccount = {
+  id: string;
+  platform: Platform;
+  displayName: string;
+  handle: string;
+  persona: string;
+  goals: string;
+  status: AgentAccountStatus;
+  profileDir: string;
+  createdAt: number;
+  lastLoginAt: number | null;
+  lastRunAt: number | null;
+};
+
 export type Phase =
   | "idle"
   | "preparing"
@@ -57,6 +73,13 @@ export type ErrorCode =
   | "RISK_CONTROL"
   | "URL_NOT_ALLOWED"
   | "SESSION_RUNNING"
+  | "CDP_UNAVAILABLE"
+  | "CDP_STALLED"
+  | "CDP_RECONNECT_FAILED"
+  | "BROWSER_CLOSED"
+  | "ACCOUNT_NOT_READY"
+  | "ACCOUNT_NOT_FOUND"
+  | "ACCOUNT_PLATFORM_MISMATCH"
   | "NOT_FOUND"
   | "PERSIST_FAILED"
   | "VIDEO_ERROR";
@@ -73,6 +96,7 @@ export type ChannelState = {
 export type VideoSnapshot = {
   sessionId: string;
   provider: Platform;
+  accountId: string | null;
   phase: Phase;
   running: boolean;
   intervalSeconds: number;
@@ -206,6 +230,7 @@ export function isVideoSnapshot(value: unknown): value is VideoSnapshot {
   return (
     typeof value.sessionId === "string" &&
     PLATFORMS.includes(value.provider as Platform) &&
+    (value.accountId === null || typeof value.accountId === "string") &&
     PHASES.includes(value.phase as Phase) &&
     typeof value.running === "boolean" &&
     isNumber(value.intervalSeconds) &&
@@ -265,6 +290,20 @@ export function errorMessageForCode(code: string | null, fallback: string): stri
       return "只能打开 B 站 / 抖音官方页面。";
     case "SESSION_RUNNING":
       return "请先停止当前观看会话。";
+    case "CDP_UNAVAILABLE":
+      return "小狗浏览器没有及时准备好，本轮已经停止。";
+    case "CDP_STALLED":
+      return "视频页面连续无响应，本轮已经停止。";
+    case "CDP_RECONNECT_FAILED":
+      return "视频页面连接多次失败，本轮已经停止。";
+    case "BROWSER_CLOSED":
+      return "小狗浏览器已关闭，本轮已经停止。";
+    case "ACCOUNT_NOT_READY":
+      return "请先完成小狗账号登录，再开始运营。";
+    case "ACCOUNT_NOT_FOUND":
+      return "找不到这个小狗账号。";
+    case "ACCOUNT_PLATFORM_MISMATCH":
+      return "小狗账号的平台和当前选择不一致。";
     case "INVALID_CONFIG":
       return "配置超出允许范围，请检查输入。";
     default:

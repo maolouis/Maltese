@@ -4,6 +4,7 @@
 //! 适配（browser/cdp/channel）→ 编排（session）与命令导出。
 
 pub mod adapter;
+pub mod accounts;
 pub mod browser;
 pub mod cdp;
 pub mod channel;
@@ -22,6 +23,7 @@ pub mod session;
 pub mod store;
 pub mod url_guard;
 
+use accounts::AgentAccount;
 use config::{VideoConfig, VideoConfigPatch};
 use model::{
     ChannelState, ClearReport, ClearScope, DeliveryOutcome, DeliveryRecord, DiagnosticEntry,
@@ -107,9 +109,44 @@ pub async fn video_start_session(
     app: AppHandle,
     provider: String,
     config: Option<VideoConfigPatch>,
+    account_id: Option<String>,
 ) -> VideoResult<VideoSnapshot> {
     let platform = parse_provider(&provider)?;
-    session::engine(&app).start(app, platform, config).await
+    session::engine(&app).start(app, platform, config, account_id).await
+}
+
+#[tauri::command]
+pub fn video_list_accounts(app: AppHandle) -> Vec<AgentAccount> {
+    session::engine(&app).accounts()
+}
+
+#[tauri::command]
+pub fn video_create_account(
+    app: AppHandle,
+    platform: String,
+    display_name: String,
+    handle: Option<String>,
+    persona: Option<String>,
+    goals: Option<String>,
+) -> VideoResult<AgentAccount> {
+    let platform = parse_provider(&platform)?;
+    session::engine(&app).create_account(
+        platform,
+        display_name,
+        handle.unwrap_or_default(),
+        persona.unwrap_or_default(),
+        goals.unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+pub fn video_set_active_account(app: AppHandle, account_id: String) -> VideoResult<AgentAccount> {
+    session::engine(&app).set_active_account(&account_id)
+}
+
+#[tauri::command]
+pub fn video_mark_account_ready(app: AppHandle, account_id: String) -> VideoResult<AgentAccount> {
+    session::engine(&app).mark_account_ready(&account_id)
 }
 
 #[tauri::command]
@@ -198,9 +235,10 @@ pub fn video_clear_data(
 pub fn video_open_login_window(
     app: AppHandle,
     provider: Option<String>,
+    account_id: Option<String>,
 ) -> VideoResult<()> {
     let platform = parse_provider(provider.as_deref().unwrap_or("bilibili"))?;
-    session::engine(&app).open_login_window(platform)
+    session::engine(&app).open_login_window(platform, account_id.as_deref())
 }
 
 #[tauri::command]

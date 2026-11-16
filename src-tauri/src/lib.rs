@@ -15,6 +15,7 @@ mod notification_diagnostics;
 mod pet_gifs;
 mod plugins;
 mod relay;
+mod web_search;
 mod qq_notifications;
 mod qq_mail;
 mod wechat_reminder_source;
@@ -4166,6 +4167,7 @@ pub fn run() {
             plugins::get_active_plugin,
             relay::relay_publish,
             relay::relay_fetch,
+        web_search::web_search,
             pet_gifs::add_pet_gif,
             custom_sound::add_custom_sound,
             custom_sound::remove_custom_sound,
@@ -4179,6 +4181,10 @@ pub fn run() {
             video_automation::start_video_automation,
             video_automation::stop_video_automation,
             video::video_start_session,
+            video::video_list_accounts,
+            video::video_create_account,
+            video::video_set_active_account,
+            video::video_mark_account_ready,
             video::video_stop_session,
             video::video_get_snapshot,
             video::video_update_config,
