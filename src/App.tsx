@@ -524,6 +524,43 @@ const DEFAULT_MEDIA_STATE: MediaState = {
   updatedAt: 0,
 };
 
+/** 等到首帧真正画出来（两次 rAF），并尽量等字体就绪；最多等 400ms，绝不阻塞启动。 */
+async function waitForFirstPaint(): Promise<void> {
+  const twoFrames = new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      resolve();
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  const fontsReady = (document as Document & { fonts?: { ready?: Promise<unknown> } }).fonts?.ready;
+  const fontWait = fontsReady
+    ? Promise.resolve(fontsReady).then(() => undefined)
+    : Promise.resolve();
+  const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+  await Promise.race([Promise.all([twoFrames, fontWait]).then(() => undefined), timeout]);
+  // 兜底再等一帧，确保这次 DOM 变更随下一次绘制提交。
+  // 注意：隐藏窗口里 rAF 可能永远不回调，必须带超时，否则 show 会被永久挂起。
+  await Promise.race([
+    new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame !== "function") resolve();
+      else requestAnimationFrame(() => resolve());
+    }),
+    new Promise<void>((resolve) => window.setTimeout(resolve, 120)),
+  ]);
+}
+
+/** 等当前这张桌宠 GIF 解码完成（透明窗口下没解码就是「空白一块」），最多 300ms。 */
+async function waitForPetGif(): Promise<void> {
+  const image = document.querySelector<HTMLImageElement>(
+    ".island__collapsed--pet-only .maltese-pet img, .maltese-pet__stage img",
+  );
+  if (!image || typeof image.decode !== "function") return;
+  await Promise.race([
+    image.decode().catch(() => undefined),
+    new Promise<void>((resolve) => window.setTimeout(resolve, 300)),
+  ]);
+}
 function isSameMediaState(a: MediaState, b: MediaState): boolean {
   if (
     a.available !== b.available ||
@@ -6445,6 +6482,11 @@ function IslandApp({
 
     didShowInitialWindow.current = true;
 
+    // 先让浏览器把首帧画完再显示窗口：同步几何是 async 的，之前会在
+    // WebView 还没绘制时就把窗口 show 出来，偶发「只显示一部分 / 空白一块」。
+    // 桌宠 GIF 还要等解码完成，否则透明窗口里会出现一块空白。
+    await Promise.all([waitForFirstPaint(), waitForPetGif()]);
+
     try {
       await invoke("show_ready_island");
     } catch (error) {
@@ -6960,6 +7002,8 @@ function IslandApp({
       // 免打扰时段与每小时上限：手动「立即试一句」也遵守上限，但不吃静默时段。
       if (inQuietHours(plan) && !force) return;
       if (overHourlyLimit(plan, now)) return;
+      // 0% 表示「不主动开口」，UI 也是这么承诺的。
+      if (plan.level <= 0) return;
 
       let kind = "other";
       let windowTitle = "";
@@ -7004,10 +7048,10 @@ function IslandApp({
           proactiveSituationRef.current = { ...state, key: situation, since: now };
           return;
         }
-        // 情境要稳定 3 分钟以上才说话，避免频繁切换应用时不停打扰。
+        // 情境要稳定一段时间才说话，避免频繁切换应用时不停打扰。
         if (now - state.since < plan.stabilityMinutes * 60_000) return;
-        // 同一个情境只主动说一次，且不能突破冷却时间。
-        if (state.firedFor === situation) return;
+        // 同一个情境里也要按冷却时间继续开口：以前「一个情境只说一次」会让
+        // 长时间写代码/看视频的人再也收不到主动消息。冷却与每小时上限仍有约束。
         if (now - lastProactiveChatAt.current < cooldownMs) return;
       } else if (!force && now - lastProactiveChatAt.current < cooldownMs) {
         return;
@@ -7146,9 +7190,9 @@ function IslandApp({
       replyInteraction ??= interactionFromEmotion(replyEmotion);
       startPetInteraction(replyInteraction, replyEmotion);
       rememberProactiveLine(line, { kind: observe.kind, angle });
-      recordSpeakTime(Date.now());
-      // 模型调用可能花几秒，弹之前再确认一次仍在挂机。
+      // 模型调用可能花几秒，弹之前再确认一次仍在挂机；没弹出去就不该占用额度。
       if (modeRef.current !== "collapsed") return;
+      recordSpeakTime(Date.now());
       if (onFirstTextRef.fired) {
         // 气泡已经在流式阶段弹出来了，这里只把正文补成最终版本（不重复弹窗）。
         applyPetOverlay({ mode: "cloud", title: "", body: line, bubbleKind: "pet" });
@@ -7181,7 +7225,8 @@ function IslandApp({
   }, [
     proactiveCharacter,
     settings.proactiveChat,
-    settings.proactiveChatMinutes,
+    // 主动程度变了必须重建 interval，否则闭包里还是旧的 plan（cooldown 可能是旧的 200+ 分钟）。
+    settings.proactiveLevel,
     settings.proactiveChatMode,
     showPetSpeech,
     startPetInteraction,

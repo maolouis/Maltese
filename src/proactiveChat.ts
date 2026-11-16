@@ -538,7 +538,7 @@ function readSpeakTimes(): number[] {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    return parsed.filter((item): item is number => typeof item === "number" && item > cutoff);
+    return parsed.filter((item): item is number => typeof item === "number" && item > cutoff && item <= Date.now() + 60_000);
   } catch {
     return [];
   }
@@ -555,7 +555,8 @@ export function recordSpeakTime(at = Date.now()) {
 
 /** 当前是否已经超过每小时上限。 */
 export function overHourlyLimit(plan: ProactivePlan, now = Date.now()): boolean {
-  const recent = readSpeakTimes().filter((time) => now - time < 60 * 60 * 1000);
+  // 未来时间戳（系统时钟改过）差值 < 0 也会被算进 1 小时窗口，必须排除。
+  const recent = readSpeakTimes().filter((time) => time <= now && now - time < 60 * 60 * 1000);
   return recent.length >= plan.maxPerHour;
 }
 

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
-import { describeProactivePlan, proactivePlan } from "./proactiveChat";
+import { describeProactivePlan, proactivePlan, saveProactiveLevel } from "./proactiveChat";
 import { isLocaleCode, LOCALE_CODES, LOCALE_STORAGE_KEY, loadLocale, saveLocale } from "./i18n";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { LocalChatSettings } from "./LocalChatSettings";
@@ -555,7 +555,10 @@ export default function SettingsWindow() {
               max={100}
               step={5}
               suffix="%"
-              onChange={(value) => update("proactiveLevel", value)}
+              onChange={(value) => {
+              saveProactiveLevel(value);
+              update("proactiveLevel", value);
+            }}
             />
             <p className="sw-hint">
               {settings.proactiveLevel === 0
