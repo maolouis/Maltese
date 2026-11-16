@@ -61,14 +61,13 @@ node scripts/build-pet-manifest.mjs
 
 - **按动作分目录**：`weibo/<动作>/<组>-<序号>.gif`，动作名对齐 `assets/pets/chars/` 现有的 `idle / happy / pet / sleep / eat / relax / play / nervous / scared / peek / hide / work / paper / hop / walk`，另按画面补了 6 个新动作名 `angry`、`cry`、`love`、`ride`、`bath`、`costume`，共 21 类。逐张清单见同目录 `by-action.md`。
 - 每张还带情绪标签（开心 / 亲昵 / 难过 / 生气 / 惊讶 / 困倦 / 无语 / 害羞 / 进食 / 玩耍 / 中性），清单见 `by-emotion.md`。
-- **6 个新动作已接入**：`angry` / `cry` / `love` / `ride` / `bath` / `costume` 的 38 张已复制进 `assets/pets/chars/shared/<动作>/`，
-  `src/petCharacters.ts` 的 `STATE_TO_ACTION` 与 `ACTION_FALLBACK` 已挂上（回退链分别是
-  `angry → nervous → scared → idle`、`cry → scared → nervous → idle`、`love → pet → happy → idle`、
+- **整库已并入轮播池**：21 类 296 张全部复制进 `assets/pets/chars/shared/<动作>/`，`shared` 从 90 张扩到 386 张（默认形象每 3 张本角色图插 1 张同框图，所以官方表情包会自然混进轮播）。
+  `src/petCharacters.ts` 的 `STATE_TO_ACTION` 与 `ACTION_FALLBACK` 已挂上 6 个新动作
+  （回退链分别是 `angry → nervous → scared → idle`、`cry → scared → nervous → idle`、`love → pet → happy → idle`、
   `ride → play → walk → idle`、`bath → relax → idle`、`costume → happy → idle`），
   `PetState` 联合类型、悬停气泡面板的 6 个按钮（生气 / 委屈 / 比心 / 兜风 / 泡澡 / 装扮）、
-  原生 `maltese-pet-action` 事件白名单和 i18n 的 `diary.petActions` 也已补齐，桌宠现在能直接触发。
-- **其余 15 类仍只躺在素材池**：`stickers/weibo/` 里那 15 个目录和 `chars/` 的对应目录内容不同（那 258 张还没复制），
-  想扩充现有动作的轮播池，就把某个动作目录里的 GIF 再复制进 `assets/pets/chars/xiaobai|shared/<动作>/`，跑一次清单脚本即可。
+  原生 `maltese-pet-action` 事件白名单和 i18n 的 `diary.petActions` 也已补齐，桌宠能直接触发。
+- **内存不会跟着素材线性涨**：`MAX_FRAMES_PER_STATE = 30`，每个状态下按均匀间隔抽样，素材再多也只预加载 30 张。
 - 逐张规格、帧数、来源原图地址、动作与情绪见 `assets/pets/stickers/weibo/index.json`，总览见同目录 `preview.png`，采集与归一化脚本在 `work/weibo-stickers/`（`work/` 不进版本库）。
 - 因为 `tauri.conf.json` 把整个 `assets/pets` 打进安装包资源，这一池会让安装包多约 30 MB；不想带上就把目录移出 `assets/pets`。
 - 版权归 ©MALTESE / 线条小狗官方，随安装包分发或商用需自行取得授权。
