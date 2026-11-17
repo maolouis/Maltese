@@ -408,3 +408,76 @@
   确认写入成功即可；这条留给人工/下一轮自动化，不作为本轮「已通过」结论。
 - 可确信的部分：拖拽不再依赖 HTML5 拖放（Pointer Events + `setPointerCapture`，落点算法有单测），
   且 `dragDropEnabled` 的抢拖放问题既有 Tauri/wry 源码证据、也被构建期配置校验与单测锁住。
+
+## 10. 2026-11-17 追加修复轮（P0 数据丢失：用户误删 GIF）
+
+> 角色：研发。版本仍 **2.0.2**（未改版本号、未 push、未打 tag）。
+> 本轮是用户明确要求的数据恢复 + 删除安全化，写用户真实 profile 前已做备份（见 §10.3）。
+
+### 10.1 问题
+
+用户误删了一张表情轮播里的 GIF。原实现（`src/PetGifRotationSettings.tsx`）方格右键
+`onContextMenu` 与垃圾桶按钮都**直接** `remove(item)`：内置素材立刻从轮播列表消失；自定义 GIF
+还会先 `invoke("remove_pet_gif")` 删掉磁盘文件再写配置，全程没有任何确认或撤销入口。
+
+### 10.2 修复
+
+1. **删除前确认**（应用内确认框，非浏览器 `confirm`）：缩略图 + 文件名 + 后果说明
+   （内置：只从轮播移除、文件保留；自定义：移除并删除文件、8 秒可撤销）；
+   `Esc` / 取消 / 点遮罩只关闭；默认焦点在「取消」。确认流程做成纯状态机
+   `src/utils/petGifRemoval.ts`，未确认拿不到待删项。
+2. **可撤销的删除**：自定义 GIF 先由 `park_pet_gif` 复制到
+   `<app_data>/pet-gifs-trash/<时间戳>-<计数器>-<原名>`，再删原文件；
+   删除记录写入 `localStorage["maltese-pet-gif-trash"]`（`character/state/index/item/deletedAt/trashPath`，
+   最多 10 条，最新在前，挤出去的最旧一条会清掉磁盘副本）。底部提示条「撤销删除」保留 8 秒，
+   点击后 `restore_pet_gif` 把副本复制回原路径并按**原下标**插回轮播列表。
+3. **常驻「恢复最近删除」入口**：表情轮播卡片底部固定入口（不依赖轮播区展开），
+   列出最近删除项（文件名 / 形象 · 表情 / 时间），逐条「恢复」。
+4. Rust：`src-tauri/src/pet_gifs.rs` 新增 `park_pet_gif` / `restore_pet_gif` /
+   `discard_trashed_pet_gif`，均做目录越界校验；恢复拒绝覆盖已存在的同名文件；
+   `lib.rs` 的 `generate_handler!` 已注册。
+5. i18n：`petGifs` 新增 confirm/undo/trash 相关键（`zh-CN` / `en` 同步，types 同步）；
+   `reorderHint` 改为「右键点击方格删除（会先确认）」。
+
+### 10.3 用户数据的恢复记录（只读排查 → 最小恢复）
+
+- **定位**：解析 WebView2 profile 的 LevelDB（`%LOCALAPPDATA%\com.maolouis.maltese\EBWebView\
+  Default\Local Storage\leveldb`），对比 11:36 / 11:50 两个快照的
+  `maltese-pet-gif-rotation:xiaojimao` 值：唯一的差异是 `idle` 列表少了第 5 项
+  **`/assets/pets/chars/xiaojimao/idle/喝咖啡_2.gif`（喝咖啡_2.gif）**，顺序未变，其余状态一致。
+  该文件是**内置素材**（`E:\Maltese2\resources\assets\pets\chars\xiaojimao\idle\喝咖啡_2.gif`，
+  42,857 B 仍在），所以只是被移出轮播列表、没有文件丢失。
+- **备份**（写之前）：
+  - 配置：`%APPDATA%\com.maolouis.maltese\pet-gif-rotation.before-restore.20261117-123338.json`
+  - 整个 Local Storage 目录：`%APPDATA%\com.maolouis.maltese\local-storage.before-restore.20261117-123720\`
+- **恢复**：把 `喝咖啡_2.gif` 按原下标（第 5 位）写回 `maltese-pet-gif-rotation:xiaojimao`，
+  其余 28 项原样保留（最终 29 项，顺序与删除前逐项一致）。因为内置素材不走磁盘删除，
+  没有文件需要从回收站还原（回收站功能是本次新增，对这次已发生的删除不回溯）。
+- **未恢复的一项，待用户确认**：同一份历史里还有一次更早的移除——`idle` 列表里的
+  **`举重.gif`**（发生在 11:36 之前的某个时间点，不是本次「刚刚」那次）。无法判断是有意精简还是误删，
+  故**没有擅自加回**；用户说一声即可按同样方式恢复。
+- **过程说明**：首次尝试用设置页的「全选现有表情」按钮恢复，触发了一个既有 UI bug
+  （`availableItems` 用 `petGifAssets` 转换后的 URL 与已存原始路径比较，永远不等 → 「全选」会把整池
+  追加成重复项，28 项变 142 项）。已用备份中的原始配置精确回写覆盖，用户列表恢复原样。
+  这个「全选」比较 bug 本轮**未改**（不在本次范围内），已记录待办。
+
+### 10.4 验证输出
+
+| 命令 | 结果 |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc --noEmit` | exit 0 |
+| `cd src-tauri; cargo check` | exit 0（仅既有 warning） |
+| `node --test tests/*.test.mjs` | `tests 78 / pass 78 / fail 0`（原 66 + 新增 12 条 `tests/pet-gif-removal.test.mjs`） |
+
+新增单测覆盖：未确认不删 / 取消不删 / 删除中不重复删 / 确认框期间忽略新请求；
+回收站最新在前、上限 10 条、挤出最旧一条、同 id 覆盖；恢复插回原下标、越界夹取、不重复恢复。
+
+### 10.5 未验证 / 待人工
+
+- 确认框、撤销提示条、恢复入口的**实机鼠标交互**：本轮只做代码级 + 单测验证（合成鼠标在
+  WebView2 里右键落点不稳定，且会在用户 profile 里真实删除数据）。建议人工 30 秒：
+  ①展开轮播 → 右键任一格，确认框出现（缩略图/文件名/说明齐全，焦点在「取消」）；
+  ②按 `Esc` 关闭，列表不变；③再次右键点「删除」，底部出现「撤销删除」，8 秒内点它，
+  该项回到原位置；④删除后不点撤销，等提示条消失，再从卡片底部「恢复最近删除」恢复同一项，
+  确认仍插回原位置；⑤自定义 GIF 删除后检查 `pet-gifs-trash/` 有副本、恢复后原路径文件回来。
+- 构建产物未重出（`pnpm build` 未在本轮强制运行）；实机验证需要重新构建前端 + 安装 exe。
