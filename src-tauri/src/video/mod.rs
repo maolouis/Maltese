@@ -121,6 +121,11 @@ pub fn video_list_accounts(app: AppHandle) -> Vec<AgentAccount> {
 }
 
 #[tauri::command]
+pub fn video_get_active_account(app: AppHandle) -> Option<AgentAccount> {
+    session::engine(&app).active_account()
+}
+
+#[tauri::command]
 pub fn video_create_account(
     app: AppHandle,
     platform: String,

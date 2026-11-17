@@ -566,6 +566,10 @@ impl SessionEngine {
         self.accounts.lock().map(|accounts| accounts.list()).unwrap_or_default()
     }
 
+    pub fn active_account(&self) -> Option<AgentAccount> {
+        self.accounts.lock().ok().and_then(|accounts| accounts.active())
+    }
+
     pub fn create_account(
         &self,
         platform: Platform,
