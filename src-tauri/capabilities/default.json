@@ -13,7 +13,9 @@
     "companion-3",
     "companion-4",
     "bongo-pet",
-    "cursor-pet"
+    "cursor-pet",
+    "billiards",
+    "pinned"
   ],
   "permissions": [
     "core:default",

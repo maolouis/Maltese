@@ -6,6 +6,7 @@ mod desktop_icons;
 mod web_protocol;
 mod dsh_api;
 mod dsh_chat;
+mod instance_lock;
 mod local_chat;
 mod icons;
 mod lyrics;
@@ -29,6 +30,7 @@ mod custom_sound;
 mod video;
 mod video_automation;
 mod video_rules;
+mod window_factory;
 mod actions;
 
 use serde::{Deserialize, Serialize};
@@ -50,7 +52,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
-    Position, Size, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    Position, Size, WebviewWindow, WindowEvent,
 };
 use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
@@ -117,6 +119,14 @@ static POSITION_ANIMATING: AtomicBool = AtomicBool::new(false);
 // 当前这段位移动画的横向位移（像素）：用来区分“缩边唤醒”的纯竖直移动和“闲逛”的横向漂移。
 static POSITION_ANIMATION_DELTA_X: AtomicI32 = AtomicI32::new(0);
 static NATIVE_GLASS_INITIALIZED: OnceLock<()> = OnceLock::new();
+// 主窗口是否已经 show 过。`frontend_ready` 握手会先一步把窗口显示出来，
+// 之后 `show_ready_island` 作为兜底再触发时不能重复抢焦点。
+static ISLAND_SHOWN: AtomicBool = AtomicBool::new(false);
+// 前端首帧就绪的时间点：排障时用来对照 show 是否发生在握手之后。
+static FRONTEND_READY_AT: OnceLock<Instant> = OnceLock::new();
+// show 之后窗口仍然不可见时的补显次数与间隔（WebView2 刚握手 / 系统吞掉 show）。
+const ISLAND_VISIBILITY_ATTEMPTS: usize = 6;
+const ISLAND_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, PartialEq)]
 enum IslandMode {
@@ -888,31 +898,11 @@ fn attach_settings_close(window: &WebviewWindow) {
     });
 }
 
-fn build_settings_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    let window = WebviewWindowBuilder::new(
-        app,
-        "settings",
-        WebviewUrl::App("index.html?window=settings".into()),
-    )
-    .title("Maltese · 桌宠设置")
-    .inner_size(560.0, 780.0)
-    .min_inner_size(460.0, 560.0)
-    .resizable(true)
-    .center()
-    .visible(false)
-    .build()
-    .map_err(|error| format!("无法创建设置窗口：{error}"))?;
-    attach_settings_close(&window);
-    Ok(window)
-}
-
-// 独立的桌宠设置窗口：简单、浅色、改完即生效。
+// 独立的桌宠设置窗口：简单、浅色、改完即生效。窗口已改成懒创建，
+// 第一次打开时才创建 WebView，之后复用。
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
-    let window = match app.get_webview_window("settings") {
-        Some(window) => window,
-        None => build_settings_window(&app)?,
-    };
+    let window = window_factory::ensure(&app, "settings")?;
     window.show().map_err(|error| error.to_string())?;
     let _ = window.unminimize();
     window.set_focus().map_err(|error| error.to_string())?;
@@ -930,6 +920,7 @@ fn show_island_no_focus(app: AppHandle) -> Result<(), String> {
         apply_stage_geometry(&window, read_window_state(), false)?;
     }
     window.show().map_err(|error| error.to_string())?;
+    ISLAND_SHOWN.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -950,9 +941,7 @@ fn show_pet_bubble(
     ttl_ms: Option<u64>,
 ) -> Result<(), String> {
     let main = main_window(&app)?;
-    let bubble = app
-        .get_webview_window(BUBBLE_WINDOW_LABEL)
-        .ok_or_else(|| "气泡窗口未注册".to_string())?;
+    let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
 
     // 小狗被隐藏/最小化时，先让它在桌面上出现（不抢焦点），再浮出气泡。
     if !main.is_visible().unwrap_or(true) {
@@ -983,9 +972,7 @@ fn show_pet_bubble(
 #[tauri::command]
 fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     let main = main_window(&app)?;
-    let bubble = app
-        .get_webview_window(BUBBLE_WINDOW_LABEL)
-        .ok_or_else(|| "气泡窗口未注册".to_string())?;
+    let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
     let width = width.clamp(220.0, 420.0);
     let height = height.clamp(120.0, 640.0);
     place_bubble_near_main(&app, &bubble, &main, LogicalSize::new(width, height))
@@ -1201,6 +1188,34 @@ fn detect_foreground_fullscreen(own_hwnd: Option<isize>) -> bool {
 
 #[tauri::command]
 fn show_ready_island(app: AppHandle) -> Result<(), String> {
+    // frontend_ready 握手已经显示过时，兜底调用直接成功返回，避免重复 set_focus
+    // 把用户刚切到的其它窗口抢回来。
+    if ISLAND_SHOWN.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    show_island(&app)?;
+    // 把「命令返回成功」定义成「窗口确实可见」：前端只在返回成功且 isVisible()
+    // 为真时才认为首帧显示完成，否则会按退避重试。
+    let window = main_window(&app)?;
+    if window.is_visible().unwrap_or(true) {
+        Ok(())
+    } else {
+        Err("island window reported hidden right after show".to_string())
+    }
+}
+
+/// 前端首帧（含桌宠 GIF 解码）就绪后主动通知 Rust，由 Rust 再做几何 + show。
+/// 这条链路不等待 `set_island_interaction`，避免同步 IPC 慢/失败时窗口一直不显示；
+/// `show_ready_island` 仍保留为兜底。
+#[tauri::command]
+fn frontend_ready(app: AppHandle) -> Result<(), String> {
+    let first_ready = FRONTEND_READY_AT.set(Instant::now()).is_ok();
+    if first_ready {
+        eprintln!("frontend reported first paint ready");
+    }
+    if ISLAND_SHOWN.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     show_island(&app)
 }
 
@@ -1361,9 +1376,7 @@ fn shell_execute_program(
 // 「和小狗打台球」：开一个覆盖桌面工作区的透明窗口（不移动真实图标）。
 #[tauri::command]
 fn open_billiards_window(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("billiards")
-        .ok_or_else(|| "台球窗口未注册".to_string())?;
+    let window = window_factory::ensure(&app, "billiards")?;
     // 铺满主显示器的工作区（避开任务栏）。
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let area = monitor.work_area();
@@ -1379,9 +1392,7 @@ fn open_billiards_window(app: AppHandle) -> Result<(), String> {
 // 「固定标签页在桌面」：把当前标签页放到一个独立的置顶窗口里。
 #[tauri::command]
 fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
-    let window = app
-        .get_webview_window("pinned")
-        .ok_or_else(|| "固定窗口未注册".to_string())?;
+    let window = window_factory::ensure(&app, "pinned")?;
     // 第一次固定时放在右下角，避免挡住桌宠和面板。
     if let Ok(position) = window.outer_position() {
         if position.x == 0 && position.y == 0 {
@@ -2958,17 +2969,56 @@ fn show_island(app: &AppHandle) -> Result<(), String> {
     if let Err(error) = apply_stage_geometry(&window, read_window_state(), false) {
         eprintln!("failed to apply island geometry when showing: {error}");
     }
+    // 从托盘 / 第二实例唤起时窗口可能是最小化状态，先还原再 show。
+    let _ = window.unminimize();
     window.show().map_err(|error| error.to_string())?;
+    ISLAND_SHOWN.store(true, Ordering::SeqCst);
     // 置顶是层级属性，与位置无关：重新显示后再断言一次，避免被其它窗口压到下面。
     let _ = window.set_always_on_top(true);
-    window.set_focus().map_err(|error| error.to_string())?;
+    // 焦点失败不算显示失败：窗口已经 show 出来了，没必要让前端重试整个流程。
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus island window after showing: {error}");
+    }
+    // P0：show 可能被系统窗口状态竞争吞掉；显示后再校验一次可见性，
+    // 不可见就在后台补几次 show()，避免「进程活着但永远没有狗」。
+    ensure_island_visible_after_show(window.clone());
     // 隐藏时一起收起的 Bongo / 陪伴狗 / 跟随小狗，显示时一并放回来。
     desktop_extras::restore_extra_pets(app);
     Ok(())
 }
 
+/// show() 之后校验可见性：不可见时在后台有限次重试显示。
+/// 不阻塞调用线程（命令线程可能是主线程），也绝不止步于一次失败。
+fn ensure_island_visible_after_show(window: WebviewWindow) {
+    if window.is_visible().unwrap_or(true) {
+        return;
+    }
+    if thread::Builder::new()
+        .name("island-visibility-retry".into())
+        .spawn(move || {
+            for attempt in 1..=ISLAND_VISIBILITY_ATTEMPTS {
+                thread::sleep(ISLAND_VISIBILITY_RETRY_DELAY);
+                if window.show().is_ok() {
+                    let _ = window.set_always_on_top(true);
+                }
+                if window.is_visible().unwrap_or(false) {
+                    eprintln!("island window became visible after {attempt} retry attempts");
+                    return;
+                }
+            }
+            eprintln!(
+                "island window is still hidden after {ISLAND_VISIBILITY_ATTEMPTS} visibility retries"
+            );
+        })
+        .is_err()
+    {
+        eprintln!("failed to spawn island visibility retry thread");
+    }
+}
+
 fn hide_island(app: &AppHandle) {
     POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
+    ISLAND_SHOWN.store(false, Ordering::SeqCst);
     hide_pet_bubble_silent(app);
     if let Ok(window) = main_window(app) {
         let _ = window.hide();
@@ -3985,6 +4035,31 @@ pub fn run() {
     if let Some(identifier) = notification_diagnostics::verification_identifier() {
         context.config_mut().identifier = identifier;
     }
+    // P1：以应用数据目录（WebView2 profile 所在目录）为键的跨进程实例锁。
+    // 先于 Builder 判断：第二实例在这里就退出，不会创建任何 WebView，也不会抢
+    // profile / 托盘 / 全局快捷键；只留一个 show-request 文件让首实例把狗叫出来。
+    // 锁随文件句柄释放，进程退出（含崩溃 / 任务管理器结束）时自动回收，没有 stale lock。
+    let identifier = context.config().identifier.clone();
+    let mut instance_data_dir = instance_lock::resolve_data_dir(&identifier);
+    if let Some(data_dir) = instance_data_dir.as_deref() {
+        match instance_lock::acquire(data_dir, &identifier) {
+            Ok(instance_lock::InstanceGuard::Primary) => {}
+            Ok(instance_lock::InstanceGuard::Secondary) => {
+                let requested = instance_lock::request_show(data_dir);
+                eprintln!(
+                    "another Maltese instance is already using {} (show requested: {requested}); exiting",
+                    data_dir.display()
+                );
+                instance_data_dir = None;
+                return;
+            }
+            Err(error) => {
+                eprintln!("failed to acquire the instance lock, continuing without it: {error}");
+            }
+        }
+    }
+    let setup_instance_dir = instance_data_dir.clone();
+    let exit_instance_dir = instance_data_dir.clone();
     tauri::Builder::default()
         // 前端产物外置：`http://maltese.localhost/...` 从 <资源目录>/web 读取。
         // 默认（内嵌产物）时这个协议不会被请求，注册本身没有副作用。
@@ -3992,7 +4067,11 @@ pub fn run() {
             web_protocol::respond(context.app_handle(), &request)
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = show_island(app);
+            // 同 identifier 的第二实例会走到这里：把已存在的桌宠带到前台。
+            // show_island 内部已经包含 show / 取消最小化 / 置顶 / 聚焦 / 可见性重试。
+            if let Err(error) = show_island(app) {
+                eprintln!("failed to bring the existing island to front: {error}");
+            }
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -4016,12 +4095,13 @@ pub fn run() {
             // Native Acrylic/Region is intentionally not reapplied on DPI
             // changes. Liquid glass is rendered inside the island element.
         })
-        .setup(|app| {
+        .setup(move |app| {
             build_tray(app)?;
             // 升级 / 换目录后把自启项指回当前 exe，避免开机拉起旧路径。
             sync_startup_path();
-            if let Some(settings) = app.get_webview_window("settings") {
-                attach_settings_close(&settings);
+            // 首实例才启动 show-request 监听：第二实例发现锁已存在时会写文件。
+            if let Some(data_dir) = setup_instance_dir.clone() {
+                instance_lock::spawn_show_request_watcher(app.handle().clone(), data_dir);
             }
             if let Err(error) = clipboard_history::init(app.handle()) {
                 eprintln!("failed to initialize clipboard history: {error}");
@@ -4086,6 +4166,7 @@ pub fn run() {
             save_todo_markdown,
             get_default_todo_save_directory,
             show_ready_island,
+            frontend_ready,
             show_island_no_focus,
             open_settings_window,
             close_billiards_window,
@@ -4211,7 +4292,7 @@ pub fn run() {
         ])
         .build(context)
         .expect("error while building Maltese")
-        .run(|app, event| {
+        .run(move |app, event| {
             // 退出应用时，如果台球还开着，把真实桌面图标放回去（issue #1）。
             if matches!(
                 event,
@@ -4221,6 +4302,9 @@ pub fn run() {
                     if window.is_visible().unwrap_or(false) {
                         let _ = desktop_icons::desktop_icons_restore();
                     }
+                }
+                if exit_instance_dir.is_some() {
+                    instance_lock::clear_instance_info();
                 }
             }
         });

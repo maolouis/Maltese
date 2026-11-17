@@ -561,6 +561,16 @@ async function waitForPetGif(): Promise<void> {
     new Promise<void>((resolve) => window.setTimeout(resolve, 300)),
   ]);
 }
+
+/// 显示首帧的尝试次数与间隔：一次 show 失败（webview 未握手 / 窗口状态竞争）
+/// 不能变成「本次进程永久没有桌宠」。
+const SHOW_READY_ATTEMPTS = 5;
+const SHOW_READY_RETRY_DELAY_MS = 300;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function isSameMediaState(a: MediaState, b: MediaState): boolean {
   if (
     a.available !== b.available ||
@@ -6228,6 +6238,10 @@ function IslandApp({
   const didHydrateAutoSave = useRef(false);
   const didCheckDate = useRef(false);
   const didShowInitialWindow = useRef(false);
+  // 显示请求正在退避重试时，后续 effect / 事件不要叠加新的重试循环。
+  const showReadyIslandInFlight = useRef(false);
+  // 首帧握手（frontend_ready）只通知 Rust 一次。
+  const didNotifyFrontendReady = useRef(false);
   const islandPositionRef = useRef<IslandPosition | null>(loadIslandPosition());
   const selectedArchive =
     archives.find((archive) => archive.date === selectedArchiveDate) ?? null;
@@ -6474,21 +6488,44 @@ function IslandApp({
   );
 
   const showReadyIsland = useCallback(async () => {
-    if (didShowInitialWindow.current) {
+    if (didShowInitialWindow.current || showReadyIslandInFlight.current) {
       return;
     }
 
-    didShowInitialWindow.current = true;
-
-    // 先让浏览器把首帧画完再显示窗口：同步几何是 async 的，之前会在
-    // WebView 还没绘制时就把窗口 show 出来，偶发「只显示一部分 / 空白一块」。
-    // 桌宠 GIF 还要等解码完成，否则透明窗口里会出现一块空白。
-    await Promise.all([waitForFirstPaint(), waitForPetGif()]);
-
+    showReadyIslandInFlight.current = true;
     try {
-      await invoke("show_ready_island");
-    } catch (error) {
-      console.error("Failed to show island", error);
+      // 先让浏览器把首帧画完再显示窗口：同步几何是 async 的，之前会在
+      // WebView 还没绘制时就把窗口 show 出来，偶发「只显示一部分 / 空白一块」。
+      // 桌宠 GIF 还要等解码完成，否则透明窗口里会出现一块空白。
+      await Promise.all([waitForFirstPaint(), waitForPetGif()]);
+
+      for (let attempt = 0; attempt < SHOW_READY_ATTEMPTS; attempt += 1) {
+        try {
+          await invoke("show_ready_island");
+          const visible = await getCurrentWindow()
+            .isVisible()
+            .catch(() => true);
+          if (visible) {
+            // 只有「命令返回成功且窗口确实可见」才算首帧显示完成；
+            // 失败时不置位，后面的 effect 仍能再次触发显示。
+            didShowInitialWindow.current = true;
+            return;
+          }
+          console.warn("Island window reported hidden after show_ready_island", {
+            attempt: attempt + 1,
+          });
+        } catch (error) {
+          console.error("Failed to show island", error);
+        }
+        if (attempt + 1 < SHOW_READY_ATTEMPTS) {
+          await delay(SHOW_READY_RETRY_DELAY_MS);
+        }
+      }
+      console.error(
+        `Gave up showing the island window after ${SHOW_READY_ATTEMPTS} attempts`,
+      );
+    } finally {
+      showReadyIslandInFlight.current = false;
     }
   }, []);
 
@@ -8869,6 +8906,24 @@ function IslandApp({
     const updateReducedMotion = () => setReducedMotion(query.matches);
     query.addEventListener("change", updateReducedMotion);
     return () => query.removeEventListener("change", updateReducedMotion);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri() || didNotifyFrontendReady.current) {
+      return;
+    }
+    didNotifyFrontendReady.current = true;
+    void (async () => {
+      // P0 握手：首帧 + 桌宠 GIF 解码完成后主动通知 Rust，由 Rust 再做几何 + show。
+      // 这条链路不经过 syncNativeInteraction，避免同步 IPC 慢/失败时窗口一直不显示；
+      // show_ready_island 仍然保留为兜底。
+      await Promise.all([waitForFirstPaint(), waitForPetGif()]);
+      try {
+        await invoke("frontend_ready");
+      } catch (error) {
+        console.error("Failed to notify the backend that the frontend is ready", error);
+      }
+    })();
   }, []);
 
   useEffect(() => {

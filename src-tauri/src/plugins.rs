@@ -405,9 +405,8 @@ pub fn open_plugin_window(app: AppHandle, id: String) -> Result<(), String> {
         .find(|plugin| plugin.id == id)
         .ok_or_else(|| "插件不存在。".to_string())?;
 
-    let window = app
-        .get_webview_window(PLUGIN_WINDOW_LABEL)
-        .ok_or_else(|| "插件窗口未注册".to_string())?;
+    // 插件窗口改成懒创建：第一次打开插件时才建 WebView。
+    let window = crate::window_factory::ensure(&app, PLUGIN_WINDOW_LABEL)?;
 
     if let Ok(mut active) = ACTIVE_PLUGIN.lock() {
         *active = Some(id.clone());

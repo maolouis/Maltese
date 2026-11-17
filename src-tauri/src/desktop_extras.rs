@@ -1,8 +1,8 @@
 // 额外的桌宠窗口：陪玩狗、Bongo 模式、鼠标跟随宠。
 //
-// 主窗口只负责“主狗”；陪玩狗、Bongo 和跟随宠在 tauri.conf.json 里
-// 预声明为隐藏的独立透明窗口，这里只按设置显示/隐藏和定位，避免在
-// 命令线程里临时创建 WebView 造成启动卡死。
+// 主窗口只负责“主狗”；陪玩狗、Bongo 和跟随宠按设置懒创建为独立的透明窗口
+// （见 `window_factory`），这里只按设置显示/隐藏和定位。默认配置下
+// （1 只狗、Bongo 关闭、不跟随鼠标）启动时一只额外窗口都不会创建。
 
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -148,7 +148,13 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
     let (left, top, width, height, scale) = work_area(app);
     for index in 1..=COMPANION_MAX {
         let label = format!("{COMPANION_PREFIX}{index}");
-        let Some(window) = app.get_webview_window(&label) else {
+        let window = if index <= wanted && !pets_hidden() {
+            // 需要显示时才懒创建；创建失败按“没有这只狗”处理，不影响其它狗。
+            crate::window_factory::ensure_if_known(app, &label)
+        } else {
+            app.get_webview_window(&label)
+        };
+        let Some(window) = window else {
             continue;
         };
         if index <= wanted && !pets_hidden() {
@@ -161,7 +167,7 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
             let _ = window.show();
         } else {
-            // 预声明的窗口只隐藏不销毁，下次加回数量时可以直接复用。
+            // 窗口创建过就复用，只隐藏不销毁。
             let _ = window.hide();
         }
     }
@@ -169,15 +175,21 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
 }
 
 fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(BONGO_LABEL) else {
-        // 启动早期窗口可能还没注册完，交给调用方稍后重试。
-        return Err("Bongo 窗口还没准备好".to_string());
+    let wants_visible = config.bongo_enabled && !bongo_hidden() && !pets_hidden();
+    let window = if wants_visible {
+        crate::window_factory::ensure_if_known(app, BONGO_LABEL)
+    } else {
+        app.get_webview_window(BONGO_LABEL)
+    };
+    let Some(window) = window else {
+        // 开关没开 / 窗口从未创建：没有可同步的窗口。
+        return Ok(());
     };
     let width = config.bongo_size.clamp(220, 700) as f64;
     let height = (width * BONGO_RATIO).round();
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(width, height)));
     let _ = window.set_ignore_cursor_events(config.bongo_click_through);
-    if config.bongo_enabled && !bongo_hidden() && !pets_hidden() {
+    if wants_visible {
         let (left, top, screen_w, screen_h, scale) = work_area(app);
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;
@@ -204,9 +216,15 @@ fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Strin
 fn sync_cursor(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
     CURSOR_ENABLED.store(config.follow_mouse, Ordering::SeqCst);
     CURSOR_SIZE.store(config.cursor_pet_size.clamp(30, 180), Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window(CURSOR_LABEL) {
+    let wants_visible = config.follow_mouse && !pets_hidden();
+    let window = if wants_visible {
+        crate::window_factory::ensure_if_known(app, CURSOR_LABEL)
+    } else {
+        app.get_webview_window(CURSOR_LABEL)
+    };
+    if let Some(window) = window {
         let _ = window.set_ignore_cursor_events(true);
-        if config.follow_mouse && !pets_hidden() {
+        if wants_visible {
             let _ = window.show();
         } else {
             let _ = window.hide();
@@ -261,29 +279,19 @@ pub async fn sync_desktop_extras(
     app: AppHandle,
     config: DesktopExtrasConfig,
 ) -> Result<(), String> {
-    // 窗口已经在 tauri.conf.json 里预声明，但 Tauri 是在启动过程中
-    // 逐个注册这些窗口的；React 首次同步往往早于窗口注册完成。
-    // 在后台线程里等它们出现，再显示/隐藏/定位，避免“设置是 3 只，
-    // 桌面却一只都没有”。
+    // 记住最近一次配置：主狗隐藏/显示回来时按原样恢复其它小狗。
     if let Ok(mut slot) = LAST_CONFIG.lock() {
         *slot = Some(config.clone());
     }
+    // 窗口不再预声明，由 `sync_*` 按配置懒创建：默认配置下这里
+    // 一只额外 WebView 都不会建；开启 Bongo / 跟随鼠标 / 多只狗时才创建。
     tauri::async_runtime::spawn_blocking(move || {
-        for _ in 0..40 {
-            let ready = app.get_webview_window("companion-1").is_some()
-                && app.get_webview_window(BONGO_LABEL).is_some()
-                && app.get_webview_window(CURSOR_LABEL).is_some();
-            if ready {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
         // 三项互不阻断：多宠物失败时，Bongo 和鼠标跟随仍然要生效。
         let _ = sync_companions(&app, config.pet_count);
         let _ = sync_bongo(&app, &config);
         let _ = sync_cursor(&app, &config);
 
-        // 启动时 Bongo 窗口注册得比主窗口晚，或者 show 被系统窗口状态吞掉，
+        // 懒创建出来的 Bongo 窗口可能还在加载，或 show 被系统窗口状态吞掉，
         // 都会表现为“开了 Bongo 但开机没出现”。这里补几轮，直到它真的可见。
         if config.bongo_enabled {
             for _ in 0..16 {

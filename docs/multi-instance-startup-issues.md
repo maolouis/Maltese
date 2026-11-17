@@ -52,7 +52,7 @@ show_island：apply_stage_geometry(读 inner_size/current_monitor/primary_monito
   └─ 失败（旧代码 `?`）→ 直接 return，window.show() 永远不执行
 ```
 
-关键代码位置（当前工作树）：
+关键代码位置（当前工作树，2026-11-17 修复后行号已变动，以第 8 节为准）：
 
 - `src-tauri/src/lib.rs:2951` `show_island`
 - `src-tauri/src/lib.rs:3037` `apply_stage_geometry`
@@ -68,6 +68,9 @@ show_island：apply_stage_geometry(读 inner_size/current_monitor/primary_monito
 - `src-tauri/Cargo.toml:45` `tauri-plugin-single-instance = "2"`
 
 ## 3. 根因分层
+
+> 2026-11-17：下列根因中可修的部分已按 P0 / P1 处理（C、D、E 的端口与剪贴板、F、A 的实例身份），
+> 实施细节与未做项见第 8 节；本节保留诊断时的原始描述。
 
 ### A. 实例身份不唯一：single-instance 只挡“同一个 identifier”
 
@@ -149,6 +152,9 @@ WebView2 未完成握手时，它们返回 `failed to receive message from webvi
 
 建议按 P0 → P3 分四步，避免一次性大改。
 
+> **实施状态（2026-11-17）**：P0 三条、P1 四条已实现，详见第 8 节；P2/P3 未做。
+> 下面保留原始方案描述，作为设计依据。
+
 ### P0：让“显示”不再依赖几何 IPC（本轮已做一半）
 
 - `show_island` 中几何失败只记录，继续 `window.show()`（已提交 `038067a`）。
@@ -227,3 +233,47 @@ AppStarted
 
 - `notification_diagnostics::verification_identifier()` 的环境变量来源与使用场景（哪个构建/脚本会设置）。
 - 用户机器上两个旧进程分别来自哪个构建（安装版 / 旧 debug / 测试包），需要 `Get-Process` + `Path` 才能定论。
+
+## 8. 修复实施记录（2026-11-17）
+
+本轮按 P0 → P1 顺序落地 7 项，全部只做**本地提交**：没有 `git push`、没有打 tag、没有改版本号
+（`package.json` / `tauri.conf.json` / `Cargo.toml` / README 徽章均未动）。
+
+### 8.1 P0（显示链路）
+
+| 条目 | 状态 | 实现 |
+| --- | --- | --- |
+| P0-1 显示与几何解耦 | ✅ 已修复 | `src-tauri/src/lib.rs` 的 `show_island`：几何失败只 `eprintln`，`window.show()` 必定执行；show 后校验 `is_visible()`，不可见时在后台线程按 6 × 150ms 重试 `show()` + `set_always_on_top(true)`；`set_focus` 失败不再让整个命令失败；`hide_island` 会复位 `ISLAND_SHOWN`。 |
+| P0-2 前端 `showReadyIsland` 重试 | ✅ 已修复 | `src/App.tsx`：`didShowInitialWindow` 只在 `invoke("show_ready_island")` 成功**且** `getCurrentWindow().isVisible()` 为真后置位；失败按 5 × 300ms 重试；重试期间 `showReadyIslandInFlight` 防止叠加；全部失败不置位，后续 effect 仍能再次触发（不再“一次失败 = 永久没有桌宠”）。 |
+| P0-3 `frontend_ready` 握手 | ✅ 已修复 | 新增命令 `frontend_ready`（Rust 记录首次就绪时间；若窗口还没显示则执行几何 + show）。前端在 App 挂载后等 `waitForFirstPaint()` + `waitForPetGif()`，再 `invoke("frontend_ready")`，**不经过** `syncNativeInteraction`；`show_ready_island` 保留为兜底，并在 `ISLAND_SHOWN` 为真时直接返回，避免二次抢焦点。 |
+
+### 8.2 P1（实例身份、窗口、共享资源）
+
+| 条目 | 状态 | 实现 |
+| --- | --- | --- |
+| P1-4 窗口懒加载 | ✅ 已修复 | `src-tauri/tauri.conf.json` 只保留 `main`；新增 `src-tauri/src/window_factory.rs`，集中维护其余 12 个窗口的创建参数（与旧 config 逐项对应）并提供 `ensure()` / `ensure_if_known()`。settings / translation / plugin / billiards / pinned / bubble / companion-1..4 / bongo-pet / cursor-pet 全部改为第一次需要时用 `WebviewWindowBuilder` 创建；`capabilities/default.json` 补上 `billiards` / `pinned` 两个 label，保证懒创建出来的窗口有 IPC 权限。默认配置（1 只狗、Bongo 关闭、不跟随鼠标）启动时只创建 main 一个 WebView。 |
+| P1-5 单实例加固 | ✅ 已修复 | 新增 `src-tauri/src/instance_lock.rs`：在 Tauri Builder **之前**对 `<app_data_dir>/instance.lock` 做 `File::try_lock()`（Windows 下是 `LockFileEx`），键是应用数据目录（= WebView2 profile 目录）。第二实例写 `<app_data_dir>/show-request` 后立即退出、不创建任何 WebView；首实例的监听线程（400ms 轮询）收到后调用 `show_island`（show + unminimize + focus + 置顶 + 可见性重试）。`instance.lock` 同时写入 PID / exe / identifier / dataDir 供排障；正常退出清空，崩溃残留不影响下次启动（锁随句柄释放，没有 stale lock）。single-instance 插件的回调也改为走同一条“带到前台”链路。 |
+| P1-6 DSH API 端口 | ✅ 已修复 | `src-tauri/src/dsh_api.rs`：首选 3218 被占用时按 3218..=3237 顺延绑定；实际端口写入 `<app_data_dir>/dsh-api-port.txt`（启动时先删旧文件，避免调用方连到死端口）；`Host` 校验改用**实际端口** `active_port()`（旧实现每个请求重新读环境变量，回退后会把自己正常的请求判成 403）。全部端口都失败时打印明确错误并保持文件不存在。 |
+| P1-7 剪贴板并发写 | ✅ 已修复 | `src-tauri/src/clipboard_history.rs` 的 `persist_locked` 改为 `write_history_atomically`：同目录写临时文件 → `rename` 原子替换，写临时文件与替换各重试 6 × 40ms，仍失败才退回直接覆盖；既避免 `os error 5`（文件被占用），也避免并发读看到半截 JSON。 |
+
+### 8.3 未修复 / 未做（明确记录）
+
+- **P1.1 identifier 运行时改写**：`FOCUSD_VERIFY_NOTIFICATIONS` 仍可在 `run()` 里覆盖 identifier。现在按数据目录加锁，验证构建使用自己的数据目录，与正常实例互不阻塞；要“生产构建彻底禁止”需要编译期开关（`cfg!`/feature），本轮未做。
+- **P1.3 独立 profile 锁文件检测**：用 `instance.lock` 的文件锁代替“写 PID 再探测”，语义等价且没有 stale 状态；没有再单独做 PID 存活探测。
+- **P2 启动状态机 / 8s watchdog / `--force-show` 安全模式**：未做。
+- **P3 startup.log / 设置页诊断入口 / 第二实例完全不初始化托盘快捷键**：未做；单实例锁已经把“两个正常实例同时注册托盘/热键”的触发面收窄到异常情况。
+- **实机验收**：agent 环境只能做编译级验证（`cargo check` / `tsc` / Node 单测），第 5 节的 8 条实机用例（冷启动 20 次、双开 2s 退出、profile 被占用、3218 被占用、强制结束恢复、13 窗口懒加载冷启动对比）需要在 Windows 实机回归。
+
+### 8.4 验证结果
+
+```text
+node node_modules\typescript\bin\tsc --noEmit     → exit 0
+cargo check（src-tauri）                           → exit 0（仅既有 warning）
+node --test tests/*.test.mjs                      → tests 58 / pass 58 / fail 0
+```
+
+### 8.5 影响面与回滚
+
+- 懒加载后第一次打开设置 / 翻译 / 插件 / 台球 / 固定页 / 气泡会多一次 WebView 创建耗时（之后复用），这是用冷启动时间换首屏稳定性的预期取舍。
+- 双开行为变化：第二个进程现在更早退出（不再创建窗口/托盘），只留下一次 `show-request`。
+- 需要回滚某一条时按文件定位：P0 集中在 `src-tauri/src/lib.rs` 的 show 链路（`show_island` / `show_ready_island` / `frontend_ready`）与 `src/App.tsx`；P1 集中在 `src-tauri/src/{window_factory,instance_lock}.rs`、`dsh_api.rs`、`clipboard_history.rs`、`tauri.conf.json`、`capabilities/default.json` 以及各窗口打开命令。`tauri.conf.json` 的窗口列表和 `window_factory.rs` 必须成对回滚，否则窗口不会被创建。

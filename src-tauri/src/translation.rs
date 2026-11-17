@@ -54,9 +54,8 @@ pub fn init(app: &AppHandle) {
 
 #[tauri::command]
 pub fn toggle_translation_window(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WINDOW_LABEL)
-        .ok_or_else(|| "Translation window was not found.".to_string())?;
+    // 翻译窗口改成懒创建：第一次呼出快捷键时才建 WebView。
+    let window = crate::window_factory::ensure(&app, WINDOW_LABEL)?;
     if window.is_visible().map_err(|error| error.to_string())? {
         return window.hide().map_err(|error| error.to_string());
     }
@@ -117,10 +116,11 @@ pub fn toggle_translation_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn hide_translation_window(app: AppHandle) -> Result<(), String> {
-    app.get_webview_window(WINDOW_LABEL)
-        .ok_or_else(|| "Translation window was not found.".to_string())?
-        .hide()
-        .map_err(|error| error.to_string())
+    // 窗口还没创建过就没什么可藏的。
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return Ok(());
+    };
+    window.hide().map_err(|error| error.to_string())
 }
 
 #[tauri::command]

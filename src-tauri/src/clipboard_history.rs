@@ -48,6 +48,11 @@ const MAX_NOTE_CHARACTERS: usize = 80;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLIPBOARD_WRITE_RETRY_ATTEMPTS: usize = 8;
 const CLIPBOARD_WRITE_RETRY_DELAY: Duration = Duration::from_millis(35);
+/// 历史文件写入是「临时文件 + 原子替换」：多实例 / 杀毒软件 / 索引器同时
+/// 持有目标文件时，直接 `fs::write` 会报拒绝访问（os error 5），还可能留下
+/// 半截 JSON。
+const HISTORY_WRITE_ATTEMPTS: usize = 6;
+const HISTORY_WRITE_RETRY_DELAY: Duration = Duration::from_millis(40);
 
 static CLIPBOARD_HISTORY: OnceLock<ClipboardHistoryService> = OnceLock::new();
 static CLIPBOARD_NOTIFY_TX: OnceLock<Mutex<Option<SyncSender<()>>>> = OnceLock::new();
@@ -563,8 +568,7 @@ impl ClipboardHistoryService {
         };
         let content = serde_json::to_string_pretty(&history)
             .map_err(|error| format!("Failed to serialize clipboard history: {error}"))?;
-        fs::write(&self.history_path, content)
-            .map_err(|error| format!("Failed to write clipboard history: {error}"))
+        write_history_atomically(&self.history_path, content.as_bytes())
     }
 
     fn remove_item_files(&self, item: &ClipboardHistoryItem) {
@@ -593,6 +597,56 @@ impl ClipboardCapture {
             Self::Text { hash, .. } | Self::Image { hash, .. } => hash,
         }
     }
+}
+
+/// 原子写剪贴板历史：同目录写临时文件 → rename 覆盖目标。
+///
+/// 多实例 / 安全软件 / 系统索引器占着目标文件时，直接 `fs::write` 会报
+/// 「拒绝访问 (os error 5)」，并发读还可能看到半截 JSON。这里对写临时文件
+/// 和替换各做有限次重试；替换仍失败才退回直接覆盖，至少不丢这次改动。
+fn write_history_atomically(history_path: &Path, content: &[u8]) -> Result<(), String> {
+    let parent = history_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = history_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| HISTORY_FILE_NAME.to_string());
+    let temporary_path = parent.join(format!("{file_name}.{}.tmp", std::process::id()));
+
+    let mut last_error = String::new();
+    let mut written = false;
+    for attempt in 0..HISTORY_WRITE_ATTEMPTS {
+        match fs::write(&temporary_path, content) {
+            Ok(()) => {
+                written = true;
+                break;
+            }
+            Err(error) => {
+                last_error = format!("Failed to write {}: {error}", temporary_path.display());
+                if attempt + 1 < HISTORY_WRITE_ATTEMPTS {
+                    thread::sleep(HISTORY_WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    if !written {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(last_error);
+    }
+
+    for attempt in 0..HISTORY_WRITE_ATTEMPTS {
+        match fs::rename(&temporary_path, history_path) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = format!("Failed to replace {}: {error}", history_path.display());
+                if attempt + 1 < HISTORY_WRITE_ATTEMPTS {
+                    thread::sleep(HISTORY_WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    let _ = fs::remove_file(&temporary_path);
+    fs::write(history_path, content)
+        .map_err(|error| format!("{last_error}; direct write also failed: {error}"))
 }
 
 fn read_clipboard_capture(capture_images: bool) -> Result<Option<ClipboardCapture>, String> {

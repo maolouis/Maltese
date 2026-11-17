@@ -18,36 +18,69 @@ use std::{
     fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        OnceLock,
+    },
     thread,
     time::Duration,
 };
 use tauri::{AppHandle, Manager};
 
 const DEFAULT_PORT: u16 = 3218;
+/// 3218 被占用时往后顺延尝试的端口数量（最多 3218..=3237）。
+const PORT_FALLBACK_ATTEMPTS: u16 = 20;
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const TOKEN_FILE: &str = "dsh-api-token.txt";
+/// 实际监听端口写在这里，外部调用方（插件 / 扩展）读文件而不是硬编码 3218。
+const PORT_FILE: &str = "dsh-api-port.txt";
 const TOKEN_HEADER: &str = "x-maltese-token";
 const API_VERSION: &str = "1";
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static TOKEN: OnceLock<String> = OnceLock::new();
+/// 0 表示还没 bind 成功（或绑定失败），此时退回首选端口。
+static ACTUAL_PORT: AtomicU16 = AtomicU16::new(0);
 
 pub fn init(app: &AppHandle) {
     if APP.set(app.clone()).is_err() {
         return;
     }
     let _ = TOKEN.set(load_or_create_token(app));
-    let port = api_port();
+    // 清掉上一次运行留下的端口文件，避免调用方连到已经死掉的端口。
+    if let Ok(directory) = app.path().app_data_dir() {
+        let _ = fs::remove_file(directory.join(PORT_FILE));
+    }
+    let preferred = preferred_port();
+    let app_handle = app.clone();
     thread::spawn(move || {
-        let listener = match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(listener) => listener,
+        let (listener, port) = match bind_with_fallback(preferred) {
+            Ok(bound) => bound,
             Err(error) => {
-                eprintln!("Maltese DSH API could not bind 127.0.0.1:{port}: {error}");
+                eprintln!(
+                    "Maltese DSH API could not bind any port starting at 127.0.0.1:{preferred}: {error}"
+                );
                 return;
             }
         };
+        ACTUAL_PORT.store(port, Ordering::SeqCst);
+        if port != preferred {
+            eprintln!(
+                "Maltese DSH API port {preferred} was unavailable; falling back to 127.0.0.1:{port}"
+            );
+        }
+        // 把实际端口写进应用数据目录，调用方以文件为准。
+        match app_handle.path().app_data_dir() {
+            Ok(directory) => {
+                if let Err(error) = fs::create_dir_all(&directory)
+                    .and_then(|_| fs::write(directory.join(PORT_FILE), format!("{port}\n")))
+                {
+                    eprintln!("failed to write the DSH API port file: {error}");
+                }
+            }
+            Err(error) => eprintln!("failed to resolve the app data directory: {error}"),
+        }
         eprintln!("Maltese DSH API listening on http://127.0.0.1:{port}");
         for stream in listener.incoming().flatten() {
             thread::spawn(|| handle_connection(stream));
@@ -55,11 +88,39 @@ pub fn init(app: &AppHandle) {
     });
 }
 
-fn api_port() -> u16 {
+/// 依次尝试首选端口和后面的若干端口，返回真正绑定成功的 listener 与端口。
+fn bind_with_fallback(preferred: u16) -> Result<(TcpListener, u16), String> {
+    let mut last_error = String::new();
+    for offset in 0..PORT_FALLBACK_ATTEMPTS {
+        let Some(port) = preferred.checked_add(offset) else {
+            break;
+        };
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => return Ok((listener, port)),
+            Err(error) => {
+                last_error = format!("127.0.0.1:{port}: {error}");
+            }
+        }
+    }
+    Err(last_error)
+}
+
+fn preferred_port() -> u16 {
     std::env::var("MALTESE_DSH_API_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT)
+}
+
+/// 请求校验用的实际端口：bind 成功后以真实端口为准，否则退回首选端口。
+/// 旧代码每个请求都重新读环境变量，端口回退时 Host 校验会和实际端口不一致。
+fn active_port() -> u16 {
+    let actual = ACTUAL_PORT.load(Ordering::SeqCst);
+    if actual != 0 {
+        actual
+    } else {
+        preferred_port()
+    }
 }
 
 fn generate_token() -> String {
@@ -630,7 +691,7 @@ fn handle_connection(mut stream: TcpStream) {
     }
     body.truncate(content_length);
 
-    let port = api_port();
+    let port = active_port();
     let expected = token().unwrap_or_default();
     let response = handle_request(&method, &path, &headers, &body, port, expected);
     write_response(&mut stream, &response);
