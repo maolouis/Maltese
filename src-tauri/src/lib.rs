@@ -492,16 +492,28 @@ fn start_island_drag(app: AppHandle) -> Result<(), String> {
             x: position.x,
             y: position.y,
         });
+        // 浮层打开时窗口矩形是「小狗槽 + 面板」放大后的样子，窗口左上角不再是
+        // 小狗位置；这时把 outer_position 当成拖拽结果写进 custom_position，会让
+        // 之后每次 apply_stage_geometry 都把小狗摆到错误位置（越开合越偏）。
+        // 触摸屏/双击时的抖动也可能在浮层打开的瞬间触发一次拖拽收尾，所以这里
+        // 直接丢弃这次拖拽结果，不改 custom_position、也不 emit。
+        let overlay_open = overlay_snapshot_active();
+        let collapsed = matches!(read_window_state().mode, IslandMode::Collapsed);
         let did_finish_drag = {
             let mut state = window_state().lock().expect("window state poisoned");
             if !state.is_dragging {
                 false
             } else {
                 state.is_dragging = false;
-                if let Some(position) = final_position {
-                    state.custom_position = Some(position);
+                if overlay_open || !collapsed {
+                    eprintln!("dropped a drag result while an overlay/expanded window was open");
+                    false
+                } else {
+                    if let Some(position) = final_position {
+                        state.custom_position = Some(position);
+                    }
+                    true
                 }
-                true
             }
         };
 
@@ -584,6 +596,73 @@ static OVERLAY_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OVERLAY_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 // 浮层打开时主窗口需要正常接收鼠标事件，暂停“鼠标不在岛内就穿透”的逻辑。
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// 浮层锚点快照是否已经存在。存在期间窗口几何由浮层独占，
+/// `apply_stage_geometry` 一律不插队（否则会把放大后的窗口缩回/挪走）。
+fn overlay_snapshot_active() -> bool {
+    OVERLAY_SNAPSHOT
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+}
+
+/// 记录浮层打开前的真实矩形作为锚点，并把窗口真实位置写回 `custom_position`。
+///
+/// `plan_island_overlay`（前端拿方向去钉小狗）和 `set_island_overlay`（真正改窗口）
+/// 都从这里取同一份快照：只要两次计算的锚点/基准尺寸完全相同，小狗就不会朝反方向
+/// 闪，关闭时也能原样落回（见 docs/pet-overlay-geometry.md 不变量 2、3）。
+fn create_overlay_snapshot(
+    window: &tauri::WebviewWindow,
+    scale: f64,
+) -> Result<OverlaySnapshot, String> {
+    // 从这一刻起窗口几何由浮层独占：显式置位，避免 plan → set 之间
+    // 闲逛（roam）等路径又把窗口挪走 / 把 custom_position 写成动画终点。
+    OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
+    // 漫游/唤醒的位移动画可能还在跑。先取消，再等它真的停下：
+    // 动画中间位置不能当锚点，但也绝不能把窗口“归位”到目标坐标 ——
+    // 那一下正是气泡打开时小狗左右闪的根源。
+    let was_animating = POSITION_ANIMATING.load(Ordering::SeqCst);
+    let was_dx = POSITION_ANIMATION_DELTA_X.load(Ordering::SeqCst);
+    POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_millis(80);
+    while POSITION_ANIMATING.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(2));
+    }
+    let settled_state = read_window_state();
+    // 只有“缩边/趴睡落定”和“纯竖直的唤醒动画”才先落定位置：
+    // 横向位移（闲逛）落定会把小狗一下拽到终点，就是那个“向左闪”。
+    if settled_state.is_tucked || (was_animating && was_dx.abs() <= 2) {
+        let _ = apply_stage_geometry(window, settled_state, false);
+    }
+    // 锚点一律取窗口当前真实矩形：收缩态里小狗槽就贴在窗口左下角，
+    // 窗口左上角 = 小狗的屏幕位置。这样打开浮层只改宽高、不挪窗口。
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let inner = window.inner_size().map_err(|error| error.to_string())?;
+    let actual_w = (inner.width as f64 / scale).max(1.0);
+    let actual_h = (inner.height as f64 / scale).max(1.0);
+    // 真实位置和逻辑位置不一致（漫游动画停在中间、或 custom_position 过期）时
+    // 把真实位置写回去，关闭浮层时 apply_stage_geometry 才不会又挪一次。
+    // 缩边态下 y 是“缩边后的临时位置”，不能写回 custom_position。
+    if !settled_state.is_tucked && (settled_state.custom_position.is_some() || was_animating) {
+        mutate_window_state(|state| {
+            state.custom_position = Some(IslandPosition {
+                x: position.x,
+                y: position.y,
+            });
+            *state
+        });
+    }
+    let snapshot = OverlaySnapshot {
+        anchor_x: position.x,
+        anchor_y: position.y,
+        base_w: actual_w,
+        base_h: actual_h,
+    };
+    if let Ok(mut slot) = OVERLAY_SNAPSHOT.lock() {
+        *slot = Some(snapshot);
+    }
+    Ok(snapshot)
+}
 
 // 一次性设置窗口位置和尺寸。
 // 分开调用 set_size / set_position 会先后应用两次几何：中间那一帧窗口已经变大、
@@ -679,7 +758,33 @@ fn set_island_overlay(
             let base_h = snapshot.map(|snapshot| snapshot.base_h).unwrap_or(stage_h);
             if (stage_w - base_w).abs() > 0.5 || (stage_h - base_h).abs() > 0.5 {
                 apply_stage_geometry(&window, state, false)?;
+            } else if snapshot.is_none() {
+                // 兜底：没有快照却比收起态大（上一次浮层请求丢了 / 窗口被别的路径
+                // 放大后没回收），按收起态几何收回去，避免「气泡关掉后窗口停在
+                // 浮层尺寸、小狗被窗口边裁掉」。
+                let actual = window.inner_size().map_err(|error| error.to_string())?;
+                let scale_now = window.scale_factor().map_err(|error| error.to_string())?;
+                let (stage_w_phys, stage_h_phys) = (
+                    (stage_w * scale_now).round() as u32,
+                    (stage_h * scale_now).round() as u32,
+                );
+                if actual.width.abs_diff(stage_w_phys) > 2
+                    || actual.height.abs_diff(stage_h_phys) > 2
+                {
+                    eprintln!(
+                        "overlay closed without a snapshot; restoring stage geometry (window {}x{} -> {}x{})",
+                        actual.width, actual.height, stage_w_phys, stage_h_phys
+                    );
+                    apply_stage_geometry(&window, state, false)?;
+                }
             }
+            eprintln!(
+                "overlay closed: restored rect {:?}",
+                window
+                    .outer_position()
+                    .map(|position| (position.x, position.y))
+                    .ok()
+            );
             Ok(())
         }
         Some(mode) => {
@@ -702,55 +807,11 @@ fn set_island_overlay(
                 *slot
             };
             let snapshot = match existing_snapshot {
+                // 正常流程里 plan_island_overlay 已经把锚点快照钉下来了
+                // （前端先拿方向去钉小狗，再让这里改窗口）。复用同一份快照，
+                // 两次计算的方向/位置必然一致，小狗不会朝反方向闪。
                 Some(snapshot) => snapshot,
-                None => {
-                    // 漫游/唤醒的位移动画可能还在跑。先取消，再等它真的停下：
-                    // 动画中间位置不能当锚点，但也绝不能把窗口“归位”到目标坐标——
-                    // 那一下正是气泡打开时小狗左右闪的根源。
-                    let was_animating = POSITION_ANIMATING.load(Ordering::SeqCst);
-                    let was_dx = POSITION_ANIMATION_DELTA_X.load(Ordering::SeqCst);
-                    POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
-                    let deadline = Instant::now() + Duration::from_millis(80);
-                    while POSITION_ANIMATING.load(Ordering::SeqCst) && Instant::now() < deadline {
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    let settled_state = read_window_state();
-                    // 只有“缩边/趴睡落定”和“纯竖直的唤醒动画”才先落定位置：
-                    // 横向位移（闲逛）落定会把小狗一下拽到终点，就是那个“向左闪”。
-                    if settled_state.is_tucked || (was_animating && was_dx.abs() <= 2) {
-                        let _ = apply_stage_geometry(&window, settled_state, false);
-                    }
-                    // 锚点一律取窗口当前真实矩形：收缩态里小狗槽就贴在窗口左下角，
-                    // 窗口左上角 = 小狗的屏幕位置。这样打开浮层只改宽高、不挪窗口。
-                    let position = window.outer_position().map_err(|error| error.to_string())?;
-                    let inner = window.inner_size().map_err(|error| error.to_string())?;
-                    let actual_w = (inner.width as f64 / scale).max(1.0);
-                    let actual_h = (inner.height as f64 / scale).max(1.0);
-                    // 真实位置和逻辑位置不一致（漫游动画停在中间、或 custom_position 过期）时
-                    // 把真实位置写回去，关闭浮层时 apply_stage_geometry 才不会又挪一次。
-                    // 缩边态下 y 是“缩边后的临时位置”，不能写回 custom_position。
-                    if !settled_state.is_tucked
-                        && (settled_state.custom_position.is_some() || was_animating)
-                    {
-                        mutate_window_state(|state| {
-                            state.custom_position = Some(IslandPosition {
-                                x: position.x,
-                                y: position.y,
-                            });
-                            *state
-                        });
-                    }
-                    let snapshot = OverlaySnapshot {
-                        anchor_x: position.x,
-                        anchor_y: position.y,
-                        base_w: actual_w,
-                        base_h: actual_h,
-                    };
-                    if let Ok(mut slot) = OVERLAY_SNAPSHOT.lock() {
-                        *slot = Some(snapshot);
-                    }
-                    snapshot
-                }
+                None => create_overlay_snapshot(&window, scale)?,
             };
 
             // 优先朝右/上长；右侧放不下就翻到左侧。小狗的屏幕位置不变，
@@ -812,12 +873,19 @@ fn set_island_overlay(
             };
             let _ = window.emit("maltese-panel-side", panel_side);
             let _ = window.emit("maltese-panel-vertical", panel_vertical);
+            // B2 排障：浮层打开前后各记一次窗口矩形，便于比对「小狗有没有被挪走」。
+            eprintln!(
+                "overlay open ({mode}): anchor=({}, {}) base={:.1}x{:.1} side={panel_side} vertical={panel_vertical} -> rect=({x}, {y}) {width:.1}x{height:.1}",
+                snapshot.anchor_x, snapshot.anchor_y, snapshot.base_w, snapshot.base_h
+            );
             set_window_rect_atomic(&window, x, y, width, height, scale)
         }
     }
 }
 
-// 只算「面板朝哪边长」，不改窗口。
+// 只算「面板朝哪边长」，**不改窗口矩形**；但会把浮层锚点快照钉下来，
+// 让随后 set_island_overlay 复用同一份输入（否则两侧各读一次窗口，
+// 漫游/拖拽未落定时会钉错一侧，小狗闪一下）。
 // 前端先问这个，把小狗按正确方向钉住，再让 set_island_overlay 一次性改几何：
 // 反过来的话，窗口已经放大而小狗还按上一轮的方向摆，就会往一侧闪一下。
 #[tauri::command]
@@ -839,32 +907,21 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
     let mon_left = work_area.position.x;
     let mon_right = work_area.position.x + work_area.size.width as i32;
 
+    // 和 set_island_overlay 用同一份输入：这里就把锚点快照钉下来，随后
+    // set_island_overlay 直接复用，不再重新读窗口 —— 两边算出的方向/基准
+    // 必然一致，「先钉方向再改几何」才不会钉错一侧（否则小狗会往反方向闪）。
+    // 快照存在期间 apply_stage_geometry 一律不插队，也顺手堵住了
+    // plan → set 之间被其它 show/设置同步路径重算几何的空档。
     let existing = OVERLAY_SNAPSHOT.lock().ok().and_then(|slot| *slot);
-    // 和 set_island_overlay 用同一份输入：窗口当前真实矩形。
-    // 之前这里用 custom_position / stage_dimensions，两边一旦有偏差，
-    // “先钉方向再改几何”就会钉错一侧，小狗看起来往反方向闪一下。
-    let actual = window.outer_position().ok().zip(window.inner_size().ok());
-    let (base_w, base_h) = match existing {
-        Some(snapshot) => (snapshot.base_w, snapshot.base_h),
-        None => match actual {
-            Some((_, inner)) => (
-                (inner.width as f64 / scale).max(1.0),
-                (inner.height as f64 / scale).max(1.0),
-            ),
-            None => stage_dimensions(state),
-        },
+    let snapshot = match existing {
+        Some(snapshot) => snapshot,
+        None => create_overlay_snapshot(&window, scale)?,
     };
-    let anchor = existing
-        .map(|snapshot| IslandPosition {
-            x: snapshot.anchor_x,
-            y: snapshot.anchor_y,
-        })
-        .or_else(|| actual.map(|(position, _)| IslandPosition {
-            x: position.x,
-            y: position.y,
-        }))
-        .or(state.custom_position)
-        .ok_or_else(|| "没有可用的窗口位置".to_string())?;
+    let (base_w, base_h) = (snapshot.base_w, snapshot.base_h);
+    let anchor = IslandPosition {
+        x: snapshot.anchor_x,
+        y: snapshot.anchor_y,
+    };
 
     let (panel_w, panel_h): (f64, f64) = match overlay.as_str() {
         "hover" => (320.0, 540.0),
@@ -883,6 +940,10 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         (panel_h * scale).round() as i32,
         work_area.position.y,
         work_area.position.y + work_area.size.height as i32,
+    );
+    eprintln!(
+        "overlay plan ({overlay}): side={side} vertical={vertical} anchor=({}, {}) base={base_w:.1}x{base_h:.1}",
+        snapshot.anchor_x, snapshot.anchor_y
     );
     Ok(json!({ "side": side, "vertical": vertical }))
 }
@@ -2987,13 +3048,20 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
-    // 几何计算依赖 webview 的同步消息（inner_size / monitor / position）。
-    // dev 下 webview 还没握手完成时这些调用会失败，旧写法直接把错误
-    // 冒泡出去，后面的 window.show() 就永远执行不到，表现为「初始化卡住、
-    // 桌宠一直不出现」。这里把几何失败降级成日志，保证窗口一定能显示，
-    // 随后前端 set_island_layout 会再触发一次几何同步。
-    if let Err(error) = apply_stage_geometry(&window, read_window_state(), false) {
-        eprintln!("failed to apply island geometry when showing: {error}");
+    // 已经显示时不要再套一次收起态几何：浮层/展开面板可能正把窗口放大，
+    // 重算会把小狗挪走（和 show_island_no_focus 的写法保持一致）。
+    // c327044 之后 show 链路变多（frontend_ready 握手 + show_ready_island 兜底 +
+    // 第二实例唤起），旧写法每次都要重算几何，浮层打开时就会被拽走。
+    let already_visible = window.is_visible().unwrap_or(false);
+    if !already_visible {
+        // 几何计算依赖 webview 的同步消息（inner_size / monitor / position）。
+        // dev 下 webview 还没握手完成时这些调用会失败，旧写法直接把错误
+        // 冒泡出去，后面的 window.show() 就永远执行不到，表现为「初始化卡住、
+        // 桌宠一直不出现」。这里把几何失败降级成日志，保证窗口一定能显示，
+        // 随后前端 set_island_layout 会再触发一次几何同步。
+        if let Err(error) = apply_stage_geometry(&window, read_window_state(), false) {
+            eprintln!("failed to apply island geometry when showing: {error}");
+        }
     }
     // 从托盘 / 第二实例唤起时窗口可能是最小化状态，先还原再 show。
     let _ = window.unminimize();

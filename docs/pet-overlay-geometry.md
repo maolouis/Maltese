@@ -5,12 +5,14 @@
 ## 不变量
 
 1. **打开浮层不移动小狗。** 收缩态里小狗槽贴在窗口左下角（CSS `.island--collapsed .island__collapsed--pet-only`：`position: absolute; left: 0; bottom: 0`），所以窗口左上角就等于小狗的屏幕位置。打开浮层只允许改窗口宽高；向右展开时原点完全不变，向左展开时窗口左上角左移 `phys_w - base_w_phys`，同时 CSS 把面板钉在 `right: calc(var(--pet-slot-w) + 8px)`，两者正好抵消。
-2. **两侧必须用同一份输入。** 前端先调 `plan_island_overlay`（只算方向、不动窗口），拿到方向后 `flushSync` 把小狗按正确方向钉住，再调 `set_island_overlay` 一次性设矩形。只要两次计算里的基准矩形或锚点有一丝不同，小狗就会朝反方向闪一下。
-3. **关闭时不做无谓的“归位”。** 收起时先按快照原样恢复矩形；只有浮层期间尺寸设置真的变了才重算几何，否则 `apply_stage_geometry` 会按 `custom_position` / 居中算法把窗口挪回去，看起来就是关闭瞬间小狗跳一下。
+2. **两侧必须用同一份输入。** 前端先调 `plan_island_overlay`（只算方向、不改窗口矩形），拿到方向后 `flushSync` 把小狗按正确方向钉住，再调 `set_island_overlay` 一次性设矩形。只要两次计算里的基准矩形或锚点有一丝不同，小狗就会朝反方向闪一下。**实现上由 `plan_island_overlay` 先把锚点快照 `OVERLAY_SNAPSHOT` 钉下来，`set_island_overlay` 直接复用**（2026-11-17 回归修复后）；两侧不再各自读一次窗口矩形。
+3. **关闭时不做无谓的“归位”。** 收起时先按快照原样恢复矩形；只有浮层期间尺寸设置真的变了才重算几何，否则 `apply_stage_geometry` 会按 `custom_position` / 居中算法把窗口挪回去，看起来就是关闭瞬间小狗跳一下。没有快照、但窗口尺寸明显不等于收起态时（上一次浮层请求丢了）按收起态几何收回。
+4. **浮层期间由浮层独占窗口几何。** 快照存在（含 `plan` 已钉、`set` 还没落地的空档）时 `apply_stage_geometry` 一律直接返回；`show_island` 对已经可见的窗口不再重算几何；`roam_island_step` 在 `OVERLAY_ACTIVE` 期间不跑。
+5. **浮层期间结束的拖拽不算数。** `start_island_drag` 收尾线程只在收起态且浮层未打开时才把窗口矩形写进 `custom_position` / emit `island-position-changed`；否则窗口左上角是「狗槽 + 面板」的角，存下去会让小狗在之后每次归位时都偏。
 
 ## 基准从哪来
 
-- 基准尺寸和锚点一律取窗口**真实矩形**：`window.outer_position()` + `window.inner_size()`，physical 转 logical 除以 `monitor.scale_factor()`。`plan_island_overlay` 与 `set_island_overlay` 都走这条路径。
+- 基准尺寸和锚点一律取窗口**真实矩形**：`window.outer_position()` + `window.inner_size()`，physical 转 logical 除以 `monitor.scale_factor()`。由 `create_overlay_snapshot()` 统一读取，`plan_island_overlay` 与 `set_island_overlay` 共用同一份快照。
 - 不再用 `state.custom_position` 或 `stage_dimensions()` 当锚点：这两个值都只是“应该在的位置”，和真实窗口可能不一致（多屏切换、DPI 变化、闲逛动画停在中间、拖拽后未落库）。
 - 打开前会先把窗口真实位置写回 `custom_position`（缩边态除外——缩边时 y 是临时位置，写回去会污染正常位置）。这样关闭浮层时不会再按旧坐标挪一次。
 
@@ -23,9 +25,21 @@
 
 ## 代码位置
 
-- `src-tauri/src/lib.rs`：`POSITION_ANIMATING` / `POSITION_ANIMATION_DELTA_X`（顶部静态量）、`set_island_overlay`（打开分支快照 + 关闭分支恢复）、`plan_island_overlay`、`apply_stage_geometry`（位移动画线程）、`roam_island_step`。
+- `src-tauri/src/lib.rs`：`POSITION_ANIMATING` / `POSITION_ANIMATION_DELTA_X`（顶部静态量）、`OVERLAY_SNAPSHOT` / `OVERLAY_ACTIVE`、`create_overlay_snapshot`（建快照：取消动画、读真实矩形、写回 `custom_position`）、`plan_island_overlay`（先钉快照再算方向）、`set_island_overlay`（打开分支复用快照 + 关闭分支恢复）、`show_island`（已可见不重算几何）、`start_island_drag`（浮层期间丢弃拖拽收尾）、`apply_stage_geometry`（位移动画线程）、`roam_island_step`。
 - `src/App.tsx`：`applyPetOverlay`（`plan → flushSync 钉方向 → set` 三步）、`overlaySide` / `overlayVertical` 状态。
 - `src/App.css`：`.island--overlay-left` / `.island--overlay-below` 的钉角规则，以及 `.island--overlay-open` 下禁用过渡。
+
+## 排障日志
+
+原生侧 `eprintln`（release 下无控制台，用 DebugView / 附加调试器看，或看 dev 终端）：
+
+```text
+overlay plan (hover): side=right vertical=above anchor=(x, y) base=WxH
+overlay open (hover): anchor=(x, y) base=WxH side=right vertical=above -> rect=(x, y) WxH
+overlay closed: restored rect Some((x, y))
+```
+
+对照这三行即可判断「打开后 R1 的锚定边有没有守住 R0」「关闭后 R2 有没有回到 R0」。
 
 ## 验证
 
