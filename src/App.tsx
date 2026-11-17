@@ -9514,8 +9514,13 @@ function IslandApp({
     if (agentVisualState === "running") {
       return "working";
     }
+    // 模型正在思考（聊天进行中）→ 小狗显示「在忙」的 working，别在回你话时发呆。
+    // 只影响表情状态，不写进自我指标（那是只读标记）。
+    if (chatThinking) {
+      return "working";
+    }
     return "idle";
-  }, [activityMood, agentVisualState, mediaLooksLikeVideo, mediaState.audioActive, mediaState.playbackStatus, petAction, qqMail.preview, qqNotifications.preview]);
+  }, [activityMood, agentVisualState, chatThinking, mediaLooksLikeVideo, mediaState.audioActive, mediaState.playbackStatus, petAction, qqMail.preview, qqNotifications.preview]);
 
   // 联动上下文跟随最新状态（触发动作的回调是稳定引用，这里用 ref 读最新值）。
   linkContextRef.current = { mode, isTucked, sleeping: petState === "sleeping" };
