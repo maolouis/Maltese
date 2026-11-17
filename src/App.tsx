@@ -5772,7 +5772,7 @@ export function AssistantPanel() {
             type="button"
             className="assistant-panel__settings"
             onClick={() => {
-              void invoke("open_settings_window").catch(() => setNotice("设置窗口打开失败，可在桌宠右键菜单里重试"));
+              void invoke("open_settings_window").catch(() => setNotice("设置窗口打开失败，请从托盘菜单「配置桌宠」再试一次"));
             }}
           >
             设置

@@ -394,8 +394,10 @@ pub fn open_plugins_directory(app: AppHandle) -> Result<(), String> {
 
 /// 把某个插件放到独立的插件窗口里显示。内置插件由宿主页面渲染，
 /// 第三方插件则加载它自己目录里的 html（清单里的 ui 字段）。
+/// async：插件窗口是懒创建的，Windows 下建窗口必须在非主线程发起
+/// （原因见 `crate::open_settings_window` 的注释）。
 #[tauri::command]
-pub fn open_plugin_window(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn open_plugin_window(app: AppHandle, id: String) -> Result<(), String> {
     if !valid_plugin_id(&id) {
         return Err("插件 id 无效。".to_string());
     }

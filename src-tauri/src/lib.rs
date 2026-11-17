@@ -900,12 +900,33 @@ fn attach_settings_close(window: &WebviewWindow) {
 
 // 独立的桌宠设置窗口：简单、浅色、改完即生效。窗口已改成懒创建，
 // 第一次打开时才创建 WebView，之后复用。
+//
+// 必须是 async 命令：Windows 下同步命令是在主线程的 WebView2 消息派发栈里
+// 执行的，tauri-runtime-wry 会**就地**创建窗口，而 wry 创建 WebView2 需要
+// 嵌套消息泵（`wait_with_pump`）；嵌套在 WebView2 自己的回调里跑，控制器
+// 永远初始化不完 —— 表现就是窗口 HWND 已经存在（标题/尺寸都对）但
+// `IsWindowVisible=False`、子窗口 `Chrome_WidgetWin_0` 是 0×0，设置打不开。
+// async 命令在异步运行时线程上跑，建窗口会排进事件循环，走和启动期
+// `tauri.conf.json` 窗口一样的正常创建路径。官方文档（webview_window.rs 的
+// Known issues，wry#583）同样要求用 async 命令 / 独立线程创建窗口。
 #[tauri::command]
-fn open_settings_window(app: AppHandle) -> Result<(), String> {
+async fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    let started = Instant::now();
     let window = window_factory::ensure(&app, "settings")?;
-    window.show().map_err(|error| error.to_string())?;
+    let already_visible = window.is_visible().unwrap_or(false);
     let _ = window.unminimize();
-    window.set_focus().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    // 焦点失败不影响「窗口已经显示」，不要因此让前端走 fallback。
+    if let Err(error) = window.set_focus() {
+        eprintln!("failed to focus the settings window: {error}");
+    }
+    // 排障用：创建 → show → 聚焦 的耗时与结果（重复点击时应只剩聚焦）。
+    eprintln!(
+        "settings window ready in {:?} (created: {}, already visible: {})",
+        started.elapsed(),
+        !already_visible,
+        already_visible
+    );
     Ok(())
 }
 
@@ -932,8 +953,10 @@ const BUBBLE_WINDOW_LABEL: &str = "bubble";
 static BUBBLE_PAYLOAD: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
 // 在小狗侧边显示气泡（mode: "hover" 互动面板 / "cloud" 云朵消息框）。
+// async：气泡窗口是懒创建的，Windows 下建窗口必须在非主线程发起
+// （原因见 `open_settings_window` 的注释）。
 #[tauri::command]
-fn show_pet_bubble(
+async fn show_pet_bubble(
     app: AppHandle,
     mode: String,
     title: Option<String>,
@@ -969,8 +992,9 @@ fn show_pet_bubble(
 }
 
 /// 气泡窗口按内容调整高度后重新贴到小狗侧边（云朵文字长度不固定，固定窗口会截断）。
+/// async：同上，气泡窗口可能是第一次创建（懒创建）。
 #[tauri::command]
-fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+async fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     let main = main_window(&app)?;
     let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
     let width = width.clamp(220.0, 420.0);
@@ -1374,8 +1398,9 @@ fn shell_execute_program(
 }
 
 // 「和小狗打台球」：开一个覆盖桌面工作区的透明窗口（不移动真实图标）。
+// async：台球窗口是懒创建的（原因见 `open_settings_window` 的注释）。
 #[tauri::command]
-fn open_billiards_window(app: AppHandle) -> Result<(), String> {
+async fn open_billiards_window(app: AppHandle) -> Result<(), String> {
     let window = window_factory::ensure(&app, "billiards")?;
     // 铺满主显示器的工作区（避开任务栏）。
     if let Ok(Some(monitor)) = window.primary_monitor() {
@@ -1390,8 +1415,9 @@ fn open_billiards_window(app: AppHandle) -> Result<(), String> {
 }
 
 // 「固定标签页在桌面」：把当前标签页放到一个独立的置顶窗口里。
+// async：固定窗口是懒创建的（原因见 `open_settings_window` 的注释）。
 #[tauri::command]
-fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
+async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
     let window = window_factory::ensure(&app, "pinned")?;
     // 第一次固定时放在右下角，避免挡住桌宠和面板。
     if let Ok(position) = window.outer_position() {
@@ -4003,8 +4029,15 @@ fn build_tray(app: &App) -> tauri::Result<()> {
                 let _ = show_island(app);
             }
             // 桌宠右键菜单已移除，配置入口统一放到任务栏托盘菜单。
+            // 托盘菜单事件在主线程触发，而懒创建窗口不能在主线程发起（会卡住
+            // WebView2 初始化），所以丢到异步运行时线程里再调 async 命令。
             "settings" => {
-                let _ = open_settings_window(app.clone());
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = open_settings_window(app).await {
+                        eprintln!("failed to open the settings window from the tray: {error}");
+                    }
+                });
             }
             "hide" => hide_island(app),
             "quit" => app.exit(0),

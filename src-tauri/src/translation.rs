@@ -53,9 +53,16 @@ pub fn init(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn toggle_translation_window(app: AppHandle) -> Result<(), String> {
+pub async fn toggle_translation_window(app: AppHandle) -> Result<(), String> {
+    // 懒创建窗口不能在主线程发起（Windows 下同步命令跑在主线程的 WebView2
+    // 消息派发栈里，建窗口会卡住 WebView2 初始化），async 命令会切到异步
+    // 运行时线程。快捷键线程自己直接调下面的同步实现。
+    toggle_translation_window_sync(&app)
+}
+
+fn toggle_translation_window_sync(app: &AppHandle) -> Result<(), String> {
     // 翻译窗口改成懒创建：第一次呼出快捷键时才建 WebView。
-    let window = crate::window_factory::ensure(&app, WINDOW_LABEL)?;
+    let window = crate::window_factory::ensure(app, WINDOW_LABEL)?;
     if window.is_visible().map_err(|error| error.to_string())? {
         return window.hide().map_err(|error| error.to_string());
     }
@@ -478,7 +485,7 @@ unsafe extern "system" fn hotkey_window_proc(
 ) -> LRESULT {
     if message == WM_HOTKEY && wparam.0 == HOTKEY_ID as usize {
         if let Some(app) = APP.get() {
-            let _ = toggle_translation_window(app.clone());
+            let _ = toggle_translation_window_sync(app);
         }
         return LRESULT(0);
     }

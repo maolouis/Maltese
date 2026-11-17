@@ -277,3 +277,21 @@ node --test tests/*.test.mjs                      → tests 58 / pass 58 / fail 
 - 懒加载后第一次打开设置 / 翻译 / 插件 / 台球 / 固定页 / 气泡会多一次 WebView 创建耗时（之后复用），这是用冷启动时间换首屏稳定性的预期取舍。
 - 双开行为变化：第二个进程现在更早退出（不再创建窗口/托盘），只留下一次 `show-request`。
 - 需要回滚某一条时按文件定位：P0 集中在 `src-tauri/src/lib.rs` 的 show 链路（`show_island` / `show_ready_island` / `frontend_ready`）与 `src/App.tsx`；P1 集中在 `src-tauri/src/{window_factory,instance_lock}.rs`、`dsh_api.rs`、`clipboard_history.rs`、`tauri.conf.json`、`capabilities/default.json` 以及各窗口打开命令。`tauri.conf.json` 的窗口列表和 `window_factory.rs` 必须成对回滚，否则窗口不会被创建。
+
+## 9. c327044 引入的两个回归（2026-11-17 修复）
+
+`c327044` 的窗口懒加载把 12 个窗口从「启动期由 Tauri 创建」改成「运行时按需创建」，
+但打开这些窗口的命令仍然是**同步命令**。Windows 下同步命令跑在主线程的 WebView2 消息
+派发栈里，`tauri-runtime-wry` 会就地建窗口，而 wry 创建 WebView2 需要嵌套消息泵，
+控制器初始化不完 —— 这就是 **B1「设置打不开」**（窗口 HWND 已存在、`IsWindowVisible=False`、
+子窗口 `Chrome_WidgetWin_0` 是 0×0）。同一次改动还给显示链路加了 `frontend_ready`
+握手 + 可见性补显，浮层几何多出并发入口，对应 **B2「气泡点开后小狗会移动」**。
+
+两条回归的根因、改动文件:行、验证与回滚方式见
+[bugfix-2026-11-17.md](bugfix-2026-11-17.md)。结论要点：
+
+- **懒创建窗口的打开命令必须是 `async fn`（或独立线程）**；托盘菜单等主线程回调要
+  `tauri::async_runtime::spawn` 后再调用。`window_factory::ensure` 的文档已写明该约束。
+- **浮层锚点快照由 `plan_island_overlay` 先钉下来、`set_island_overlay` 复用**，
+  「贴方向」和「改窗口」用同一份输入；`show_island` 不再对已显示窗口重算几何；
+  浮层期间结束的拖拽结果不再写进 `custom_position`，避免把放大后的窗口矩形当成狗位。

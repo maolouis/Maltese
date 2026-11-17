@@ -222,6 +222,14 @@ const LAZY_WINDOW_LABELS: [&str; 12] = [
 ];
 
 /// 已存在就直接返回；不存在就按 [`spec_for`] 现场创建（创建时保持隐藏）。
+///
+/// **线程要求：绝对不要在主线程上调用。** Windows 下 wry 创建 WebView2 需要
+/// 嵌套消息泵，如果从主线程（同步命令 / 事件回调 / 托盘菜单）里一路同步建下来，
+/// 窗口 HWND 会建出来但 WebView2 控制器初始化不完：`IsWindowVisible=False`、
+/// 子窗口 `Chrome_WidgetWin_0` 是 0×0，表现为「窗口打不开」。
+/// 正确做法：`#[tauri::command] async fn`（异步运行时线程）或 `spawn_blocking`
+/// / 普通后台线程，让创建消息排进事件循环。Tauri 文档 `WebviewWindowBuilder`
+/// 的 Known issues（wry#583）也是这个结论。
 pub fn ensure(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(label) {
         return Ok(window);
