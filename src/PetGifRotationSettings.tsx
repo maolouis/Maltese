@@ -14,9 +14,11 @@ import {
 import {
   movePetGifItem,
   petGifDropTargetIndex,
+  petGifIndexAtPoint,
   type PetGifBounds,
   type PetGifTileRect,
 } from "./utils/gifRotationOrder";
+import { builtinAssetRelative } from "./petAssetBase";
 import {
   beginPetGifDeletion,
   cancelPetGifRemoval,
@@ -95,6 +97,31 @@ function formatDeletedAt(value: number): string {
   }
 }
 
+/**
+ * 轮播项的唯一键：内置素材存的是相对路径（`chars/xiaojimao/...`），
+ * 而素材清单给的是 `/assets/pets/...` 或转换后的绝对路径——两边都要先
+ * 归一成 `builtinAssetRelative()` 再比较，否则「已选」永远判成「没选」，
+ * 点一次「全选现有表情」就会把整个素材池重复追加一次（2026-11-17 用户配置
+ * 从 29 张涨到 713 张就是这个比较 bug 引起的）。
+ */
+function petGifItemKey(item: { path?: string; src?: string }): string {
+  const raw = item.path ?? item.src ?? "";
+  return builtinAssetRelative(raw) ?? raw;
+}
+
+/** 按唯一键去重，保留第一次出现的位置（写回时顺手清掉历史重复项）。 */
+function dedupePetGifItems(items: PetGifRotationItem[]): PetGifRotationItem[] {
+  const seen = new Set<string>();
+  const next: PetGifRotationItem[] = [];
+  for (const item of items) {
+    const key = petGifItemKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push(item);
+  }
+  return next.length === items.length ? items : next;
+}
+
 export function PetGifRotationSettings() {
   const t = useTranslation();
   const character = usePetCharacter();
@@ -135,8 +162,8 @@ export function PetGifRotationSettings() {
     name: petGifFileName(src),
     custom: false,
   }));
-  const selectedKeys = new Set(items.map((item) => item.path ?? item.src).filter(Boolean));
-  const missingItems = availableItems.filter((item) => !selectedKeys.has(item.src));
+  const selectedKeys = new Set(items.map((item) => petGifItemKey(item)));
+  const missingItems = availableItems.filter((item) => !selectedKeys.has(petGifItemKey(item)));
 
   useEffect(
     () => () => {
@@ -198,7 +225,7 @@ export function PetGifRotationSettings() {
   };
 
   const saveItems = (nextItems: PetGifRotationItem[]) => {
-    savePetGifRotationConfig({ ...config, [state]: nextItems }, character);
+    savePetGifRotationConfig({ ...config, [state]: dedupePetGifItems(nextItems) }, character);
   };
 
   const selectAll = () => {
@@ -209,10 +236,22 @@ export function PetGifRotationSettings() {
   // 拖动排序：把 from 处的格子取出，放到 to 处（to 为落点格子的当前位置）。
   // 复用 saveItems → savePetGifRotationConfig 写回配置，主窗口会通过 storage 事件同步。
   // 具体下标换算在 movePetGifItem 里，向上/向下拖的结果与插入线方向一致。
-  const reorder = (from: number, to: number) => {
+  const applyReorder = (from: number, to: number) => {
     const next = movePetGifItem(items, from, to);
     if (next === items) return;
     saveItems(next);
+    // 写回校验：读回 localStorage 的顺序必须和预期一致，否则明确报错，
+    // 不再出现「拖了一下但顺序没变、也不给提示」的情况。
+    try {
+      const stored = [...(loadPetGifRotationConfig(character)[state] ?? [])];
+      const expected = next.map((item) => petGifItemKey(item));
+      const actual = stored.map((item) => petGifItemKey(item));
+      if (expected.length !== actual.length || expected.some((key, index) => key !== actual[index])) {
+        setError(t.petGifs.reorderFailed);
+      }
+    } catch {
+      setError(t.petGifs.reorderFailed);
+    }
   };
 
   /** 右键 / 点垃圾桶：只弹确认框，不删除任何东西。 */
@@ -377,15 +416,24 @@ export function PetGifRotationSettings() {
     return { rects, bounds: { left: box.left, top: box.top, right: box.right, bottom: box.bottom } };
   };
 
-  const beginPointerDrag = (event: ReactPointerEvent<HTMLElement>, index: number) => {
+  /**
+   * 容器级拖拽：pointerdown 落在**网格容器**上，先量一遍所有格子矩形，
+   * 再用 `petGifIndexAtPoint` 命中「按的是第几格」；指针捕获也挂在容器上。
+   *
+   * 这样即使 React 重渲染替换了格子节点、指针滑到图片/文字子元素上、
+   * 或者格子中途被滚动移出视口，拖动都不会断——被拖节点是否存活无关紧要。
+   */
+  const beginPointerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     // 右键留给「右键删除」；删除小按钮上的按下也不算拖动。
     if (event.pointerType === "mouse" && event.button !== 0) return;
     if ((event.target as HTMLElement | null)?.closest(".pet-gif-tile__delete")) return;
     const measured = measureTiles();
     if (!measured) return;
+    const hit = petGifIndexAtPoint(measured.rects, { x: event.clientX, y: event.clientY });
+    if (hit === null) return;
     dragSession.current = {
       pointerId: event.pointerId,
-      from: index,
+      from: hit,
       startX: event.clientX,
       startY: event.clientY,
       active: false,
@@ -393,17 +441,17 @@ export function PetGifRotationSettings() {
       rects: measured.rects,
       bounds: measured.bounds,
     };
-    // 捕获指针：手指/鼠标移出格子后仍然能收到 move / up，拖到窗口边缘也不会丢。
+    // 捕获指针到网格容器：手指/鼠标移出格子甚至移出网格后仍能收到 move / up。
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
-      // 环境不支持指针捕获时退化成「在格子内拖动」，不阻断功能。
+      // 环境不支持指针捕获时退化成「在容器内拖动」，不阻断功能。
     }
     // 阻止原生图片拖拽和文本选择抢走手势。
     event.preventDefault();
   };
 
-  const movePointerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+  const movePointerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     const session = dragSession.current;
     if (!session || session.pointerId !== event.pointerId) return;
     if (!session.active) {
@@ -446,22 +494,31 @@ export function PetGifRotationSettings() {
     setDropIndex(target);
   };
 
-  const finishPointerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+  const finishPointerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     const session = dragSession.current;
     if (!session || session.pointerId !== event.pointerId) return;
     dragSession.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    const { active, from, target } = session;
+    const { active, from } = session;
     setDraggingIndex(null);
     setDropIndex(null);
-    // 只是点了一下（没超过拖动阈值）或落在网格外：什么都不做。
-    if (!active || target === null) return;
-    reorder(from, target);
+    // 只是点了一下（没超过拖动阈值）：什么都不做。
+    if (!active) return;
+    // 松手时**重新量一遍**格子矩形：拖动中可能滚动了网格/页面，旧矩形会失效。
+    const measured = measureTiles();
+    const target = measured
+      ? petGifDropTargetIndex(measured.rects, { x: event.clientX, y: event.clientY }, {
+          bounds: measured.bounds,
+          draggingIndex: from,
+        })
+      : session.target;
+    if (target === null) return;
+    applyReorder(from, target);
   };
 
-  const cancelPointerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+  const cancelPointerDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     const session = dragSession.current;
     if (!session || session.pointerId !== event.pointerId) return;
     resetDrag();
@@ -542,7 +599,17 @@ export function PetGifRotationSettings() {
           {items.length === 0 ? (
             <p className="pet-gif-settings__empty">{t.petGifs.empty}</p>
           ) : (
-            <div ref={gridRef} className="pet-gif-settings__grid" role="list" aria-label={t.petGifs.title}>
+            <div
+              ref={gridRef}
+              className="pet-gif-settings__grid"
+              role="list"
+              aria-label={t.petGifs.title}
+              onPointerDown={beginPointerDrag}
+              onPointerMove={movePointerDrag}
+              onPointerUp={finishPointerDrag}
+              onPointerCancel={cancelPointerDrag}
+              onLostPointerCapture={cancelPointerDrag}
+            >
               {items.map((item, index) => {
                 const dragging = draggingIndex === index;
                 const dropTarget = dropIndex === index && draggingIndex !== null && draggingIndex !== index;
@@ -558,11 +625,6 @@ export function PetGifRotationSettings() {
                     aria-label={`${t.petGifs.order(index + 1)} · ${item.name}`}
                     title={`${t.petGifs.order(index + 1)} · ${item.name} · ${item.path ?? item.src ?? ""}`}
                     draggable={false}
-                    onPointerDown={(event) => beginPointerDrag(event, index)}
-                    onPointerMove={movePointerDrag}
-                    onPointerUp={finishPointerDrag}
-                    onPointerCancel={cancelPointerDrag}
-                    onLostPointerCapture={cancelPointerDrag}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       requestRemove(item);

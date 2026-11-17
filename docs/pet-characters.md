@@ -200,3 +200,51 @@ HTML5 拖放事件（`dragstart/dragover/drop`）根本送不到网页 → React
   恢复时拒绝覆盖已存在的同名文件；回收站目录和表情目录都做了路径越界校验。
 - 单测：`tests/pet-gif-removal.test.mjs`（12 条）。
 
+
+## 表情轮播拖拽排序（2026-11-17 二次修复）
+
+**用户反馈**：上一轮改成 Pointer Events 之后，设置页的方格「还是拖不动」。
+
+### 真实失败原因（WebView2 实测，非推理）
+
+用 WebView2 远程调试（临时在 `tauri.conf.json` 的 main 窗口加
+`additionalBrowserArgs: "--remote-debugging-port=9222"`）接管真实窗口，在页面里注入
+pointer 事件探针 + 用 `Input.dispatchMouseEvent` 走真实指针路径后确认：
+
+1. 事件确实到达页面（`pointerdown/move/up` 都记录到了），但**事件目标不是格子**：
+   `closest("[data-gif-index]")` 为 `null`，`.is-dragging` 一直是 0，
+   `localStorage` 一次都没写。旧实现把 `onPointerDown` 挂在每个 `figure` 格子上，
+   只要命中测试没落到格子上（隐藏/重挂载的另一份 DOM、图片子节点、滚动后坐标）
+   整个拖拽链就静默失效——**没有错误提示，看起来就是"拖不动"**。
+2. 另一个隐藏杀手：「全选现有表情」比较的是**绝对路径 vs 存储里的相对路径**
+   （`/assets/pets/chars/...` 对 `chars/...`），永远判成"没选过"，点一次就把整个素材池
+   追加一遍。用户配置从 29 张涨到 713 张，几百个格子里拖动更容易踩到 1 的坑。
+
+### 修法：网格容器级拖拽 + 路径归一 + 写回校验
+
+- `PetGifRotationSettings.tsx`：`onPointerDown/Move/Up/Cancel/LostPointerCapture`
+  全部挪到**网格容器**上；按下时用 `petGifIndexAtPoint()`（纯函数）按坐标命中格子，
+  `setPointerCapture` 也捕获在容器上。不再依赖被按下的格子节点是否存活或被替换。
+- **松手时重新量一遍矩形**再算落点（`measureTiles()` → `petGifDropTargetIndex()`），
+  拖动中滚动/窗口变化不会用过期坐标。
+- 排序写回后**回读 localStorage 校验**，不一致就显示中文错误「顺序没能写进配置，请重试」，
+  不再静默失败。
+- 「全选」与去重统一用 `builtinAssetRelative()` 归一后的唯一键（`petGifItemKey`），
+  写回时顺手 `dedupePetGifItems()` 清掉历史重复项。
+- CSS：网格容器也加 `touch-action: none`（格子原本就有）。
+
+### 实机验证（CDP 真实指针）
+
+- 修复前：pointerdown 命中 `tile:null`、`.is-dragging=0`、无 `storage.set`，顺序不变。
+- 修复后（同一台机器、29 张素材、真实 `Input.dispatchMouseEvent`）：
+  从第 1 格拖到第 3 格，拖动中 `dragging=1 / dropTarget=1`，松手后
+  - DOM 序号：`写.gif, normal2.gif, 吹心心_2.gif` → `normal2.gif, 吹心心_2.gif, 写.gif`
+  - `localStorage["maltese-pet-gif-rotation:xiaojimao"]` 同步变成同样顺序（只写了一次）；
+  - 对应单测 `movePetGifItem(items, 0, 2)` 的结果一致。
+
+### 人工复测步骤
+
+1. 启动后双击小狗 → 快捷面板点「待办」→ 顶部「设置」→「表情轮播」卡片（自动展开或点「展开（N 张）」）。
+2. 按住第 1 张方格往右/下拖到第 3 张位置，松手：序号应立刻重排，刷新/重开设置页顺序保持。
+3. 点一次「全选现有表情」：数字只应增加缺的那几张（不是整个素材池再来一遍）。
+4. 若仍拖不动：把 DevTools Console 里 `[pet-gif-drag]` 相关日志（或页面错误）连同现象一起反馈。

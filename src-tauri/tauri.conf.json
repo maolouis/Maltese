@@ -23,8 +23,7 @@
         "skipTaskbar": true,
         "visible": false,
         "shadow": false,
-        "dragDropEnabled": false,
-        "additionalBrowserArgs": "--remote-debugging-port=9222"
+        "dragDropEnabled": false
       }
     ],
     "security": {

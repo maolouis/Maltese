@@ -315,6 +315,7 @@ const zhCN: Translations = {
     addHint: "选择一个或多个 GIF 文件（每张不超过 8 MB）",
     empty: "这个表情还没有 GIF，删空后会暂时使用默认顺序。",
     reorderHint: "拖动方格调整播放顺序；右键点击方格删除（会先确认）。",
+    reorderFailed: "顺序没能写进配置，请重试；如果一直失败请重启 Maltese。",
     delete: "删除",
     deleted: (count) => `已删除 ${count} 张 GIF`,
     selectAll: "全选现有表情",

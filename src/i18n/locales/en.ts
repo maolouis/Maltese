@@ -312,6 +312,7 @@ const en: Translations = {
     addHint: "Choose one or more GIF files (up to 8 MB each)",
     empty: "No GIFs for this expression. The default order is used while the list is empty.",
     reorderHint: "Drag tiles to change the playback order; right-click a tile to delete it (asks for confirmation first).",
+    reorderFailed: "Could not save the new order. Please retry; restart Maltese if it keeps failing.",
     delete: "Delete",
     deleted: (count) => `Deleted ${count} GIF${count === 1 ? "" : "s"}`,
     selectAll: "Select all existing",

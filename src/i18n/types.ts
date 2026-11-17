@@ -313,6 +313,7 @@ export type Translations = {
     addHint: string;
     empty: string;
     reorderHint: string;
+    reorderFailed: string;
     delete: string;
     deleted: (count: number) => string;
     selectAll: string;

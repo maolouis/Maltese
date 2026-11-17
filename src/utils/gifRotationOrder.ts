@@ -53,6 +53,23 @@ function contains(rect: { left: number; top: number; right: number; bottom: numb
 }
 
 /**
+ * 指针按在哪个格子上（容器级 pointerdown 命中测试）。
+ *
+ * 拖拽改到网格容器上统一处理：`onPointerDown` 先量一遍格子矩形，再用这个
+ * 纯函数算「按下的是第几格」。这样不依赖被按下的格子节点在 React 重渲染后
+ * 是否还存活，也不会因为图片/文字子节点吃掉事件而拖不动。
+ */
+export function petGifIndexAtPoint(
+  rects: PetGifTileRect[],
+  point: { x: number; y: number },
+): number | null {
+  for (const rect of rects) {
+    if (contains(rect, point.x, point.y)) return rect.index;
+  }
+  return null;
+}
+
+/**
  * 指针落点 → 松手后应当「占用」的格子下标；返回 null 表示不排序。
  *
  * 规则：

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { movePetGifItem, petGifDropTargetIndex } from "../src/utils/gifRotationOrder.ts";
+import { movePetGifItem, petGifDropTargetIndex, petGifIndexAtPoint } from "../src/utils/gifRotationOrder.ts";
 
 // QA D4：方格墙的插入线原来永远画在目标格左侧，但向下拖时 reorder 实际插到
 // 目标格之后。现在语义统一成「占用落点格子的位置」，并由组件按拖动方向把
@@ -92,4 +92,37 @@ test("落在格子间隙取最近一格，拖出网格（含 24px 容错）返�
   // 超出容错 → null，松手取消本次拖动
   assert.equal(petGifDropTargetIndex(grid, { x: 400, y: 50 }, { bounds }), null);
   assert.equal(petGifDropTargetIndex(grid, { x: 50, y: -100 }, { bounds }), null);
+});
+// —— 容器级拖拽（2026-11-17 修复）：pointerdown 命中测试 + 松手前重算落点 ——
+
+test("容器级命中：按在格子里得到下标，按在间隙/网格外返回 null", () => {
+  assert.equal(petGifIndexAtPoint(grid, { x: 50, y: 50 }), 0);
+  assert.equal(petGifIndexAtPoint(grid, { x: 180, y: 50 }), 1);
+  assert.equal(petGifIndexAtPoint(grid, { x: 104, y: 50 }), null, "格子间隙不算按住某一格");
+  assert.equal(petGifIndexAtPoint(grid, { x: -10, y: 50 }), null);
+  assert.equal(petGifIndexAtPoint([], { x: 50, y: 50 }), null);
+});
+
+test("松手时用重新测量后的矩形算落点：滚动前后同一坐标落到不同格子", () => {
+  // 拖动中网格向上滚了 120px：格子矩形整体上移，旧矩形已经失效。
+  const scrolled = grid.map((rect) => ({
+    ...rect,
+    top: rect.top - 120,
+    bottom: rect.bottom - 120,
+  }));
+  const point = { x: 50, y: 40 };
+  // 旧矩形里 (50,40) 落在第 0 格；新矩形里第 0 格已经上移到 -120~-20，命中第 2 格。
+  assert.equal(petGifIndexAtPoint(grid, point), 0);
+  assert.equal(petGifIndexAtPoint(scrolled, point), 2);
+  assert.equal(petGifDropTargetIndex(scrolled, point, { draggingIndex: 0 }), 2);
+  assert.deepEqual(movePetGifItem(["a", "b", "c", "d"], 0, 2), ["b", "c", "a", "d"]);
+});
+
+test("容器命中 + 落点 + 排序串起来：从第 1 格拖到第 4 格", () => {
+  const items = ["a", "b", "c", "d"];
+  const from = petGifIndexAtPoint(grid, { x: 180, y: 180 });
+  assert.equal(from, 3);
+  const to = petGifDropTargetIndex(grid, { x: 50, y: 50 }, { draggingIndex: from });
+  assert.equal(to, 0);
+  assert.deepEqual(movePetGifItem(items, from, to), ["d", "a", "b", "c"]);
 });
