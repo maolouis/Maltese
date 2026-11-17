@@ -11,10 +11,20 @@ import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
 
 /** 内置素材的真实清单（磁盘上确实存在、能被加载的路径）。
  *  素材库多次归位后，旧配置里还留着已移动/已删除文件的路径：这些条目在设置页
- *  计入「共 N 张」却永远加载不出来，数量自然对不上。读取时直接剔除，不改 UI。 */
+ *  计入「共 N 张」却永远加载不出来，数量自然对不上。读取时直接剔除，不改 UI。
+ *  注意：清单里是百分号编码路径，存储里可能是解码后的中文名，必须统一成
+ *  「解码后的相对路径」再比较，否则会把有效的中文名 GIF 误判成失效。 */
 const BUILTIN_ASSET_PATHS = new Set(
-  Object.values(PET_CHARACTER_ASSETS).flatMap((actions) => Object.values(actions).flat()),
+  Object.values(PET_CHARACTER_ASSETS)
+    .flatMap((actions) => Object.values(actions).flat())
+    .map((path) => builtinAssetRelative(path) ?? path),
 );
+
+/** 同一个 GIF 在清单 / 存储里的可比键：解码后的相对路径。 */
+function builtinKey(path: string | undefined): string | null {
+  if (!path) return null;
+  return builtinAssetRelative(path);
+}
 
 /** 旧版按状态存的配置键，读取时迁移到小白。 */
 const LEGACY_STORAGE_KEY = "maltese-pet-gif-rotation";
@@ -142,7 +152,7 @@ function dedupeRotationItems(items: PetGifRotationItem[]): PetGifRotationItem[] 
   const seen = new Set<string>();
   const next: PetGifRotationItem[] = [];
   for (const item of items) {
-    const key = item.src ?? item.path ?? item.id;
+    const key = builtinKey(item.src ?? item.path) ?? item.src ?? item.path ?? item.id;
     if (seen.has(key)) continue;
     seen.add(key);
     next.push(item);
@@ -176,7 +186,12 @@ export function loadPetGifRotationConfig(
       list
         .map(normalizeItem)
         .filter((item): item is PetGifRotationItem => item !== null)
-        .filter((item) => item.custom === true || !item.src || BUILTIN_ASSET_PATHS.has(item.src))
+        .filter((item) => {
+          if (item.custom === true) return true;
+          const key = builtinKey(item.src ?? item.path);
+          // 非内置路径（自定义 URL 等）保留；内置但清单里已不存在的才剔除。
+          return key === null || BUILTIN_ASSET_PATHS.has(key);
+        })
         // 单角色（小白 / 小鸡毛）不播双狗同框图：已存列表里的 shared 条目一并剔除。
         .filter((item) => character === "duo" || !item.src?.includes("/chars/shared/")),
     );

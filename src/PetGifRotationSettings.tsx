@@ -572,10 +572,10 @@ export function PetGifRotationSettings() {
       {expanded && (
         <>
           <div className="pet-gif-settings__toolbar">
-            {/* 这里的数字是「素材库库存」（单角色只算自己的素材，duo 算同框池），
-                不是当前已选列表的长度；展开按钮上的 N 仍是已选列表张数。 */}
+            {/* 数量标签必须等于方格墙实际显示的格子数（已选 + 素材池未选），
+                否则「标签 30、格子 96」这类对不上；悬停可看你已选了多少。 */}
             <span title={`已选 ${items.length} 张，素材库共 ${availableItems.length} 张`}>
-              {t.petGifs.count(availableItems.length)}
+              {t.petGifs.count(displayItems.length)}
             </span>
             <span className="pet-gif-settings__toolbar-hint">{t.petGifs.reorderHint}</span>
             <button
