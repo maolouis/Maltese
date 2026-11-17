@@ -45,8 +45,9 @@ const BILIBILI_EXTRACT: &str = r#"
 (() => {
   const pick = (sel) => document.querySelector(sel);
   const text = (sel) => (pick(sel)?.textContent || '').trim();
-  const meta = (name) => (document.querySelector(`meta[property="${name}"]`)?.content || '').trim();
+  const meta = (name) => (document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.content || '').trim();
   const title = text('h1.video-title') || text('.video-title') || meta('og:title') || document.title;
+  const description = text('.desc-info') || text('.video-desc') || meta('og:description') || meta('description');
   const author = text('.up-name') || text('.username') || meta('author');
   const tags = Array.from(document.querySelectorAll('.tag, .video-tag, a[href*="/search?keyword="]'))
     .map((node) => (node.textContent || '').trim())
@@ -55,8 +56,8 @@ const BILIBILI_EXTRACT: &str = r#"
   const duration = Number.isFinite(video?.duration) ? Math.round(video.duration) : 0;
   const position = Number.isFinite(video?.currentTime) ? Math.round(video.currentTime) : 0;
   return {
-    itemId: location.pathname.match(/\/video\/([^/?#]+)/)?.[1] || '',
-    title, author, durationSeconds: duration, positionSeconds: position,
+    itemId: location.pathname.match(/\/video\/([^/?#]+|BV[^/?#]+)/)?.[1] || '',
+    title, description, author, durationSeconds: duration, positionSeconds: position,
     playing: !!video && !video.paused && !video.ended,
     visible: document.visibilityState === 'visible',
     tags, liked: !!pick('.video-like.video-like--active, .like.active'),
@@ -74,6 +75,35 @@ const BILIBILI_EXTRACT: &str = r#"
 
 const BILIBILI_NEXT: &str = r#"
 (() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const box = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return box.width > 20 && box.height > 20 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const detail = /\/video\//.test(location.pathname);
+  if (!detail) {
+    const seen = window.__malteseOpenedVideoHrefs || (window.__malteseOpenedVideoHrefs = {});
+    const links = Array.from(document.querySelectorAll('a[href*="/video/"]'))
+      .filter(visible)
+      .map((link) => ({ link, href: link.href.split('#')[0] }))
+      .filter(({ href }) => href && !seen[href]);
+    if (links.length) {
+      const target = links[0];
+      seen[target.href] = true;
+      target.link.click();
+      return true;
+    }
+  }
+  if (detail) {
+    const nextVideo = document.querySelector('.bpx-player-ctrl-next, .next-button, [aria-label="下一个"]');
+    if (nextVideo && visible(nextVideo)) {
+      nextVideo.click();
+      return true;
+    }
+    history.back();
+    return true;
+  }
   const video = document.querySelector('video');
   if (!video) return false;
   const next = document.querySelector('.bpx-player-ctrl-next, .next-button, [aria-label="下一个"]');
@@ -108,15 +138,17 @@ const DOUYIN_EXTRACT: &str = r#"
 (() => {
   const pick = (sel) => document.querySelector(sel);
   const text = (sel) => (pick(sel)?.textContent || '').trim();
+  const meta = (name) => (document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.content || '').trim();
   const visible = document.visibilityState === 'visible';
   const title = text('[data-e2e="video-desc"]') || text('.video-desc') || document.title;
+  const description = text('[data-e2e="video-desc"]') || meta('og:description') || meta('description');
   const author = text('[data-e2e="video-author"]') || text('.author-name');
   const video = document.querySelector('video');
   const duration = Number.isFinite(video?.duration) ? Math.round(video.duration) : 0;
   const position = Number.isFinite(video?.currentTime) ? Math.round(video.currentTime) : 0;
   const itemId = location.pathname.match(/\/video\/(\d+)/)?.[1] || '';
   return {
-    itemId, title, author, durationSeconds: duration, positionSeconds: position,
+    itemId, title, description, author, durationSeconds: duration, positionSeconds: position,
     playing: !!video && !video.paused && !video.ended, visible,
     tags: Array.from(document.querySelectorAll('[data-e2e="video-tag"], .tag'))
       .map((node) => (node.textContent || '').trim()).filter(Boolean).slice(0, 10),
@@ -134,6 +166,35 @@ const DOUYIN_EXTRACT: &str = r#"
 
 const DOUYIN_NEXT: &str = r#"
 (() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const box = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return box.width > 20 && box.height > 20 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const detail = /\/video\//.test(location.pathname);
+  if (!detail) {
+    const seen = window.__malteseOpenedVideoHrefs || (window.__malteseOpenedVideoHrefs = {});
+    const links = Array.from(document.querySelectorAll('a[href*="/video/"]'))
+      .filter(visible)
+      .map((link) => ({ link, href: link.href.split('#')[0] }))
+      .filter(({ href }) => href && !seen[href]);
+    if (links.length) {
+      const target = links[0];
+      seen[target.href] = true;
+      target.link.click();
+      return true;
+    }
+  }
+  if (detail) {
+    const nextVideo = document.querySelector('[data-e2e="video-next"], .arrow-next');
+    if (nextVideo && visible(nextVideo)) {
+      nextVideo.click();
+      return true;
+    }
+    history.back();
+    return true;
+  }
   const container = document.querySelector('#slidelist, .slidelist, [data-e2e="feed-list"]');
   if (container) {
     container.scrollBy({ top: Math.round(container.clientHeight * 0.9), behavior: 'smooth' });
@@ -260,6 +321,9 @@ mod tests {
         for adapter in [adapter_for(Platform::Bilibili), adapter_for(Platform::Douyin)] {
             assert!(adapter.extract_script().len() < 4096);
             assert!(adapter.next_action_script().len() < 4096);
+            assert!(adapter.extract_script().contains("description"));
+            assert!(adapter.next_action_script().contains("target.link.click"));
+            assert!(adapter.next_action_script().contains("history.back"));
         }
     }
 

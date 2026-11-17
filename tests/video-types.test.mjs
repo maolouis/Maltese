@@ -19,6 +19,7 @@ function validSnapshot() {
     sessionId: "bili-20261114-abc123",
     provider: "bilibili",
     accountId: null,
+    autoComment: false,
     phase: "collecting",
     running: true,
     intervalSeconds: 45,

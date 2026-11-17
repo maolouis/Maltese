@@ -13,6 +13,7 @@ const MAX_TAGS: usize = 10;
 pub const RAW_FIELDS: &[&str] = &[
     "itemId",
     "title",
+    "description",
     "author",
     "durationSeconds",
     "positionSeconds",
@@ -41,6 +42,8 @@ pub struct RawFacts {
     pub item_id: String,
     #[serde(default)]
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     #[serde(default)]
     pub author: String,
     #[serde(default)]
@@ -121,6 +124,8 @@ pub struct PageFacts {
     pub cluster_key: String,
     pub platform: Platform,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     pub author: Option<String>,
     pub duration_seconds: Option<u64>,
     pub position_seconds: u64,
@@ -164,6 +169,16 @@ impl PageFacts {
 pub fn normalize_title(value: &str) -> String {
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.chars().take(MAX_TITLE_CHARS).collect()
+}
+
+pub fn normalize_description(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(500)
+        .collect()
 }
 
 pub fn normalize_author(value: &str) -> Option<String> {
@@ -259,6 +274,7 @@ pub fn normalize_facts(
         return Err(ExtractIssue::EmptyTitle);
     }
     let author = normalize_author(&raw.author);
+    let description = normalize_description(&raw.description);
     let tags = normalize_tags(&raw.tags);
     let duration = if raw.duration_seconds == 0 {
         None
@@ -290,6 +306,7 @@ pub fn normalize_facts(
         cluster_key: cluster,
         platform,
         title,
+        description,
         author,
         duration_seconds: duration,
         position_seconds: raw.position_seconds,

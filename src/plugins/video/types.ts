@@ -102,6 +102,7 @@ export type VideoSnapshot = {
   sessionId: string;
   provider: Platform;
   accountId: string | null;
+  autoComment: boolean;
   phase: Phase;
   running: boolean;
   intervalSeconds: number;
@@ -176,6 +177,7 @@ export type VideoConfig = {
   dailyDeliveries: number;
   channelPriority: "auto" | "cdpOnly" | "noExtension";
   modelSummary: boolean;
+  autoComment: boolean;
   autoLike: boolean;
   autoFavorite: boolean;
   autoLikeDailyLimit: number;
@@ -238,6 +240,7 @@ export function isVideoSnapshot(value: unknown): value is VideoSnapshot {
     typeof value.sessionId === "string" &&
     PLATFORMS.includes(value.provider as Platform) &&
     (value.accountId === null || typeof value.accountId === "string") &&
+    (value.autoComment === undefined || typeof value.autoComment === "boolean") &&
     PHASES.includes(value.phase as Phase) &&
     typeof value.running === "boolean" &&
     isNumber(value.intervalSeconds) &&

@@ -1,7 +1,7 @@
 // 「小狗自主刷视频」插件面板。
 //
 // 小狗用独立浏览器看推荐流，按兴趣整理小结，再通过聊天/气泡回传；
-// 面板只负责启停、登录、小结与少量高级设置，不代用户评论或发布。
+// 面板负责启停、登录、小结与权限设置。自动评论必须由用户在高级设置中明确开启。
 //
 // 信息架构按 QA `docs/qa-video-plugin-2026-11-17.md` §1 精简：
 // 一行状态条 + 平台/登录 + 小结 +「高级设置」折叠 +「评论」折叠；
@@ -35,6 +35,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [maxMinutes, setMaxMinutes] = useState(30);
   const [sampleInterval, setSampleInterval] = useState(2);
   const [dailyDeliveries, setDailyDeliveries] = useState(2);
+  const [autoComment, setAutoComment] = useState(false);
   const [localError, setLocalError] = useState<VideoErrorInfo | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState("");
@@ -48,6 +49,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [commentBusy, setCommentBusy] = useState(false);
   const accountSelectionHydrated = useRef(false);
   const snapshotProviderHydrated = useRef(false);
+  const autoCommentHydrated = useRef(false);
 
   const snapshot = video.snapshot;
   const running = snapshot?.running ?? false;
@@ -61,6 +63,10 @@ export function VideoAutomationPanel({ onNotice }: Props) {
     snapshotProviderHydrated.current = true;
     setPageInterval(snapshot.intervalSeconds);
     setMaxMinutes(snapshot.maxMinutes);
+    if (!autoCommentHydrated.current && typeof snapshot.autoComment === "boolean") {
+      setAutoComment(snapshot.autoComment);
+      autoCommentHydrated.current = true;
+    }
   }, [snapshot, video.activeAccount]);
 
   useEffect(() => {
@@ -161,13 +167,14 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         maxMinutes: Math.max(1, Math.round(maxMinutes)),
         sampleIntervalSeconds: Math.min(5, Math.max(1, Math.round(sampleInterval))),
         dailyDeliveries: Math.min(5, Math.max(1, Math.round(dailyDeliveries))),
+        autoComment,
       });
       onNotice("本轮观看参数已生效（重开面板会回到已保存值）");
       await video.refresh();
     } catch (reason) {
       setLocalError(describeVideoError(reason, "配置超出允许范围，请检查输入。"));
     }
-  }, [dailyDeliveries, maxMinutes, onNotice, pageInterval, provider, sampleInterval, video]);
+  }, [autoComment, dailyDeliveries, maxMinutes, onNotice, pageInterval, provider, sampleInterval, video]);
 
   const closeBrowser = useCallback(async () => {
     setLocalError(null);
@@ -256,6 +263,11 @@ export function VideoAutomationPanel({ onNotice }: Props) {
       {snapshot?.degraded && (
         <p className="video-automation__muted">当前使用较低能力通道，时长与互动可能不完整。</p>
       )}
+      {video.autoCommentNotice && (
+        <p className="video-automation__muted" role="status">
+          自动评论：{video.autoCommentNotice.message}
+        </p>
+      )}
 
       {/* 平台 + 登录：一行 */}
       <div className="video-automation__row">
@@ -325,10 +337,17 @@ export function VideoAutomationPanel({ onNotice }: Props) {
               每天投递
               <input type="number" min={1} max={5} value={dailyDeliveries} onChange={(event) => setDailyDeliveries(Number(event.currentTarget.value) || 2)} /> 次
             </label>
+            <label className="video-automation__permission">
+              <input type="checkbox" checked={autoComment} onChange={(event) => setAutoComment(event.currentTarget.checked)} />
+              允许小狗根据视频内容自动评论
+            </label>
             <button type="button" className="video-automation__secondary" onClick={() => void saveConfig()}>
               保存参数
             </button>
           </div>
+          <p className="video-automation__muted">
+            开启权限后，小狗会打开推荐流里的视频详情页，读取标题、简介和标签，只对每条视频尝试一次内容相关评论；关闭后仍会读取内容，但不会自动发评论。
+          </p>
 
           <div className="video-automation__row video-automation__browser">
             <span className="video-automation__muted">专用浏览器：{browserStatusText(video.browserStatus)}</span>
@@ -399,7 +418,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
 
       {/* 评论（可选） */}
       <details className="video-automation__comment">
-        <summary>评论（可选，只有你点发送才会发出去）</summary>
+        <summary>评论（可选，自动评论需在高级设置授权）</summary>
         <textarea
           rows={3}
           maxLength={200}

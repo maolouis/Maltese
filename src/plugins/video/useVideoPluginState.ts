@@ -24,6 +24,7 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   dailyDeliveries: 2,
   channelPriority: "auto",
   modelSummary: true,
+  autoComment: false,
   autoLike: false,
   autoFavorite: false,
   autoLikeDailyLimit: 10,
@@ -45,6 +46,7 @@ export type VideoPluginState = {
   sessions: SessionSummary[];
   preview: DigestDraft | null;
   browserStatus: BrowserStatus | null;
+  autoCommentNotice: { ok: boolean; message: string } | null;
   refresh: () => Promise<void>;
   loadBrowserStatus: () => Promise<void>;
   closeBrowser: () => Promise<void>;
@@ -77,6 +79,7 @@ export function useVideoPluginState(): VideoPluginState {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [preview, setPreview] = useState<DigestDraft | null>(null);
   const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null);
+  const [autoCommentNotice, setAutoCommentNotice] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     for (const key of OLD_KEYS) {
@@ -181,6 +184,20 @@ export function useVideoPluginState(): VideoPluginState {
     };
   }, [loadSessions]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    const unlisten = listen<{ ok?: unknown; message?: unknown }>("video-auto-comment", (event) => {
+      const message = typeof event.payload?.message === "string" ? event.payload.message : "自动评论没有完成";
+      setAutoCommentNotice({
+        ok: event.payload?.ok === true,
+        message,
+      });
+    });
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
+
   const start = useCallback(async (provider: "bilibili" | "douyin", accountId?: string) => {
     await invoke("video_start_session", {
       provider,
@@ -191,6 +208,7 @@ export function useVideoPluginState(): VideoPluginState {
         sampleIntervalSeconds: config.sampleIntervalSeconds,
         dailyDeliveries: config.dailyDeliveries,
         modelSummary: config.modelSummary,
+        autoComment: config.autoComment,
       },
       accountId: accountId || undefined,
     });
@@ -294,6 +312,7 @@ export function useVideoPluginState(): VideoPluginState {
     sessions,
     preview,
     browserStatus,
+    autoCommentNotice,
     refresh,
     loadBrowserStatus,
     closeBrowser,

@@ -319,6 +319,9 @@ pub struct ContentItem {
     pub cluster_key: String,
     pub platform: Option<Platform>,
     pub title: String,
+    /// 视频详情页提取到的简介或正文片段，用于小狗理解内容和生成评论。
+    #[serde(default)]
+    pub description: String,
     pub author: Option<String>,
     pub duration_seconds: Option<u64>,
     pub watched_seconds: u64,

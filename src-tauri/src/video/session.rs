@@ -8,6 +8,7 @@ use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserInstance};
 use super::cdp::{CdpSession, EVALUATE_TIMEOUT};
 use super::channel::ChannelManager;
+use super::comment::build_content_comment;
 use super::CommentReport;
 use super::config::{apply_patch, validate_config, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
@@ -21,6 +22,7 @@ use super::store::StoreHandle;
 use super::{VideoError, VideoResult};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -58,6 +60,7 @@ pub struct VideoSnapshot {
     pub session_id: String,
     pub provider: String,
     pub account_id: Option<String>,
+    pub auto_comment: bool,
     pub phase: Phase,
     pub running: bool,
     pub interval_seconds: u64,
@@ -87,6 +90,7 @@ impl Default for VideoSnapshot {
             session_id: String::new(),
             provider: "bilibili".to_string(),
             account_id: None,
+            auto_comment: false,
             phase: Phase::Idle,
             running: false,
             interval_seconds: 45,
@@ -190,6 +194,9 @@ pub fn merge_facts(items: &mut Vec<ContentItem>, facts: &PageFacts, now: u64) ->
         item.position_seconds = facts.position_seconds;
         item.duration_seconds = facts.duration_seconds.or(item.duration_seconds);
         item.title = facts.title.clone();
+        if !facts.description.is_empty() {
+            item.description = facts.description.clone();
+        }
         item.author = facts.author.clone();
         item.tags = facts.tags.clone();
         item.canonical_url = facts.canonical_url.clone();
@@ -229,6 +236,7 @@ pub fn merge_facts(items: &mut Vec<ContentItem>, facts: &PageFacts, now: u64) ->
         cluster_key: facts.cluster_key.clone(),
         platform: Some(facts.platform),
         title: facts.title.clone(),
+        description: facts.description.clone(),
         author: facts.author.clone(),
         duration_seconds: facts.duration_seconds,
         watched_seconds: 0,
@@ -297,6 +305,7 @@ struct RuntimeState {
     platform: Platform,
     provider: String,
     account_id: Option<String>,
+    auto_comment_attempted: HashSet<String>,
     interval_seconds: u64,
     max_minutes: u64,
     sample_interval_seconds: u64,
@@ -330,6 +339,7 @@ impl Default for RuntimeState {
             platform: Platform::Bilibili,
             provider: "bilibili".to_string(),
             account_id: None,
+            auto_comment_attempted: HashSet::new(),
             interval_seconds: 45,
             max_minutes: 30,
             sample_interval_seconds: 2,
@@ -409,6 +419,7 @@ impl SessionEngine {
             session_id: state.session_id.clone(),
             provider: state.provider.clone(),
             account_id: state.account_id.clone(),
+            auto_comment: self.config().auto_comment,
             phase: state.phase,
             running: matches!(
                 state.phase,
@@ -1022,14 +1033,16 @@ impl SessionEngine {
 
                 if let Some(Ok((facts, _unknown))) = facts_result {
                     let kind = adapter.classify_page(&facts);
-                    let mut state = lock_state(&self.state);
-                    state.foreground_title = facts.title.clone();
-                    state.foreground_process.clear();
-                    state.waiting_for_browser = false;
-                    if let Some(url) = facts.canonical_url.clone() {
-                        state.current_url = url;
-                    }
-                    match kind {
+                    let mut auto_comment: Option<(PageFacts, String)> = None;
+                    {
+                        let mut state = lock_state(&self.state);
+                        state.foreground_title = facts.title.clone();
+                        state.foreground_process.clear();
+                        state.waiting_for_browser = false;
+                        if let Some(url) = facts.canonical_url.clone() {
+                            state.current_url = url;
+                        }
+                        match kind {
                         PageKind::RiskControl => {
                             state.error_code = Some("RISK_CONTROL".to_string());
                             state.error_message = Some("平台要求验证，小狗已停下来。".to_string());
@@ -1061,6 +1074,64 @@ impl SessionEngine {
                             }
                             if state.items.len() > config.max_items as usize {
                                 state.items.truncate(config.max_items as usize);
+                            }
+                            if config.auto_comment
+                                && !facts.hints.on_feed
+                                && facts.canonical_url.is_some()
+                                && !state.auto_comment_attempted.contains(&facts.item_key)
+                            {
+                                if let Some(comment) = build_content_comment(&facts) {
+                                    state.auto_comment_attempted.insert(facts.item_key.clone());
+                                    auto_comment = Some((facts.clone(), comment));
+                                }
+                            }
+                        }
+                        }
+                    }
+                    if let Some((facts, comment)) = auto_comment {
+                        let session_id = self.snapshot().session_id;
+                        match self.post_comment(&comment).await {
+                            Ok(report) => {
+                                let code = if report.ok {
+                                    "AUTO_COMMENT_SENT"
+                                } else {
+                                    "AUTO_COMMENT_SKIPPED"
+                                };
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(session_id.clone()),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: if report.ok { "info" } else { "warn" }.to_string(),
+                                    code: code.to_string(),
+                                    message: format!("{}：{}", facts.title, report.message),
+                                });
+                                let _ = app.emit(
+                                    "video-auto-comment",
+                                    serde_json::json!({
+                                        "sessionId": session_id,
+                                        "itemKey": facts.item_key,
+                                        "ok": report.ok,
+                                        "message": report.message,
+                                    }),
+                                );
+                            }
+                            Err(error) => {
+                                let message = error.to_string();
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(session_id),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: "warn".to_string(),
+                                    code: "AUTO_COMMENT_FAILED".to_string(),
+                                    message: message.clone(),
+                                });
+                                let _ = app.emit(
+                                    "video-auto-comment",
+                                    serde_json::json!({
+                                        "ok": false,
+                                        "message": message,
+                                    }),
+                                );
                             }
                         }
                     }

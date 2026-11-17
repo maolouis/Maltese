@@ -28,6 +28,8 @@ pub struct VideoConfig {
     pub daily_deliveries: u32,
     pub channel_priority: ChannelPriority,
     pub model_summary: bool,
+    /// 允许小狗在已打开的视频详情页按内容自动发一条评论。
+    pub auto_comment: bool,
     pub auto_like: bool,
     pub auto_favorite: bool,
     pub auto_like_daily_limit: u32,
@@ -46,6 +48,7 @@ impl Default for VideoConfig {
             daily_deliveries: 2,
             channel_priority: ChannelPriority::Auto,
             model_summary: true,
+            auto_comment: false,
             auto_like: false,
             auto_favorite: false,
             auto_like_daily_limit: 10,
@@ -68,6 +71,7 @@ pub struct VideoConfigPatch {
     pub daily_deliveries: Option<u32>,
     pub channel_priority: Option<ChannelPriority>,
     pub model_summary: Option<bool>,
+    pub auto_comment: Option<bool>,
     pub auto_like: Option<bool>,
     pub auto_favorite: Option<bool>,
     pub auto_like_daily_limit: Option<u32>,
@@ -127,6 +131,9 @@ pub fn apply_patch(base: &VideoConfig, patch: &VideoConfigPatch) -> Result<Video
     if let Some(value) = patch.model_summary {
         next.model_summary = value;
     }
+    if let Some(value) = patch.auto_comment {
+        next.auto_comment = value;
+    }
     if let Some(value) = patch.auto_like {
         next.auto_like = value;
     }
@@ -180,6 +187,15 @@ mod tests {
             serde_json::from_str(r#"{"intervalSeconds": 90}"#).expect("patch");
         let next = apply_patch(&VideoConfig::default(), &patch).expect("valid");
         assert_eq!(next.page_interval_seconds, 90);
+    }
+
+    #[test]
+    fn auto_comment_requires_explicit_patch() {
+        assert!(!VideoConfig::default().auto_comment);
+        let patch: VideoConfigPatch =
+            serde_json::from_str(r#"{"autoComment": true}"#).expect("patch");
+        let next = apply_patch(&VideoConfig::default(), &patch).expect("valid");
+        assert!(next.auto_comment);
     }
 
     #[test]
