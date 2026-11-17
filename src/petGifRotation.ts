@@ -176,7 +176,9 @@ export function loadPetGifRotationConfig(
       list
         .map(normalizeItem)
         .filter((item): item is PetGifRotationItem => item !== null)
-        .filter((item) => item.custom === true || !item.src || BUILTIN_ASSET_PATHS.has(item.src)),
+        .filter((item) => item.custom === true || !item.src || BUILTIN_ASSET_PATHS.has(item.src))
+        // 单角色（小白 / 小鸡毛）不播双狗同框图：已存列表里的 shared 条目一并剔除。
+        .filter((item) => character === "duo" || !item.src?.includes("/chars/shared/")),
     );
   }
   return defaults;

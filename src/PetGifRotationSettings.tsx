@@ -567,8 +567,8 @@ export function PetGifRotationSettings() {
       {expanded && (
         <>
           <div className="pet-gif-settings__toolbar">
-            {/* 这里的数字是「素材库库存」（本角色 + 同框，去重后），不是当前已选列表
-                的长度：用户核对的是素材总数；展开按钮上的 N 仍是已选列表张数。 */}
+            {/* 这里的数字是「素材库库存」（单角色只算自己的素材，duo 算同框池），
+                不是当前已选列表的长度；展开按钮上的 N 仍是已选列表张数。 */}
             <span title={`已选 ${items.length} 张，素材库共 ${availableItems.length} 张`}>
               {t.petGifs.count(availableItems.length)}
             </span>

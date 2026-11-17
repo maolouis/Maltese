@@ -2,8 +2,8 @@
 //
 // 素材来自 LineDogPet 的 pets/xiaobai、pets/xiaojimao、pets/shared：
 //   - xiaobai / xiaojimao 是两只可选小狗，各自有一套动作 GIF；
-//   - shared 是「两只小狗同框」的共享池，不是独立角色。同框 GIF 全量并入小白和
-//     小鸡毛各自的池子（设置页数量 = 本角色 + 同框）；选「一起出现」时只播同框素材。
+//   - shared 是「两只小狗同框」的共享池，不是独立角色。同框 GIF 只给「一起出现」
+//     (duo) 用；小白 / 小鸡毛各自只播自己的素材，池子和数量都不含双狗图。
 //
 // 动作缺素材时按 LineDogPet 的回退链找视觉相近的动作，最后兜底小白 idle，
 // 保证任何形象在任何状态下都有画面。
@@ -139,6 +139,8 @@ function sharedFrames(action: string): string[] {
 function fixedSharedFrame(action: string, character: string): string | undefined {
   const entry = FIXED_SHARED_FILES[action];
   if (!entry) return undefined;
+  // 双狗同框的招牌图（举起来/转圈）不再给单角色用，只保留角色专属招牌图。
+  if (entry.character === "shared") return undefined;
   // 共享招牌图给所有单角色用；某个角色专属的招牌图只给该角色用。
   if (entry.character !== "shared" && entry.character !== character) return undefined;
   const pool = assetsOf(entry.character === "shared" ? "shared" : entry.character, action);
@@ -147,11 +149,6 @@ function fixedSharedFrame(action: string, character: string): string | undefined
 
 function fallbackIdle(): string[] {
   return collectFrames("xiaobai", "idle");
-}
-
-/** 同框（两条狗）素材全量并入每个单角色池：小白和小鸡毛都能看到、都能选。 */
-function mergeShared(own: string[], shared: string[]): string[] {
-  return [...new Set([...own, ...shared])];
 }
 
 /**
@@ -163,10 +160,11 @@ const MAX_FRAMES_PER_STATE = 30;
 const frameCache = new Map<string, string[]>();
 const rawFrameCache = new Map<string, string[]>();
 
+/** 同框（两条狗）素材只给 duo：单角色池一律不含 shared。 */
 function computeFrames(
   character: PetCharacterId,
   state: string,
-  ownOnly: boolean,
+  _ownOnly: boolean,
 ): string[] {
   const action = STATE_TO_ACTION[state] ?? "idle";
   const fixed = fixedSharedFrame(action, character);
@@ -183,15 +181,9 @@ function computeFrames(
   }
 
   const own = collectFrames(character, action);
-  if (ownOnly) {
-    if (own.length > 0) return own;
-    return collectFrames("xiaobai", action).length > 0
-      ? collectFrames("xiaobai", action)
-      : fallbackIdle();
-  }
-  const shared = sharedFrames(action);
-  const merged = mergeShared(own, shared);
-  if (merged.length > 0) return merged;
+  // 单角色（小白 / 小鸡毛）只播自己的素材，不再混入双狗同框图；
+  // 同框池只给「一起出现」(duo) 用。
+  if (own.length > 0) return own;
   const xiaobai = collectFrames("xiaobai", action);
   return xiaobai.length > 0 ? xiaobai : fallbackIdle();
 }
