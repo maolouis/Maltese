@@ -117,6 +117,15 @@ static POSITION_ANIMATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 static POSITION_ANIMATING: AtomicBool = AtomicBool::new(false);
 // 当前这段位移动画的横向位移（像素）：用来区分“缩边唤醒”的纯竖直移动和“闲逛”的横向漂移。
 static POSITION_ANIMATION_DELTA_X: AtomicI32 = AtomicI32::new(0);
+// 最小化漂移（派单 2026-11-17）：
+// Windows 最小化时会把窗口挪到 (-32000, -32000) 这类哨兵坐标，尺寸也会变成 0；
+// 这段时间里任何 `outer_position()` / `outer_size()` 读到的都不是用户位置。
+// 过去的几何入口（apply_stage_geometry / ensure_island_on_screen / Moved 回调）
+// 会把它当成真实坐标夹取或 set_position/set_size 写回，于是「最小化一次，小狗就换了位置」。
+// 现在：最小化期间几何整体冻结，并在最小化前缓存真实矩形，还原后逐像素复位。
+static ISLAND_MINIMIZED: AtomicBool = AtomicBool::new(false);
+static LAST_SETTLED_ISLAND_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
+static PRE_MINIMIZE_ISLAND_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
 static NATIVE_GLASS_INITIALIZED: OnceLock<()> = OnceLock::new();
 // 主窗口是否已经 show 过。`frontend_ready` 握手会先一步把窗口显示出来，
 // 之后 `show_ready_island` 作为兜底再触发时不能重复抢焦点。
@@ -409,9 +418,152 @@ fn set_island_interaction(
     glass
 }
 
+// ---------------------------------------------------------------------------
+// 最小化漂移防护（2026-11-17 派单）
+//
+// Windows 最小化会把窗口移到 (-32000, -32000) 附近、尺寸变成 0。旧代码里
+// `apply_stage_geometry` / `ensure_island_on_screen` / `WindowEvent::Moved` 会在
+// 这个瞬间读到哨兵坐标，夹取后 `set_position`/`set_size`，等于把「还原位置」
+// 写成了别的值 —— 用户看到的就是「最小化一次，小狗回来时位置变了」。
+// 现在的规则：
+//   1) 最小化（或拿到哨兵坐标）期间，所有几何入口直接返回，不改 state、不写窗口；
+//   2) 每次几何落定时缓存真实矩形；最小化前把它冻结成 PRE_MINIMIZE；
+//   3) 还原后按 PRE_MINIMIZE 逐像素复位，再恢复常规几何计算。
+// ---------------------------------------------------------------------------
+
+/// 物理像素矩形（主窗口 outer rect）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WindowRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// Windows 最小化哨兵坐标（约 -32000）；同数量级的一律不采信。
+const MINIMIZED_SENTINEL_THRESHOLD: i32 = -30_000;
+/// 小于这个尺寸的矩形不是桌宠窗口的真实矩形（最小化 / 创建中 / 刚隐藏）。
+const MIN_SANE_ISLAND_SIZE: u32 = 32;
+
+fn is_sentinel_window_position(x: i32, y: i32) -> bool {
+    x <= MINIMIZED_SENTINEL_THRESHOLD || y <= MINIMIZED_SENTINEL_THRESHOLD
+}
+
+/// 过滤掉最小化哨兵位置 / 0 尺寸 / 明显不合理的矩形。
+fn sane_window_rect(rect: WindowRect) -> Option<WindowRect> {
+    if is_sentinel_window_position(rect.x, rect.y) {
+        return None;
+    }
+    if rect.width < MIN_SANE_ISLAND_SIZE || rect.height < MIN_SANE_ISLAND_SIZE {
+        return None;
+    }
+    Some(rect)
+}
+
+/// 读一次主窗口真实矩形（最小化期间返回 None）。
+fn read_sane_island_rect(window: &WebviewWindow) -> Option<WindowRect> {
+    let position = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    sane_window_rect(WindowRect {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
+/// 所有几何入口的第一道闸：最小化 / 还原过渡期间不重算、不写位置尺寸。
+fn island_geometry_frozen(window: &WebviewWindow) -> bool {
+    if ISLAND_MINIMIZED.load(Ordering::SeqCst) {
+        return true;
+    }
+    if window.is_minimized().unwrap_or(false) {
+        return true;
+    }
+    if let Ok(position) = window.outer_position() {
+        if is_sentinel_window_position(position.x, position.y) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 几何落定后记一笔真实矩形，作为「最小化前位置」的缓存来源。
+fn remember_settled_island_rect(window: &WebviewWindow) {
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let Some(rect) = read_sane_island_rect(window) else {
+        return;
+    };
+    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
+        *slot = Some(rect);
+    }
+}
+
+/// 检测到最小化：冻结真实矩形（重复的 Moved/Resized 事件不会覆盖第一次的快照）。
+fn note_island_minimized() {
+    ISLAND_MINIMIZED.store(true, Ordering::SeqCst);
+    // 最小化期间动画线程不能再 set_position：那会改写系统的还原位置。
+    POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
+    POSITION_ANIMATING.store(false, Ordering::SeqCst);
+    let settled = LAST_SETTLED_ISLAND_RECT
+        .lock()
+        .ok()
+        .and_then(|slot| *slot);
+    if let Some(rect) = settled {
+        if let Ok(mut slot) = PRE_MINIMIZE_ISLAND_RECT.lock() {
+            if slot.is_none() {
+                *slot = Some(rect);
+            }
+        }
+    }
+}
+
+/// 还原：按最小化前的真实矩形逐像素复位，再交回常规几何计算。
+fn restore_island_rect_after_unminimize(window: &WebviewWindow) {
+    ISLAND_MINIMIZED.store(false, Ordering::SeqCst);
+    let restore = PRE_MINIMIZE_ISLAND_RECT
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let Some(rect) = restore else {
+        remember_settled_island_rect(window);
+        return;
+    };
+    if read_sane_island_rect(window) != Some(rect) {
+        let _ = window.set_size(Size::Physical(PhysicalSize::new(rect.width, rect.height)));
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(rect.x, rect.y)));
+    }
+    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
+        *slot = Some(rect);
+    }
+}
+
+/// 最小化/还原事件统一入口（Resized / Focused / Moved 都汇到这里）：
+/// 只在状态翻转的那一帧做快照或复位，其余事件什么也不改。
+fn sync_minimize_geometry(window: &WebviewWindow) {
+    let minimized = window.is_minimized().unwrap_or(false);
+    if minimized {
+        note_island_minimized();
+        return;
+    }
+    if ISLAND_MINIMIZED.load(Ordering::SeqCst) {
+        restore_island_rect_after_unminimize(window);
+    } else {
+        remember_settled_island_rect(window);
+    }
+}
+
 // 保险：几何应用后窗口如果完全跑到工作区之外（多屏切换 / 异常位置），
 // 清掉自定义位置、回到默认锚点并显示，避免“点一下小狗就整个不见了”。
 fn ensure_island_on_screen(window: &WebviewWindow) {
+    // 最小化期间 `current_monitor()` / `outer_position()` 都是哨兵值，
+    // 一旦在这里判定“跑出工作区”就会清掉 custom_position + 重新 apply_stage_geometry，
+    // 于是「最小化一次 → 位置被重置」。最小化/还原过渡期直接跳过。
+    if island_geometry_frozen(window) {
+        return;
+    }
     let Ok(Some(monitor)) = window.current_monitor() else {
         return;
     };
@@ -3091,6 +3243,12 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
 fn show_island(app: &AppHandle) -> Result<(), String> {
     let window = main_window(app)?;
+    // 最小化态要先还原并复位「最小化前矩形」，再谈几何：否则下面的
+    // apply_stage_geometry 会读到哨兵坐标，把还原位置写坏（最小化漂移）。
+    if window.is_minimized().unwrap_or(false) || ISLAND_MINIMIZED.load(Ordering::SeqCst) {
+        let _ = window.unminimize();
+        restore_island_rect_after_unminimize(&window);
+    }
     // 已经显示时不要再套一次收起态几何：浮层/展开面板可能正把窗口放大，
     // 重算会把小狗挪走（和 show_island_no_focus 的写法保持一致）。
     // c327044 之后 show 链路变多（frontend_ready 握手 + show_ready_island 兜底 +
@@ -3226,6 +3384,11 @@ fn apply_stage_geometry(
     state: IslandWindowState,
     animate_position: bool,
 ) -> Result<(), String> {
+    // 最小化 / 还原过渡期间：读到的位置尺寸都是哨兵值，任何 set_size/set_position
+    // 都会把系统记录的「还原位置」改掉 → 最小化回来位置就变了。这里直接冻结。
+    if island_geometry_frozen(window) {
+        return Ok(());
+    }
     // 浮层打开期间窗口尺寸/位置由 set_island_overlay 独占管理，
     // 其他调用（设置同步、显示窗口等）不要插队把窗口缩回去。
     if OVERLAY_SNAPSHOT
@@ -3432,12 +3595,15 @@ fn apply_stage_geometry(
     let target = PhysicalPosition::new(x, y);
     let start = window.outer_position().map_err(|error| error.to_string())?;
     if start == target {
+        remember_settled_island_rect(window);
         return Ok(());
     }
     if !animate_position {
-        return window
+        let result = window
             .set_position(Position::Physical(target))
             .map_err(|error| error.to_string());
+        remember_settled_island_rect(window);
+        return result;
     }
 
     let window = window.clone();
@@ -3447,6 +3613,10 @@ fn apply_stage_geometry(
         let started_at = Instant::now();
         loop {
             if POSITION_ANIMATION_GENERATION.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            // 最小化期间写位置会污染系统的还原位置（最小化漂移），立刻停下。
+            if window.is_minimized().unwrap_or(false) {
                 break;
             }
             let progress = (started_at.elapsed().as_secs_f64()
@@ -3463,6 +3633,7 @@ fn apply_stage_geometry(
             thread::sleep(Duration::from_millis(8));
         }
         POSITION_ANIMATING.store(false, Ordering::SeqCst);
+        remember_settled_island_rect(&window);
     });
     Ok(())
 }
@@ -3660,6 +3831,13 @@ fn resolve_stage_position(
 }
 
 fn record_dragged_position(position: PhysicalPosition<i32>) {
+    // 最小化时系统会把窗口挪到 (-32000, -32000) 并触发 Moved；这不是用户拖拽，
+    // 写进 custom_position 就会「最小化一次位置就变了」。
+    if is_sentinel_window_position(position.x, position.y)
+        || ISLAND_MINIMIZED.load(Ordering::SeqCst)
+    {
+        return;
+    }
     // 浮层展开时窗口会主动改变尺寸/位置；这些 Moved 事件不是用户拖拽，
     // 绝不能写进 custom_position，否则关闭浮层后小狗会留下左上偏移。
     if OVERLAY_SNAPSHOT
@@ -4187,6 +4365,32 @@ mod tests {
         assert_eq!(parse_hex_color("101013"), None);
         assert_eq!(parse_hex_color("#xyzxyz"), None);
     }
+
+    // —— 最小化漂移防护（2026-11-17）——
+
+    #[test]
+    fn minimized_sentinel_positions_are_never_real_geometry() {
+        // Windows 最小化把窗口放到 (-32000, -32000)；这类坐标一律不采信。
+        assert!(is_sentinel_window_position(-32000, -32000));
+        assert!(is_sentinel_window_position(-30_000, 1080));
+        assert!(is_sentinel_window_position(100, -30_001));
+        assert!(!is_sentinel_window_position(0, 0));
+        assert!(!is_sentinel_window_position(1912, 1040));
+    }
+
+    #[test]
+    fn sane_rect_rejects_sentinel_and_zero_sized_windows() {
+        let real = WindowRect { x: 1560, y: 880, width: 259, height: 221 };
+        assert_eq!(sane_window_rect(real), Some(real));
+        // 最小化瞬间：位置是哨兵值
+        assert_eq!(
+            sane_window_rect(WindowRect { x: -32000, y: -32000, width: 259, height: 221 }),
+            None
+        );
+        // 最小化瞬间：尺寸变 0 / 只剩标题栏高度
+        assert_eq!(sane_window_rect(WindowRect { x: 1560, y: 880, width: 0, height: 0 }), None);
+        assert_eq!(sane_window_rect(WindowRect { x: 1560, y: 880, width: 259, height: 28 }), None);
+    }
 }
 
 fn build_tray(app: &App) -> tauri::Result<()> {
@@ -4299,7 +4503,23 @@ pub fn run() {
                 return;
             }
 
+            // 最小化 / 还原：同步几何冻结状态（缓存最小化前矩形 / 还原后逐像素复位）。
+            // 最小化会让窗口尺寸变 0、位置变 (-32000,-32000)，并连续发 Moved/Resized；
+            // 这些事件绝不能进 record_dragged_position，否则还原位置被写脏。
+            if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(_)) {
+                if let Some(webview) = window.app_handle().get_webview_window(WINDOW_LABEL) {
+                    sync_minimize_geometry(&webview);
+                }
+                return;
+            }
+
             if let WindowEvent::Moved(position) = event {
+                if window.is_minimized().unwrap_or(false)
+                    || ISLAND_MINIMIZED.load(Ordering::SeqCst)
+                    || is_sentinel_window_position(position.x, position.y)
+                {
+                    return;
+                }
                 record_dragged_position(*position);
                 return;
             }
@@ -4486,6 +4706,7 @@ pub fn run() {
             video_automation::stop_video_automation,
             video::video_start_session,
             video::video_list_accounts,
+            video::video_get_active_account,
             video::video_create_account,
             video::video_set_active_account,
             video::video_mark_account_ready,
