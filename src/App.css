@@ -6,8 +6,20 @@
   font-display: swap;
 }
 
+/* 聊天/插件里的 emoji 显示成白块、方框：主字体（Fusion Pixel、Segoe UI）不含彩色
+   emoji，用 unicode-range 把 emoji 码位单独指给系统彩色 emoji 字体，其余文字
+   仍走原有字体，不影响排版。 */
+@font-face {
+  font-family: "Maltese Emoji";
+  src: local("Segoe UI Emoji"), local("Noto Color Emoji"), local("Apple Color Emoji");
+  unicode-range:
+    U+200D, U+FE0E-FE0F, U+20E3, U+2122, U+2194-21FF, U+2300-23FF,
+    U+2600-27BF, U+2B00-2BFF, U+1F000-1FAFF;
+}
+
 :root {
   font-family:
+    "Maltese Emoji",
     "Segoe UI",
     Inter,
     system-ui,
@@ -54,7 +66,7 @@ input,
 }
 
 .stage--font-pixel {
-  font-family: "Fusion Pixel", "Microsoft YaHei", sans-serif;
+  font-family: "Maltese Emoji", "Fusion Pixel", "Microsoft YaHei", sans-serif;
   font-synthesis: weight;
   -webkit-font-smoothing: none;
 }
