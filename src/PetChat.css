@@ -512,3 +512,90 @@
   flex-wrap: wrap;
   gap: 4px;
 }
+
+/* ------------------------------------------------------------------
+   聊天里的字体与 emoji 回退（2026-11-17）
+   主字体 Fusion Pixel（像素字）不含彩色 emoji 与部分符号/组合字符，
+   Windows WebView2 里会退化成方块/豆腐。这里显式在聊天容器上补一条
+   完整的 emoji + 符号 + 小语种回退链：
+   - Maltese Emoji：App.css 里用 unicode-range 指向系统彩色 emoji 的 @font-face
+   - Segoe UI Emoji / Segoe UI Symbol：Windows 彩色 emoji 与符号
+   - Nirmala UI：卡纳达等组合字符（颜文字里的 ಥ、•̀ 等）
+   只影响 emoji/符号码位，中文正文仍由 Fusion Pixel 渲染。
+   ------------------------------------------------------------------ */
+.pet-chat,
+.pet-chat__list,
+.pet-chat__bubble,
+.pet-chat__bubble p,
+.pet-chat__text,
+.pet-chat__composer,
+.pet-chat__composer textarea,
+.pet-chat__hint,
+.pet-chat__state-notice,
+.pet-state,
+.pet-chat__reasoning {
+  font-family:
+    "Maltese Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Nirmala UI",
+    "Fusion Pixel",
+    "Microsoft YaHei",
+    "Segoe UI",
+    sans-serif;
+}
+
+/* emoji 独立成段时别被行高裁掉，也别被像素字体强制等宽 */
+.pet-chat__bubble p,
+.pet-chat__text {
+  font-variant-emoji: normal;
+  font-synthesis: none;
+}
+
+/* ------------------------------------------------------------------
+   表情包信使：模型在回复末尾输出 <sticker:xxx>，前端从素材库取 GIF 内联显示。
+   96×96、圆角、点击放大；任何取图失败都不渲染（绝不显示破图）。
+   ------------------------------------------------------------------ */
+.pet-chat__sticker {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.pet-chat__sticker img {
+  display: block;
+  width: 96px;
+  height: 96px;
+  border-radius: 10px;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.pet-chat__sticker-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: rgba(20, 24, 35, 0.55);
+  cursor: zoom-out;
+}
+
+.pet-chat__sticker-preview img {
+  width: min(280px, 76vw);
+  height: min(280px, 76vh);
+  padding: 10px;
+  border-radius: 14px;
+  background: #fff;
+  object-fit: contain;
+  image-rendering: auto;
+}
