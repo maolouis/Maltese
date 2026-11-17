@@ -411,7 +411,7 @@ export function PetChat() {
       const depth = chatConfig.thinkingDepth;
       const historyTurns = history.slice(-16).map((item) => ({ role: item.role, content: item.text }));
 
-      const runAttempt = async (injectVitals: boolean): Promise<string> => {
+      const runAttempt = async (injectVitals: boolean, useStream = chatConfig.stream): Promise<string> => {
         const requestId = createId();
         const active = { requestId, cancelled: false };
         activeRequestRef.current = active;
@@ -430,7 +430,7 @@ export function PetChat() {
           rejectGuard?.(new Error(reason));
         };
         let watchdog: number | null = null;
-        const unlisten = chatConfig.stream
+        const unlisten = useStream
           ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
             if (event.payload.requestId !== requestId || active.cancelled) return;
             // 任何事件都算「还活着」：思考流也算，避免思考档位被首字超时误杀。
@@ -449,7 +449,7 @@ export function PetChat() {
           watchdog = window.setInterval(() => {
             if (active.cancelled) return;
             const now = Date.now();
-            if (!chatConfig.stream) {
+            if (!useStream) {
               // 非流式没有中间事件，只按总时长兜底。
               if (now - startedAt >= CHAT_TOTAL_TIMEOUT_MS[depth]) {
                 failWith("模型这轮太慢了，已停止。可以调浅思考或稍后重试。");
@@ -480,7 +480,7 @@ export function PetChat() {
               reasoningBudgetTokens: thinkingBudget(depth),
             },
           };
-          const reply = chatConfig.stream
+          const reply = useStream
             ? await Promise.race([invoke<string>("local_chat_stream", payload), guard])
             : await Promise.race([
                 invoke<string>("local_chat", {
@@ -507,17 +507,30 @@ export function PetChat() {
       };
 
       const injected = Boolean(buildChatVitalsContext());
+      const isUserStop = (error: unknown): boolean =>
+        String(error instanceof Error ? error.message : error).includes("已停止");
       try {
-        return await runAttempt(injected);
+        return await runAttempt(injected, chatConfig.stream);
       } catch (error) {
+        if (isUserStop(error)) throw error;
+        // 1) 模板拒绝注入：去掉状态上下文再试一次（不让整条消息失败）。
         if (injected && isTemplateRejection(error)) {
-          // 模型模板不接受 system 消息：去掉状态上下文重试一次，而不是让整条消息失败。
           console.warn("[chat] template rejected vitals context, retrying without it", error);
           setStreamingReply("");
           setStreamingReasoning("");
-          return await runAttempt(false);
+          try {
+            return await runAttempt(false, chatConfig.stream);
+          } catch (retryError) {
+            if (isUserStop(retryError)) throw retryError;
+            console.warn("[chat] streaming retry failed, falling back to non-stream", retryError);
+          }
+        } else {
+          console.warn("[chat] streaming attempt failed, falling back to non-stream", error);
         }
-        throw error;
+        // 2) 最后兜底：退回非流式也要有正文（关思考、不注入状态）。
+        setStreamingReply("");
+        setStreamingReasoning("");
+        return await runAttempt(false, false);
       }
     },
     [
