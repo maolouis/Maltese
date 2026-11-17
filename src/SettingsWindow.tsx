@@ -17,6 +17,7 @@ import { UpdatePanel } from "./UpdatePanel";
 import { PET_CHARACTERS, savePetCharacter, usePetCharacter, type PetCharacterId } from "./petCharacters";
 import { TuckGifControl } from "./TuckGifControl";
 import { CustomSoundControl } from "./CustomSoundControl";
+import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -75,6 +76,8 @@ type PetSettings = {
   tuckedVisibleHeight: number;
   /** 多实例联动：主狗动作传染给陪玩狗 / Bongo 呼应，默认开。 */
   petLinkage: boolean;
+  /** 消息只提醒、不显示文字；开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
+  messagePreview: boolean;
 };
 
 const DEFAULTS: PetSettings = {
@@ -121,9 +124,12 @@ const DEFAULTS: PetSettings = {
   sleepAfterSeconds: 150,
   tuckedVisibleHeight: 80,
   petLinkage: true,
+  messagePreview: false,
 };
 
 function load(): PetSettings {
+  // 隐私：旧版「读取消息内容」开关一律按关闭处理并删掉（不复活 OCR）。
+  dropLegacyWechatReadContent(window.localStorage);
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
@@ -587,8 +593,8 @@ export default function SettingsWindow() {
         <h2>消息提醒</h2>
         <div className="sw-row">
           <span className="sw-copy">
-            <span className="sw-label">QQ 消息读取</span>
-            <span className="sw-hint">需要 Windows“通知访问”权限，并且 QQ 本身要开启系统通知；缺一就收不到内容</span>
+            <span className="sw-label">QQ 消息提醒</span>
+            <span className="sw-hint">需要 Windows「通知访问」权限，并且 QQ 本身要开启系统通知；只提醒有新通知，不读取消息内容</span>
           </span>
           <button
             type="button"
@@ -603,7 +609,7 @@ export default function SettingsWindow() {
         <div className="sw-row">
           <span className="sw-copy">
             <span className="sw-label">微信提醒</span>
-            <span className="sw-hint">通过任务栏闪烁判断新消息；窗口未最小化时本地识别会话首条预览，最小化时只显示通用提醒</span>
+            <span className="sw-hint">通过任务栏闪烁判断新消息；只提醒有新消息，不读取会话内容</span>
           </span>
           <button
             type="button"
@@ -615,6 +621,12 @@ export default function SettingsWindow() {
             开启
           </button>
         </div>
+        <Switch
+          label="显示消息预览"
+          hint="默认关闭。本版本不读取聊天内容（OCR 已移除），打开后也只显示「来源 + 有新消息」这类通用提示"
+          checked={settings.messagePreview}
+          onChange={(value) => update("messagePreview", value)}
+        />
       </section>
 
       <section className="sw-card">

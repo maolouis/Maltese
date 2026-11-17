@@ -171,3 +171,26 @@ pnpm tauri build --no-bundle
 - **已核实**：本机命令输出、代码行、官方文档原文可复核。
 - **推测**：基于代码/系统行为的合理推断，未经测量（如 PrintWindow 黑帧、OCR 单次耗时、QQ 是否闪任务栏）。
 - **需实测**：依赖用户机器/客户端版本、需一次真实消息才能判定的（微信 4.1.15.56 是否发 toast、标题未读数、QQ 通知授权恢复、A 在本机可用性）。
+---
+
+## 7. 落地记录（2026-11-17）
+
+已按本文第 4 节执行「只提醒，不显示文字」：
+
+- **删除 OCR 链路**：`src-tauri/src/wechat_ocr.rs` 整体删除；`lib.rs` 去掉 `mod wechat_ocr` 与
+  `set_wechat_read_content` 命令注册；前端去掉 `ScanText` 按钮、`readContent` 状态与
+  `focusd-island-wechat-read-content` 旧键（启动时按 false 处理并清理，见 `src/messagePrivacy.ts`）。
+- **源头剥离正文**：`wechat_reminders::ReminderSnapshot` 删除 `title/body/content_error/read_content`，
+  只保留 `revision/enabled/status/pending/lastAttentionAt/error`；QQ 侧新增 `NotificationItem`
+  （只有 `id/createdAt`），Windows 通知的标题/正文只留在 Rust 内部用于「新通知 vs 更新」判断，
+  不序列化、不进事件、不进日志。
+- **保留字段**：来源 App、`enabled/status/pending`、到达时间、QQ 通知条数；
+  UI 只显示「微信有新消息 / QQ 有 N 条通知 + 时间」。
+- **新开关**：设置页（岛内 + 独立设置窗口）新增「显示消息预览」，默认关；说明里明确
+  本版本不读取聊天内容，打开也只显示通用提示。
+- **QQ 未授权**：`GetAccessStatus=Denied/Required` 时面板显示「通知权限被拒绝 / 需要通知权限」
+  并提供授权、打开系统通知设置入口（已有逻辑，本轮同步文案）。
+- **验证**：`tsc --noEmit`、`cargo check --all-targets`、`node --test`（新增
+  `tests/message-privacy.test.mjs` 与 Rust `serialized_notification_items_contain_no_message_text`）。
+
+仍建议后续用真实微信/QQ 消息复测一次：只应出现提醒与时间，诊断日志里不应出现任何聊天文本。

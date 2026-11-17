@@ -51,13 +51,31 @@ const DIAGNOSTIC_TITLE: &str = "FocuSD QQ 通知诊断";
 const DIAGNOSTIC_BODY: &str = "这是本机通道测试，不是聊天消息。";
 static SERVICE: OnceLock<Arc<NotificationService>> = OnceLock::new();
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// 内部通知记录：`title/body` 只用来判断「这条通知是新出现还是被更新」，
+/// **从不序列化、不写日志、不进 localStorage**（隐私要求：只提醒，不显示文字）。
+#[derive(Clone, Debug, PartialEq)]
 pub struct QQNotification {
     id: String,
     title: String,
     body: String,
     created_at: i64,
+}
+
+/// 暴露给前端的通知条目：只有身份和时间，没有发送人/正文。
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationItem {
+    id: String,
+    created_at: i64,
+}
+
+impl From<&QQNotification> for NotificationItem {
+    fn from(item: &QQNotification) -> Self {
+        Self {
+            id: item.id.clone(),
+            created_at: item.created_at,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -77,7 +95,7 @@ pub struct NotificationSnapshot {
     revision: u64,
     enabled: bool,
     status: NotificationStatus,
-    items: Vec<QQNotification>,
+    items: Vec<NotificationItem>,
     error: Option<String>,
 }
 
@@ -352,7 +370,12 @@ fn monitor(service: Arc<NotificationService>, receiver: mpsc::Receiver<()>) {
                     state.snapshot.status = NotificationStatus::Listening;
                     state.snapshot.error = channel_error;
                     let newest = state.buffer.sync(current);
-                    state.snapshot.items = state.buffer.items.clone();
+                    state.snapshot.items = state
+                        .buffer
+                        .items
+                        .iter()
+                        .map(NotificationItem::from)
+                        .collect();
                     newest
                 }
                 Ok((status, _)) => {
@@ -817,10 +840,8 @@ mod tests {
     #[test]
     fn diagnostic_reports_never_include_chat_content() {
         let snapshot = NotificationSnapshot {
-            items: vec![QQNotification {
+            items: vec![NotificationItem {
                 id: "private-id".into(),
-                title: "private-sender".into(),
-                body: "private-message".into(),
                 created_at: 123,
             }],
             ..Default::default()
@@ -829,6 +850,21 @@ mod tests {
         assert_eq!(report["itemCount"], 1);
         assert!(!report.to_string().contains("private-"));
         assert!(report.get("items").is_none());
+    }
+
+    #[test]
+    fn serialized_notification_items_contain_no_message_text() {
+        let item = NotificationItem::from(&QQNotification {
+            id: "QQ:1".into(),
+            title: "private-sender".into(),
+            body: "private-message".into(),
+            created_at: 456,
+        });
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(!json.contains("private-"));
+        assert!(!json.contains("sender"));
+        assert!(json.contains("\"id\":\"QQ:1\""));
+        assert!(json.contains("\"createdAt\":456"));
     }
 
     #[test]

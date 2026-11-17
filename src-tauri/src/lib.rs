@@ -20,7 +20,6 @@ mod web_search;
 mod qq_notifications;
 mod qq_mail;
 mod wechat_reminder_source;
-mod wechat_ocr;
 mod wechat_reminders;
 mod translation;
 mod wake_shortcut;
@@ -4358,7 +4357,6 @@ pub fn run() {
             netease::media_press_key,
             netease::netease_focus,
             wechat_reminders::set_wechat_reminders_enabled,
-            wechat_reminders::set_wechat_read_content,
             dsh_chat::dsh_chat,
             local_chat::local_chat,
             local_chat::local_chat_stream,

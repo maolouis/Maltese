@@ -65,6 +65,7 @@ import {
 import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
+import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { resolvePetGif } from "./petAssets";
 import {
   rotationFramesForState,
@@ -384,6 +385,8 @@ type IslandSettings = {
   fullscreenHideBongo: boolean;
   /** 多实例联动：主狗动作传染给陪玩狗 / Bongo 呼应（默认开）。 */
   petLinkage: boolean;
+  /** 消息只提醒、不显示文字；这个开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
+  messagePreview: boolean;
   fpsMode: PetFpsMode;
   bubbleOn: boolean;
   bubbleDurationMs: number;
@@ -677,6 +680,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   fullscreenHideExtras: true,
   fullscreenHideBongo: true,
   petLinkage: true,
+  messagePreview: false,
   fpsMode: "balanced",
   bubbleOn: true,
   bubbleDurationMs: 6000,
@@ -704,6 +708,8 @@ const DEFAULT_SETTINGS: IslandSettings = {
 };
 // 本次版本默认帮用户打开微信 / QQ 消息提醒（点击开关仍可关闭）。
 try {
+  // 隐私：删掉旧版「读取消息内容」开关，旧值一律按关闭处理（不复活 OCR）。
+  dropLegacyWechatReadContent(window.localStorage);
   const reminderFlag = "maltese-reminders-default-on-v2";
   if (!window.localStorage.getItem(reminderFlag)) {
     window.localStorage.setItem("focusd-island-wechat-reminders-enabled", "true");
@@ -962,6 +968,8 @@ function normalizeSettings(
     fullscreenHideBongo: settings?.fullscreenHideBongo !== false,
     // 实例联动默认开（产品口径）：只有显式关掉才 false。
     petLinkage: settings?.petLinkage !== false,
+    // 消息预览默认关：只有显式打开才 true（旧版 read-content 键已在启动时清掉）。
+    messagePreview: settings?.messagePreview === true,
     fpsMode: settings?.fpsMode === "smooth" || settings?.fpsMode === "normal" || settings?.fpsMode === "saver"
       ? settings.fpsMode
       : DEFAULT_SETTINGS.fpsMode,
@@ -1488,12 +1496,19 @@ export function IslandShell({
   const wechatPending = wechatReminders.snapshot.pending;
   const wechatPreviewAt = wechatReminders.previewReceivedAt;
   const [latestPreviewAt, setLatestPreviewAt] = useState(0);
+  // 消息预览只有「来源 + 通用文案」：Rust 侧不再产出任何聊天正文（2026-11-17 隐私改造），
+  // 云朵气泡与收起岛文字都不拼「发送人·正文」。
   const preview = latestMessagePreview([
-    qqPreview ? { ...qqPreview, source: "qq", receivedAt: qqNotifications.previewReceivedAt ?? 0 } : null,
+    qqPreview ? {
+      source: "qq",
+      title: t.messages.qqNotifications,
+      body: t.messages.newNotification,
+      receivedAt: qqNotifications.previewReceivedAt ?? 0,
+    } : null,
     wechatPreviewAt !== null ? {
       source: "wechat",
-      title: wechatReminders.snapshot.title?.trim() || t.messages.wechat,
-      body: wechatReminders.snapshot.body?.trim() || t.messages.newReminder,
+      title: t.messages.wechat,
+      body: t.messages.newReminder,
       receivedAt: wechatPreviewAt,
     } : null,
     qqMail.preview ? { source: "qqMail", title: qqMail.preview.sender, body: qqMail.preview.subject, receivedAt: qqMail.previewReceivedAt ?? 0 } : null,
@@ -2854,6 +2869,12 @@ function LayoutEditor({
         <div className="settings-section__header"><span>{t.settings.messageReception}</span></div>
         <QQNotificationControls controller={qqNotifications} />
         <WeChatReminderControls controller={wechatReminders} />
+        <ToggleControl
+          label={t.messagePreview.label}
+          checked={settings.messagePreview}
+          onChange={(messagePreview) => onSettingsChange({ ...settings, messagePreview })}
+        />
+        <p className="settings-section__hint">{t.messagePreview.hint}</p>
       </section>
 
       <section className="settings-section settings-section--companion">
@@ -7405,20 +7426,10 @@ function IslandApp({
         ? { title: qqMail.preview.sender, body: qqMail.preview.subject, at: qqMail.previewReceivedAt ?? 0 }
         : null) ??
       (qqNotifications.preview
-        ? {
-            title: (qqNotifications.preview as { title?: string; sender?: string }).title
-              ?? (qqNotifications.preview as { sender?: string }).sender
-              ?? "QQ",
-            body: (qqNotifications.preview as { body?: string }).body ?? "新消息",
-            at: qqNotifications.previewReceivedAt ?? 0,
-          }
+        ? { title: t.messages.qqNotifications, body: t.messages.newNotification, at: qqNotifications.previewReceivedAt ?? 0 }
         : null) ??
       (wechatReminders.previewReceivedAt
-        ? {
-            title: wechatReminders.snapshot.title?.trim() || "微信",
-            body: wechatReminders.snapshot.body?.trim() || "收到新消息",
-            at: wechatReminders.previewReceivedAt,
-          }
+        ? { title: t.messages.wechat, body: t.messages.newReminder, at: wechatReminders.previewReceivedAt }
         : null);
     if (!candidate || candidate.at <= lastCloudAtRef.current) {
       return;
@@ -7426,7 +7437,7 @@ function IslandApp({
     lastCloudAtRef.current = candidate.at;
     startPetInteraction("duo-wave", "curious");
     showCloudBubble(candidate.title, candidate.body);
-  }, [mode, qqMail.preview, qqMail.previewReceivedAt, qqNotifications.preview, qqNotifications.previewReceivedAt, settings.bubbleOn, showCloudBubble, startPetInteraction, wechatReminders.previewReceivedAt, wechatReminders.snapshot.body, wechatReminders.snapshot.title]);
+  }, [mode, qqMail.preview, qqMail.previewReceivedAt, qqNotifications.preview, qqNotifications.previewReceivedAt, settings.bubbleOn, showCloudBubble, startPetInteraction, wechatReminders.previewReceivedAt]);
 
   // 正在播放的曲目切换 → 云朵气泡（带一点情感互动）
   const lastTrackRef = useRef<string | null>(null);

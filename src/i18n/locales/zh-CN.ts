@@ -74,6 +74,7 @@ const zhCN: Translations = {
     wechatReminders: "微信提醒",
     newReminder: "有新提醒",
     newMessage: "收到一条新消息",
+    newNotification: "有新通知，点开查看",
     newMail: "收到一封新邮件",
     wechatPreview: "你收到了一条消息",
     openNewMail: "查看新邮件",
@@ -116,6 +117,9 @@ const zhCN: Translations = {
       error: "连接失败",
     },
     openNotification: (title) => `打开 QQ：${title}`,
+    summary: (count) => count === 0 ? "暂无通知" : `共 ${count} 条通知（不读取消息内容）`,
+    itemLabel: "QQ 通知",
+    itemHint: "只提醒有新通知，不显示发送人和内容",
   },
   wechat: {
     desktopOnly: "请在 Windows 桌面版中使用微信提醒。",
@@ -123,9 +127,7 @@ const zhCN: Translations = {
     pause: "暂停微信提醒",
     open: "打开微信",
     noReminders: "暂无提醒",
-    readContent: "读取消息内容",
-    readContentHint: "在本地识别微信会话列表文字，不保存、不上传；微信最小化时无法读取。",
-    contentUnavailable: "微信窗口最小化或未识别到文字，展开微信后可显示具体内容。",
+    privacyNote: "只提醒有新消息，不读取发送人和聊天内容。",
     status: {
       disabled: "已暂停",
       waiting: "连接中",
@@ -664,6 +666,9 @@ const zhCN: Translations = {
     hint: "主狗被摸头/喂食/开心时，陪玩狗会跟着动一下；Bongo 会敲鼓呼应。需要小狗数量 ≥2 或打开 Bongo。",
     companionLines: ["我也要！", "摸摸我～", "好吃！", "我也开心！", "等等我！", "嘿嘿～"],
   },
-};
+  messagePreview: {
+    label: "显示消息预览",
+    hint: "默认关闭。本版本按隐私设计不读取聊天内容（OCR 已移除），即使打开也只会显示「来源 + 有新消息」这类通用提示。",
+  },};
 
 export default zhCN;

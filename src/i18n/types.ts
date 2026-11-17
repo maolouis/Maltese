@@ -76,6 +76,7 @@ export type Translations = {
     wechatReminders: string;
     newReminder: string;
     newMessage: string;
+    newNotification: string;
     newMail: string;
     wechatPreview: string;
     openNewMail: string;
@@ -118,6 +119,9 @@ export type Translations = {
       error: string;
     };
     openNotification: (title: string) => string;
+    summary: (count: number) => string;
+    itemLabel: string;
+    itemHint: string;
   };
   wechat: {
     desktopOnly: string;
@@ -125,9 +129,7 @@ export type Translations = {
     pause: string;
     open: string;
     noReminders: string;
-    readContent: string;
-    readContentHint: string;
-    contentUnavailable: string;
+    privacyNote: string;
     status: {
       disabled: string;
       waiting: string;
@@ -636,5 +638,9 @@ export type Translations = {
       saved: string;
       save: string;
     };
+  };
+  messagePreview: {
+    label: string;
+    hint: string;
   };
 };

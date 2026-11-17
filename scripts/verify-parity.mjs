@@ -47,7 +47,7 @@ const features = [
   { name: "插件页与台球", anchors: ["PluginsPanel", "Billiards", "desktop_icons_move"] },
   { name: "固定标签到桌面", anchors: ["PinnedPanel", "pin_page_to_desktop"] },
   { name: "翻译窗口", anchors: ["TranslationWindow", "translation"] },
-  { name: "消息（QQ/微信/邮箱）", anchors: ["qq_mail", "qq_notifications", "wechat_ocr"] },
+  { name: "消息（QQ/微信/邮箱）", anchors: ["qq_mail", "qq_notifications", "wechat_reminder_source"] },
   { name: "更新链路", anchors: ["make-latest-json", "prepare-release-config", "updater"] },
   { name: "前端外置协议", anchors: ["web_protocol", "register_uri_scheme_protocol", "get_pet_asset_base"] },
   { name: "打包卫生检查", anchors: ["verify-packaging"] },

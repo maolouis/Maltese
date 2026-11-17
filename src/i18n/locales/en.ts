@@ -74,6 +74,7 @@ const en: Translations = {
     wechatReminders: "WeChat reminders",
     newReminder: "New reminder",
     newMessage: "New message",
+    newNotification: "New notification — open to view",
     newMail: "New email",
     wechatPreview: "You received a message",
     openNewMail: "View new email",
@@ -116,6 +117,9 @@ const en: Translations = {
       error: "Connection failed",
     },
     openNotification: (title) => `Open QQ: ${title}`,
+    summary: (count) => count === 0 ? "No notifications" : `${count} notification${count === 1 ? "" : "s"} (content not read)`,
+    itemLabel: "QQ notification",
+    itemHint: "Reminder only; sender and content are never read",
   },
   wechat: {
     desktopOnly: "Use the Windows desktop app for WeChat reminders.",
@@ -123,9 +127,7 @@ const en: Translations = {
     pause: "Pause WeChat reminders",
     open: "Open WeChat",
     noReminders: "No reminders",
-    readContent: "Read message content",
-    readContentHint: "Reads the WeChat chat list locally with OCR; nothing is saved or uploaded. Unavailable while WeChat is minimized.",
-    contentUnavailable: "WeChat is minimized or no text was recognized. Restore WeChat to see the message content.",
+    privacyNote: "Reminders only: sender and chat content are never read.",
     status: {
       disabled: "Paused",
       waiting: "Connecting",
@@ -661,6 +663,9 @@ const en: Translations = {
     hint: "When the main dog is petted, fed or happy, companion dogs react too and Bongo taps along. Needs more than one dog or Bongo enabled.",
     companionLines: ["Me too!", "Pat me~", "Yummy!", "So happy!", "Wait for me!", "Hehe~"],
   },
-};
+  messagePreview: {
+    label: "Show message preview",
+    hint: "Off by default. This version does not read chat content (OCR removed), so even when enabled you only see generic text such as \"source + new message\".",
+  },};
 
 export default en;

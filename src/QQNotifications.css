@@ -319,3 +319,11 @@
     transition: none;
   }
 }
+
+/* 只提醒、不显示文字：面板顶部一行汇总（N 条通知，不读取内容）。 */
+.qq-panel__summary {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b7280;
+}

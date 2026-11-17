@@ -1,8 +1,5 @@
-use crate::{
-    wechat_ocr::{self, ChatPreview},
-    wechat_reminder_source::{
-        installed_executable, normalized_path, ReminderListener, ReminderSignal,
-    },
+use crate::wechat_reminder_source::{
+    installed_executable, normalized_path, ReminderListener, ReminderSignal,
 };
 use serde::Serialize;
 use std::{
@@ -28,6 +25,9 @@ use windows::{
 
 static SERVICE: OnceLock<Arc<ReminderService>> = OnceLock::new();
 
+/// 微信提醒状态：**只有「有新消息」这个信号**，不包含发送人、正文或任何聊天文本。
+/// （2026-11-17 按 `docs/research-wechat-qq-message-source.md` 结论删除 OCR 链路：
+/// 不再截屏/OCR，也不再把会话文本写进事件、日志或 localStorage。）
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReminderSnapshot {
@@ -37,10 +37,6 @@ pub struct ReminderSnapshot {
     pending: bool,
     last_attention_at: Option<u64>,
     error: Option<String>,
-    title: Option<String>,
-    body: Option<String>,
-    content_error: Option<String>,
-    read_content: bool,
 }
 
 impl Default for ReminderSnapshot {
@@ -52,10 +48,6 @@ impl Default for ReminderSnapshot {
             pending: false,
             last_attention_at: None,
             error: None,
-            title: None,
-            body: None,
-            content_error: None,
-            read_content: true,
         }
     }
 }
@@ -63,7 +55,6 @@ impl Default for ReminderSnapshot {
 struct ReminderState {
     snapshot: ReminderSnapshot,
     generation: u64,
-    read_content: bool,
 }
 
 impl Default for ReminderState {
@@ -71,8 +62,6 @@ impl Default for ReminderState {
         Self {
             snapshot: ReminderSnapshot::default(),
             generation: 0,
-            // 默认开启本地 OCR；图像只在内存中处理，不落盘、不上传。
-            read_content: true,
         }
     }
 }
@@ -87,67 +76,28 @@ impl ReminderState {
             revision: self.snapshot.revision + 1,
             enabled,
             status: if enabled { "waiting" } else { "disabled" }.into(),
-            read_content: self.read_content,
             ..Default::default()
         };
         true
     }
 
-    #[cfg(test)]
+    /// 只处理「有新消息 / 用户点开微信确认」两种信号，不接触任何聊天内容。
     fn apply(&mut self, generation: u64, signal: ReminderSignal, now: u64) -> bool {
-        self.apply_with_content(generation, signal, now, None)
-    }
-
-    fn apply_with_content(
-        &mut self,
-        generation: u64,
-        signal: ReminderSignal,
-        now: u64,
-        content: Option<ChatPreview>,
-    ) -> bool {
         if !self.snapshot.enabled || self.generation != generation {
             return false;
         }
         match signal {
             ReminderSignal::Attention => {
                 let first = !self.snapshot.pending;
-                let title = content.as_ref().map(|item| item.title.clone());
-                let body = content.as_ref().map(|item| item.body.clone());
-                if first {
-                    self.snapshot.pending = true;
-                    self.snapshot.last_attention_at = Some(now);
-                    self.snapshot.content_error = None;
-                }
-                let changed = first
-                    || (title.is_some()
-                        && (self.snapshot.title != title || self.snapshot.body != body));
-                if changed {
-                    if title.is_some() {
-                        self.snapshot.title = title;
-                        self.snapshot.body = body;
-                        self.snapshot.content_error = None;
-                    }
-                } else if !first {
+                if !first {
+                    // 已经是 pending：重复的任务栏闪烁不再产生新事件。
                     return false;
                 }
+                self.snapshot.pending = true;
+                self.snapshot.last_attention_at = Some(now);
             }
             ReminderSignal::Activated if self.snapshot.pending => self.snapshot.pending = false,
             _ => return false,
-        }
-        self.snapshot.revision += 1;
-        true
-    }
-
-    fn set_read_content(&mut self, enabled: bool) -> bool {
-        if self.read_content == enabled {
-            return false;
-        }
-        self.read_content = enabled;
-        self.snapshot.read_content = enabled;
-        if !enabled {
-            self.snapshot.title = None;
-            self.snapshot.body = None;
-            self.snapshot.content_error = None;
         }
         self.snapshot.revision += 1;
         true
@@ -235,81 +185,21 @@ pub fn set_wechat_reminders_enabled(enabled: bool) -> Result<ReminderSnapshot, S
     Ok(snapshot)
 }
 
-#[tauri::command]
-pub fn set_wechat_read_content(enabled: bool) -> Result<ReminderSnapshot, String> {
-    let service = service()?;
-    let (snapshot, changed) = {
-        let mut state = service.state.lock().map_err(|_| "微信提醒状态不可用。")?;
-        let changed = state.set_read_content(enabled);
-        (state.snapshot.clone(), changed)
-    };
-    if changed {
-        publish(service, snapshot.clone());
-    }
-    Ok(snapshot)
-}
-
 fn signal(service: &ReminderService, generation: u64, event: ReminderSignal) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    // 先尝试读取会话列表，再把“有新消息”和真实内容放在同一次事件里发出，
-    // 避免先弹一条通用气泡、一秒后又弹一条带内容的。
-    let should_read = event == ReminderSignal::Attention
-        && service.state.lock().is_ok_and(|state| {
-            state.snapshot.enabled
-                && state.generation == generation
-                && (!state.snapshot.pending || state.snapshot.title.is_none())
-                && state.read_content
-        });
-    let mut content_error = None;
-    let content = if should_read {
-        match content_window() {
-            Some(window) => match wechat_ocr::read_chat_preview(window) {
-                Ok(preview) => {
-                    if preview.is_none() {
-                        content_error = Some(
-                            "微信窗口已最小化，无法读取会话预览；保持微信窗口打开即可显示正文。"
-                                .to_string(),
-                        );
-                    }
-                    preview
-                }
-                Err(error) => {
-                    content_error = Some(error);
-                    None
-                }
-            },
-            None => {
-                content_error = Some(
-                    "未找到已打开的微信主窗口；请从任务栏打开微信后重试。".to_string(),
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
     let snapshot = {
         let Ok(mut state) = service.state.lock() else {
             return;
         };
-        if !state.apply_with_content(generation, event, now, content) {
+        if !state.apply(generation, event, now) {
             return;
-        }
-        if event == ReminderSignal::Attention && content_error.is_some() {
-            state.snapshot.content_error = content_error;
         }
         state.snapshot.clone()
     };
     publish(service, snapshot);
-}
-
-fn content_window() -> Option<HWND> {
-    let executable = installed_executable().ok()?;
-    let search = existing_wechat_windows(&executable).ok()?;
-    preferred_window(&search.found).map(|window| window.handle)
 }
 
 fn connection(service: &ReminderService, generation: u64, error: Option<String>) {
@@ -661,17 +551,6 @@ mod tests {
             },
         ];
         assert_eq!(preferred_window(&windows).unwrap().started_at, 10);
-    }
-
-    #[test]
-    #[ignore = "Requires a visible WeChat desktop session; captures the conversation preview"]
-    fn reads_live_wechat_chat_preview() {
-        let window = content_window().expect("A visible WeChat main window is required");
-        let preview = wechat_ocr::read_chat_preview(window)
-            .expect("OCR should run")
-            .expect("A visible WeChat conversation is required");
-        println!("{preview:?}");
-        assert!(!preview.title.is_empty());
     }
 
     #[test]

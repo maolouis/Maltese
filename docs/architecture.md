@@ -15,7 +15,7 @@ src/main.tsx           入口：按 ?window= 选择根组件（12 个窗口共�
 ```
 
 Rust 侧一文件一能力域：`lib.rs`（壳与命令注册）、`desktop_icons`、`desktop_extras`、`local_chat`、
-`dsh_api`、`qq_mail`、`qq_notifications`、`wechat_ocr`、`media_control`、`translation`、
+`dsh_api`、`qq_mail`、`qq_notifications`、`wechat_reminder_source`、`media_control`、`translation`、
 `video_automation`、`web_protocol`（前端产物外置）等。
 
 ## 2. 前端外置（`web_protocol.rs`）
