@@ -129,8 +129,9 @@ pub fn restore_extra_pets(app: &AppHandle) {
     let _ = sync_bongo(app, &config);
     let _ = sync_cursor(app, &config);
 }
-fn work_area(app: &AppHandle) -> (i32, i32, i32, i32, f64) {
-    if let Ok(Some(monitor)) = app.primary_monitor() {
+fn work_area(app: &AppHandle, monitor_key: Option<&str>) -> (i32, i32, i32, i32, f64) {
+    // 多屏放置：优先用户指定的那块屏（指纹匹配），拿不到再回主屏。
+    if let Some(monitor) = crate::find_extras_monitor(app, monitor_key) {
         let area = monitor.work_area();
         return (
             area.position.x,
@@ -143,9 +144,23 @@ fn work_area(app: &AppHandle) -> (i32, i32, i32, i32, f64) {
     (0, 0, 1920, 1080, 1.0)
 }
 
+/// 最近一次同步用的配置（用于「切屏 / 显示回来」时按原样重排）。
+pub fn last_config() -> Option<DesktopExtrasConfig> {
+    LAST_CONFIG.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// 立刻按配置重排一次（切屏后不需要等前端重新下发设置）。
+pub fn sync_extras_now(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
+    sync_companions(app, config.pet_count)?;
+    sync_bongo(app, config)?;
+    let _ = sync_cursor(app, config);
+    Ok(())
+}
+
 fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
     let wanted = count.saturating_sub(1).min(COMPANION_MAX);
-    let (left, top, width, height, scale) = work_area(app);
+    let target = crate::extras_target_monitor_key(app);
+    let (left, top, width, height, scale) = work_area(app, target.as_deref());
     for index in 1..=COMPANION_MAX {
         let label = format!("{COMPANION_PREFIX}{index}");
         let window = if index <= wanted && !pets_hidden() {
@@ -190,7 +205,9 @@ fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Strin
     let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(width, height)));
     let _ = window.set_ignore_cursor_events(config.bongo_click_through);
     if wants_visible {
-        let (left, top, screen_w, screen_h, scale) = work_area(app);
+        // Bongo 优先放「Bongo 屏幕」，没单独指定就跟随主岛所在屏。
+        let target = crate::extras_target_monitor_key(app);
+        let (left, top, screen_w, screen_h, scale) = work_area(app, target.as_deref());
         let phys_w = (width * scale).round() as i32;
         let phys_h = (height * scale).round() as i32;
         let margin = (24.0 * scale).round() as i32;
@@ -251,7 +268,9 @@ fn sync_cursor(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Stri
                 continue;
             }
             let size = CURSOR_SIZE.load(Ordering::SeqCst) as f64;
-            let (left, top, width, height, scale) = work_area(&app);
+            // 跟随宠跟着光标走，工作区用光标所在屏即可（这里用当前屏等效的 primary）；
+            // 多屏时它本来就在光标旁边，不需要额外偏好。
+            let (left, top, width, height, scale) = work_area(&app, None);
             let phys = (size * scale).round() as i32;
             let mut x = point.x + (10.0 * scale) as i32;
             let mut y = point.y + (12.0 * scale) as i32;

@@ -739,6 +739,18 @@ const en: Translations = {
       },
     },
   },
+  screenPlacement: {
+    title: "Screen",
+    hint: "With multiple monitors you can put the pet or Bongo on a secondary screen; corner locking, edge snapping and custom positions stay inside that screen. If the secondary screen is unplugged the pet returns to the main screen.",
+    island: "Pet screen",
+    bongo: "Bongo screen",
+    followLast: "Follow last position",
+    followIsland: "Follow the pet",
+    primary: "Primary",
+    onlyOne: "Only one screen",
+    missing: "Secondary screen disconnected, back to primary",
+    resolution: (width, height, scale) => `${width}×${height} @${scale}%`,
+  },
   petVitals: {
     title: "Pet status",
     hint: "Pats, snacks, play, chatting and finished todos lift its mood; long idle time makes it tired. Status only changes which expression shows while **idle** — no locked features, no nagging.",

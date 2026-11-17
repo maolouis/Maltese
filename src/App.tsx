@@ -80,6 +80,13 @@ import {
 } from "./petVitals";
 import { usePetVitals } from "./usePetVitals";
 import PetVitalsCard from "./PetVitalsCard";
+// 多屏放置：小狗 / Bongo 落在哪块显示器（指纹 = 名字 + 分辨率）。
+import ScreenPlacementCard from "./ScreenPlacementCard";
+import {
+  resolveBongoPreference,
+  resolveMonitorPreference,
+  type MonitorFingerprint,
+} from "./monitorSelection";
 import {
   buildLinkPlan,
   loadPetLinkHistory,
@@ -445,6 +452,10 @@ type IslandSettings = {
   proactiveChat: boolean;
   /** 桌宠自我状态（体力/情绪/亲密/专注，只影响待机轮播权重）。默认开。 */
   petVitalsEnabled: boolean;
+  /** 多屏：小狗所在屏（`last` 跟随上次位置 / `primary` 主屏 / 指纹 key）。 */
+  islandScreen: string;
+  /** 多屏：Bongo 所在屏（`follow` 跟随小狗 / `last` / `primary` / 指纹 key）。 */
+  bongoScreen: string;
   proactiveChatMinutes: number;
   /** 主动聊天方式：定时（interval）或跟随状态变化（state）。 */
   proactiveChatMode: ProactiveChatMode;
@@ -746,6 +757,8 @@ const DEFAULT_SETTINGS: IslandSettings = {
   proactiveChat: false,
   // 默认开：只影响待机轮播权重，关掉后退回原行为。
   petVitalsEnabled: true,
+  islandScreen: "last",
+  bongoScreen: "follow",
   proactiveChatMinutes: 30,
   proactiveChatMode: "interval",
   proactiveLevel: 50,
@@ -1050,6 +1063,8 @@ function normalizeSettings(
     proactiveBubbles: settings?.proactiveBubbles !== false,
     proactiveChat: settings?.proactiveChat === true,
     petVitalsEnabled: settings?.petVitalsEnabled !== false,
+    islandScreen: typeof settings?.islandScreen === "string" ? settings.islandScreen : "last",
+    bongoScreen: typeof settings?.bongoScreen === "string" ? settings.bongoScreen : "follow",
     proactiveChatMinutes: clamp(
       Math.round(Number(settings?.proactiveChatMinutes ?? DEFAULT_SETTINGS.proactiveChatMinutes)),
       5,
@@ -2992,6 +3007,11 @@ function LayoutEditor({
           thinking={chatThinking}
           onPet={() => onPetVitalsAction("pet")}
           onFeed={() => onPetVitalsAction("eating")}
+        />
+        <ScreenPlacementCard
+          islandScreen={settings.islandScreen}
+          bongoScreen={settings.bongoScreen}
+          onChange={({ islandScreen, bongoScreen }) => onSettingsChange({ ...settings, islandScreen, bongoScreen })}
         />
         <ToggleControl
           label="偷偷观察你（写代码 / 写文档 / 开会 / 看视频时陪你说一句）"
@@ -6461,6 +6481,25 @@ function IslandApp({
   // 模型忙（聊天进行中）→ 状态卡显示「正在思考…」，只是只读标记，不写进指标。
   const chatThinking = petVitalsEnabled
     && shouldSkipProactiveForChat(window.localStorage, Date.now(), 0);
+
+  // 多屏放置：设置变化时把「小狗屏幕 / Bongo 屏幕」的指纹交给 Rust，由它按目标屏的
+  // 工作区与 scale_factor 重排几何（锁角/贴边/自定义位置都在该屏内部生效）。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    void invoke<MonitorFingerprint[]>("list_monitors")
+      .then((monitors) => {
+        if (cancelled || !Array.isArray(monitors)) return undefined;
+        const island = resolveMonitorPreference(settings.islandScreen, monitors, true);
+        const bongo = resolveBongoPreference(settings.bongoScreen, monitors, island);
+        return invoke("set_monitor_preferences", { island, bongo });
+      })
+      .catch((error) => console.error("set_monitor_preferences failed", error));
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.bongoScreen, settings.islandScreen]);
+
   const collapsedTodoCount = settings.showIdleTodoCount && !collapsedTaskTitle
     ? todos.filter((todo) => !todo.completed).length
     : null;
@@ -7160,6 +7199,25 @@ function IslandApp({
     (body: string, image?: string) => showCloudBubble("", body, image, "pet"),
     [showCloudBubble],
   );
+
+  // 副屏被拔掉/关闭：Rust 广播一次 `maltese-monitor-missing`，用云朵气泡提示（已回主屏）。
+  // 放在 showCloudBubble 之后，避免「used before declaration」。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ message?: string }>("maltese-monitor-missing", (event) => {
+      const message = event.payload?.message?.trim() || "副屏已断开，已回到主屏";
+      showCloudBubble("", message);
+    }).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showCloudBubble]);
 
   // 让模型观察本机状态并主动说一句；说完弹云朵气泡，聊天记录里也留一条。
   // 支持两种模式：

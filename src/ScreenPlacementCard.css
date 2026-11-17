@@ -1,0 +1,63 @@
+/* 「所在屏幕」设置卡：和设置页其它卡片同一视觉语言。 */
+.screen-placement {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(120, 205, 150, 0.08);
+  border: 1px solid rgba(120, 205, 150, 0.28);
+}
+
+.screen-placement__head {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.screen-placement__hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0.7;
+}
+
+.screen-placement__row {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.screen-placement__row select {
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(43, 47, 58, 0.18);
+  background: #fff;
+  font-size: 12px;
+  color: inherit;
+}
+
+.screen-placement__row select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.screen-placement__screens {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
+.screen-placement__screens li[data-primary="1"] {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.screen-placement__note {
+  margin: 0;
+  font-size: 11px;
+  color: #a97b1f;
+}

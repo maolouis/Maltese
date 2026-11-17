@@ -23,6 +23,7 @@ import { previewPetLinkage } from "./petLinkPreview";
 import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
+import ScreenPlacementCard from "./ScreenPlacementCard";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -85,6 +86,9 @@ type PetSettings = {
   messagePreview: boolean;
   /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重，默认开。 */
   petVitalsEnabled: boolean;
+  /** 多屏：小狗所在屏 / Bongo 所在屏（`last`/`follow`/`primary`/指纹 key）。 */
+  islandScreen: string;
+  bongoScreen: string;
 };
 
 const DEFAULTS: PetSettings = {
@@ -133,6 +137,8 @@ const DEFAULTS: PetSettings = {
   petLinkage: true,
   messagePreview: false,
   petVitalsEnabled: true,
+  islandScreen: "last",
+  bongoScreen: "follow",
 };
 
 function load(): PetSettings {
@@ -478,6 +484,14 @@ export default function SettingsWindow() {
         {settings.followMouse && (
           <Slider label="跟随宠大小" value={settings.cursorPetSize} min={30} max={180} step={1} suffix="px" onChange={(value) => update("cursorPetSize", value)} />
         )}
+        <ScreenPlacementCard
+          islandScreen={settings.islandScreen}
+          bongoScreen={settings.bongoScreen}
+          onChange={({ islandScreen, bongoScreen }) => {
+            update("islandScreen", islandScreen);
+            update("bongoScreen", bongoScreen);
+          }}
+        />
       </section>
 
       <section className="sw-card">

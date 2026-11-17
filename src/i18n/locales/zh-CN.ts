@@ -749,6 +749,18 @@ const zhCN: Translations = {
       },
     },
   },
+  screenPlacement: {
+    title: "所在屏幕",
+    hint: "多屏时可以把小狗 / Bongo 放到副屏；锁角、贴边、自定义位置都在所选屏内部生效。副屏被拔掉会自动回主屏。",
+    island: "小狗屏幕",
+    bongo: "Bongo 屏幕",
+    followLast: "跟随上次位置",
+    followIsland: "跟随小狗",
+    primary: "主屏",
+    onlyOne: "只有一块屏幕",
+    missing: "副屏已断开，已回到主屏",
+    resolution: (width, height, scale) => `${width}×${height} @${scale}%`,
+  },
   petVitals: {
     title: "小狗的状态",
     hint: "摸头、喂食、陪玩、聊天、完成待办都会让它开心一点，久不互动会慢慢累。状态只影响**待机时**轮播哪张表情，不会锁功能、不会催你。",

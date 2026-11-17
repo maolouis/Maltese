@@ -136,6 +136,223 @@ static FRONTEND_READY_AT: OnceLock<Instant> = OnceLock::new();
 const ISLAND_VISIBILITY_ATTEMPTS: usize = 6;
 const ISLAND_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(150);
 
+// 多屏放置（2026-11-17）：用户可指定主岛 / Bongo 落在哪块显示器。
+// 指纹用「显示器名 + 分辨率」，不用索引（热插拔/改分辨率后索引会变）；匹配不到视为断开，
+// 自动回主屏并提示，但**保留偏好**，插回来能自动回到副屏。
+static ISLAND_MONITOR_PREF: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static BONGO_MONITOR_PREF: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+// 上一次「副屏断开」提示的 key：同一块屏断开着的时候只提示一次。
+static MONITOR_MISSING_NOTIFIED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorInfo {
+    pub name: String,
+    /// 稳定指纹：`name|宽x高`。
+    pub key: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+    pub primary: bool,
+}
+
+fn monitor_key(name: &str, width: u32, height: u32) -> String {
+    format!("{name}|{width}x{height}")
+}
+
+/// 持久化用的完整指纹：名字 + 分辨率 + 位置（换口/换位置后靠位置兜底认回来）。
+fn monitor_full_key(name: &str, width: u32, height: u32, x: i32, y: i32) -> String {
+    format!("{}@{},{}", monitor_key(name, width, height), x, y)
+}
+
+fn monitor_infos(app: &AppHandle) -> Vec<MonitorInfo> {
+    let primary = app.primary_monitor().ok().flatten();
+    let primary_pos = primary.as_ref().map(|monitor| (monitor.position().x, monitor.position().y));
+    let mut list: Vec<MonitorInfo> = app
+        .available_monitors()
+        .map(|monitors| {
+            monitors
+                .iter()
+                .map(|monitor| MonitorInfo {
+                    name: monitor.name().cloned().unwrap_or_default(),
+                    key: monitor_full_key(
+                        monitor.name().map(|name| name.as_str()).unwrap_or(""),
+                        monitor.size().width,
+                        monitor.size().height,
+                        monitor.position().x,
+                        monitor.position().y,
+                    ),
+                    x: monitor.position().x,
+                    y: monitor.position().y,
+                    width: monitor.size().width,
+                    height: monitor.size().height,
+                    scale: monitor.scale_factor(),
+                    primary: primary_pos == Some((monitor.position().x, monitor.position().y)),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // 主屏排最前，其余按 x 从左到右（副屏在左时 x 为负，正好符合视觉顺序）。
+    list.sort_by_key(|info| (!info.primary, info.x));
+    list
+}
+
+/// 按指纹找显示器：完整指纹（名字+分辨率+位置）→ 名字+分辨率（换位置）→ 只按名字
+/// （换分辨率）→ 尺寸+位置（换了接口）。全都匹配不到 = 这块屏被拔掉了。
+fn find_monitor_by_key(app: &AppHandle, key: &str) -> Option<Monitor> {
+    let monitors = app.available_monitors().ok()?;
+    let exact = monitors.iter().find(|monitor| {
+        monitor_full_key(
+            monitor.name().map(|value| value.as_str()).unwrap_or(""),
+            monitor.size().width,
+            monitor.size().height,
+            monitor.position().x,
+            monitor.position().y,
+        ) == key
+    });
+    if let Some(monitor) = exact {
+        return Some(monitor.clone());
+    }
+    let name = key.split('|').next().unwrap_or(key);
+    let prefix = key.split('@').next().unwrap_or(key);
+    if let Some(monitor) = monitors.iter().find(|monitor| {
+        monitor_key(
+            monitor.name().map(|value| value.as_str()).unwrap_or(""),
+            monitor.size().width,
+            monitor.size().height,
+        ) == prefix
+    }) {
+        return Some(monitor.clone());
+    }
+    if let Some(monitor) = monitors
+        .iter()
+        .find(|monitor| monitor.name().map(|value| value.as_str()) == Some(name))
+    {
+        return Some(monitor.clone());
+    }
+    // 位置兜底：`WxH@x,y`（旧的纯 name|WxH 指纹没有 @，这一步不参与）。
+    let geometry = key.split_once('@').map(|(_, rest)| rest.to_string());
+    let same_geometry = monitors.iter().find(|monitor| {
+        geometry
+            .as_deref()
+            .map(|value| format!("{}x{}@{},{}", monitor.size().width, monitor.size().height, monitor.position().x, monitor.position().y) == value)
+            .unwrap_or(false)
+    });
+    same_geometry.cloned()
+}
+
+/// Bongo / 陪玩狗的落点：优先 Bongo 指定屏，否则跟随主岛指定屏，再否则主屏。
+pub(crate) fn extras_target_monitor_key(app: &AppHandle) -> Option<String> {
+    let bongo = BONGO_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    if bongo.is_some() {
+        return bongo;
+    }
+    ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone())
+}
+
+pub(crate) fn find_extras_monitor(app: &AppHandle, key: Option<&str>) -> Option<Monitor> {
+    match key {
+        Some(key) => find_monitor_by_key(app, key).or_else(|| app.primary_monitor().ok().flatten()),
+        None => app.primary_monitor().ok().flatten(),
+    }
+}
+
+fn set_monitor_pref(slot: &std::sync::Mutex<Option<String>>, value: Option<String>) {
+    if let Ok(mut guard) = slot.lock() {
+        *guard = value;
+    }
+}
+
+/// 当前生效的主岛显示器（指纹匹配到的那块）；没有偏好时返回 None（沿用老逻辑）。
+fn preferred_island_monitor(window: &WebviewWindow) -> Option<Monitor> {
+    let key = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone())?;
+    find_monitor_by_key(window.app_handle(), &key)
+}
+
+/// 显示器热插拔：Tauri 2 没有跨平台的 monitor-change 事件，这里 30s 轮询指纹集合
+/// （只在集合真的变化时才重排，不新增高频定时器）。
+fn monitor_signature(app: &AppHandle) -> String {
+    monitor_infos(app)
+        .iter()
+        .map(|info| format!("{}@{}x{}+{}", info.name, info.width, info.height, info.x))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn has_monitor_preference() -> bool {
+    let island = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    let bongo = BONGO_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    island.is_some() || bongo.is_some()
+}
+
+fn start_monitor_watch(app: AppHandle) {
+    if thread::Builder::new()
+        .name("monitor-watch".into())
+        .spawn(move || {
+            let mut last = monitor_signature(&app);
+            loop {
+                thread::sleep(Duration::from_secs(30));
+                let current = monitor_signature(&app);
+                if current == last {
+                    continue;
+                }
+                last = current;
+                eprintln!("[monitor] display layout changed: {last}");
+                if !has_monitor_preference() {
+                    continue;
+                }
+                if let Ok(window) = main_window(&app) {
+                    let state = read_window_state();
+                    if let Err(error) = apply_stage_geometry(&window, state, false) {
+                        eprintln!("failed to re-apply island geometry after monitor change: {error}");
+                    }
+                }
+                if let Some(config) = desktop_extras::last_config() {
+                    let _ = desktop_extras::sync_extras_now(&app, &config);
+                }
+            }
+        })
+        .is_err()
+    {
+        eprintln!("failed to spawn monitor watch thread");
+    }
+}
+
+#[tauri::command]
+fn list_monitors(app: AppHandle) -> Vec<MonitorInfo> {
+    monitor_infos(&app)
+}
+
+/// 设置「小狗屏幕 / Bongo 屏幕」；`None` 表示回到主屏（或跟随主岛）。
+/// 会清掉 custom_position 并按新屏重排，所以切屏后落在该屏的默认锚点。
+#[tauri::command]
+fn set_monitor_preferences(
+    app: AppHandle,
+    island: Option<String>,
+    bongo: Option<String>,
+) -> Result<(), String> {
+    let window = main_window(&app)?;
+    set_monitor_pref(&ISLAND_MONITOR_PREF, island);
+    set_monitor_pref(&BONGO_MONITOR_PREF, bongo);
+    // 换屏后旧坐标属于旧屏，清掉自定义位置让新屏的锚点生效。
+    let state = mutate_window_state(|state| {
+        state.custom_position = None;
+        state.is_dragging = false;
+        *state
+    });
+    let result = apply_stage_geometry(&window, state, false);
+    // Bongo / 陪玩狗也按同样的屏重排一次。
+    if let Some(config) = desktop_extras::last_config() {
+        let _ = desktop_extras::sync_extras_now(&app, &config);
+    }
+    if let Ok(mut guard) = MONITOR_MISSING_NOTIFIED.lock() {
+        *guard = None;
+    }
+    result
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum IslandMode {
     Collapsed,
@@ -1353,9 +1570,9 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
         });
         return apply_stage_geometry(&window, state, false);
     }
-    let monitor = window
-        .primary_monitor()
-        .map_err(|error| error.to_string())?
+    // 锁角要落在「用户指定的屏幕」的对应角上；没指定才用主屏。
+    let monitor = preferred_island_monitor(&window)
+        .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
     let scale = monitor.scale_factor();
     let state = read_window_state();
@@ -3428,8 +3645,49 @@ fn apply_stage_geometry(
             .or_else(|| window.current_monitor().ok().flatten())
             .or_else(|| window.primary_monitor().ok().flatten())
     });
-    let has_custom_monitor = custom_monitor.is_some();
-    let monitor = custom_monitor
+    // 多屏放置：用户指定了「小狗屏幕」时，锚点、锁角、工作区裁剪全按那块屏算；
+    // 指纹匹配不到（副屏被拔/改分辨率到认不出）→ 回主屏并按需提示，但保留偏好等它插回来。
+    let preferred_pref = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    let preferred_monitor = preferred_pref
+        .as_deref()
+        .and_then(|key| find_monitor_by_key(window.app_handle(), key));
+    if preferred_pref.is_some() && preferred_monitor.is_none() {
+        let already = MONITOR_MISSING_NOTIFIED.lock().ok().and_then(|slot| slot.clone());
+        if already.as_deref() != preferred_pref.as_deref() {
+            if let Ok(mut guard) = MONITOR_MISSING_NOTIFIED.lock() {
+                *guard = preferred_pref.clone();
+            }
+            eprintln!(
+                "[monitor] preferred monitor missing ({}), falling back to primary",
+                preferred_pref.as_deref().unwrap_or("?")
+            );
+            // 副屏没了：旧坐标属于那块屏，必须丢掉，否则狗会停在「已经不存在的屏」的坐标上。
+            let fallback_state = mutate_window_state(|state| {
+                state.custom_position = None;
+                *state
+            });
+            let _ = window.emit(
+                "maltese-monitor-missing",
+                json!({ "message": "副屏已断开，已回到主屏", "key": preferred_pref }),
+            );
+            // 云朵气泡会占用 overlay 快照，几何会被 apply_stage_geometry 的 overlay 分支挡掉；
+            // 气泡收起前反复重试（幂等；start==target 时直接返回），保证一定回到主屏工作区。
+            if let Some(window) = window.app_handle().get_webview_window(WINDOW_LABEL) {
+                thread::spawn(move || {
+                    for _ in 0..10 {
+                        thread::sleep(Duration::from_millis(800));
+                        if let Err(error) = apply_stage_geometry(&window, fallback_state, false) {
+                            eprintln!("failed to fall back to primary monitor: {error}");
+                        }
+                    }
+                });
+            }
+        }
+    }
+    let has_custom_monitor = preferred_monitor.is_some() || custom_monitor.is_some();
+    let has_preferred_monitor = preferred_monitor.is_some();
+    let monitor = preferred_monitor
+        .or(custom_monitor)
         .or_else(|| primary_monitor.or(current_monitor))
         .ok_or_else(|| "No monitor is available for island positioning.".to_string())?;
 
@@ -3472,7 +3730,8 @@ fn apply_stage_geometry(
         monitor_position.y + top_inset + tucked_top_offset
     };
     let mut positioned_state = state;
-    if !has_custom_monitor {
+    // 指定了屏幕时，旧坐标可能属于旧屏：同样夹进目标屏工作区（否则切屏后狗还留在原屏）。
+    if !has_custom_monitor || has_preferred_monitor {
         // 多屏切换或 DPI 变化时，按旧坐标找显示器可能失败。过去这里直接
         // 丢弃 custom_position，结果固定在右下角的小狗会突然回到屏幕中央
         // （看起来像往左上方漂）。现在保留用户位置，并夹到当前显示器工作区。
@@ -4535,6 +4794,8 @@ pub fn run() {
             if let Some(data_dir) = setup_instance_dir.clone() {
                 instance_lock::spawn_show_request_watcher(app.handle().clone(), data_dir);
             }
+            // 多屏热插拔：30s 轮询显示器指纹集合，变化时按偏好重排主岛/Bongo。
+            start_monitor_watch(app.handle().clone());
             if let Err(error) = clipboard_history::init(app.handle()) {
                 eprintln!("failed to initialize clipboard history: {error}");
             }
@@ -4566,6 +4827,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            list_monitors,
+            set_monitor_preferences,
             qq_mail::get_qq_mail_state,
             qq_mail::connect_qq_mail,
             qq_mail::set_qq_mail_enabled,

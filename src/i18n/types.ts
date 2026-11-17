@@ -374,7 +374,21 @@ export type Translations = {
     };
   };
 
-  /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重。 */
+  /** 多屏放置：小狗 / Bongo 落在哪块显示器。 */
+  screenPlacement: {
+    title: string;
+    hint: string;
+    island: string;
+    bongo: string;
+    followLast: string;
+    followIsland: string;
+    primary: string;
+    onlyOne: string;
+    missing: string;
+    resolution: (width: number, height: number, scale: number) => string;
+  };
+
+/** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重。 */
   petVitals: {
     title: string;
     hint: string;
