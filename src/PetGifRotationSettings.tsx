@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CheckCheck, ChevronDown, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, ChevronDown, Plus, RotateCcw, Trash2, Undo2 } from "lucide-react";
 import { useTranslation } from "./i18n";
 import {
   defaultPetGifItems,
+  loadPetGifRotationConfig,
   petGifFileName,
   petGifItemSrc,
   savePetGifRotationConfig,
@@ -16,7 +17,32 @@ import {
   type PetGifBounds,
   type PetGifTileRect,
 } from "./utils/gifRotationOrder";
-import { characterAllFrames, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
+import {
+  beginPetGifDeletion,
+  cancelPetGifRemoval,
+  finishPetGifRemoval,
+  PET_GIF_REMOVAL_IDLE,
+  requestPetGifRemoval,
+  restorePetGifItemIntoList,
+  type PetGifRemovalState,
+  type PetGifTrashEntry,
+} from "./utils/petGifRemoval";
+import {
+  forgetPetGifDeletion,
+  loadPetGifTrash,
+  parkPetGifFile,
+  PET_GIF_TRASH_EVENT,
+  PET_GIF_TRASH_KEY,
+  recordPetGifDeletion,
+  restorePetGifFile,
+  discardParkedPetGif,
+} from "./petGifTrash";
+import {
+  characterAllFrames,
+  PET_CHARACTER_LABELS,
+  usePetCharacter,
+  type PetCharacterId,
+} from "./petCharacters";
 import "./PetGifRotationSettings.css";
 
 type CustomPetGif = {
@@ -28,6 +54,8 @@ type CustomPetGif = {
 const MAX_GIF_BYTES = 8 * 1024 * 1024;
 /** 删除等操作的状态提示保留时长。 */
 const NOTICE_MS = 2400;
+/** 「撤销删除」提示条停留时长。 */
+const UNDO_MS = 8000;
 /** 指针按下后移动多少像素才算「开始拖」，避免单击也被当成拖动。 */
 const DRAG_THRESHOLD_PX = 4;
 /** 拖到网格上下边缘这么多像素内自动滚动（触屏没有滚轮，靠它拖到远处）。 */
@@ -58,6 +86,15 @@ type DragSession = {
   bounds: PetGifBounds;
 };
 
+/** 回收站列表里显示删除时间（只到分钟）。 */
+function formatDeletedAt(value: number): string {
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
 export function PetGifRotationSettings() {
   const t = useTranslation();
   const character = usePetCharacter();
@@ -74,6 +111,14 @@ export function PetGifRotationSettings() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  // 删除确认框：右键/点垃圾桶只是进入 confirming，确认后才真正删。
+  const [removal, setRemoval] = useState<PetGifRemovalState>(PET_GIF_REMOVAL_IDLE);
+  // 可撤销的删除：最近一条删除记录 + 8 秒撤销提示条。
+  const [trash, setTrash] = useState<PetGifTrashEntry[]>(loadPetGifTrash);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [undoEntry, setUndoEntry] = useState<PetGifTrashEntry | null>(null);
+  const undoTimer = useRef<number | null>(null);
+  const confirmCancelRef = useRef<HTMLButtonElement | null>(null);
   // 拖拽排序：draggingIndex 是被拖的格子，dropIndex 是当前悬停的目标格子。
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -96,9 +141,42 @@ export function PetGifRotationSettings() {
   useEffect(
     () => () => {
       if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+      if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
     },
     [],
   );
+
+  // 回收站跨窗口同步（设置窗口重开时也刷新一次）。
+  useEffect(() => {
+    const update = () => setTrash(loadPetGifTrash());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === PET_GIF_TRASH_KEY || event.key === null) update();
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(PET_GIF_TRASH_EVENT, update);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(PET_GIF_TRASH_EVENT, update);
+    };
+  }, []);
+
+  // 删除确认框：Esc 取消，默认焦点在「取消」。
+  useEffect(() => {
+    if (removal.status !== "confirming") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setRemoval((current) => cancelPetGifRemoval(current));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    const frame = window.requestAnimationFrame(() => confirmCancelRef.current?.focus());
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [removal.status]);
 
   // 切换表情/折叠时清掉上一列的拖拽残留，避免高亮/序号错位。
   useEffect(() => {
@@ -137,18 +215,104 @@ export function PetGifRotationSettings() {
     saveItems(next);
   };
 
-  const remove = async (item: PetGifRotationItem) => {
+  /** 右键 / 点垃圾桶：只弹确认框，不删除任何东西。 */
+  const requestRemove = (item: PetGifRotationItem) => {
     setError("");
+    setRemoval((current) => requestPetGifRemoval(current, item));
+  };
+
+  const cancelRemove = () => {
+    setRemoval((current) => cancelPetGifRemoval(current));
+  };
+
+  const showUndo = (entry: PetGifTrashEntry) => {
+    setUndoEntry(entry);
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+    undoTimer.current = window.setTimeout(() => {
+      undoTimer.current = null;
+      setUndoEntry(null);
+    }, UNDO_MS);
+  };
+
+  /**
+   * 用户确认后才执行删除：自定义 GIF 先把文件复制到 pet-gifs-trash/，
+   * 再删原文件、写回收站记录、写回配置；内置素材只动轮播列表。
+   */
+  const confirmRemove = async () => {
+    const { state: deletingState, item } = beginPetGifDeletion(removal);
+    if (!item) return;
+    setRemoval(deletingState);
+    setError("");
+    let parkedPath: string | undefined;
     try {
+      const index = items.findIndex((entry) => entry.id === item.id);
       if (item.custom && item.path && isTauri()) {
+        // 先留副本再删，删除后仍可撤销/恢复。
+        const parked = await parkPetGifFile(item.path);
+        parkedPath = parked.trashPath;
         await invoke("remove_pet_gif", { path: item.path });
       }
       saveItems(items.filter((entry) => entry.id !== item.id));
       resetDrag();
-      flashNotice(t.petGifs.deleted(1));
+      const entry: PetGifTrashEntry = {
+        id: `trash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        character,
+        state,
+        index: index < 0 ? items.length : index,
+        item: {
+          id: item.id,
+          name: item.name,
+          src: item.src,
+          path: item.path,
+          custom: item.custom,
+        },
+        deletedAt: Date.now(),
+        trashPath: parkedPath,
+      };
+      setTrash(recordPetGifDeletion(entry));
+      showUndo(entry);
     } catch (reason) {
+      // 副本已经复制但删除/写配置失败：清掉副本，保持原状。
+      if (parkedPath) void discardParkedPetGif(parkedPath);
       setError(`${t.petGifs.deleteFailed}${String(reason)}`);
+    } finally {
+      setRemoval((current) => finishPetGifRemoval(current));
     }
+  };
+
+  /**
+   * 恢复一条回收站记录：自定义 GIF 先把副本复制回原路径，再按原下标插回轮播列表。
+   * 内置素材只需要写回配置。
+   */
+  const restoreTrashEntry = async (entry: PetGifTrashEntry) => {
+    setError("");
+    try {
+      if (entry.item.custom && isTauri()) {
+        if (!entry.item.path || !entry.trashPath) {
+          throw new Error(t.petGifs.restoreNoCopy);
+        }
+        await restorePetGifFile(entry.trashPath, entry.item.path);
+      }
+      const targetCharacter = (entry.character || character) as PetCharacterId;
+      const targetConfig = loadPetGifRotationConfig(targetCharacter);
+      const list = targetConfig[entry.state] ?? [];
+      const nextList = restorePetGifItemIntoList(list, entry.item, entry.index);
+      savePetGifRotationConfig({ ...targetConfig, [entry.state]: nextList }, targetCharacter);
+      setTrash(forgetPetGifDeletion(entry.id));
+      if (undoEntry?.id === entry.id) {
+        if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+        undoTimer.current = null;
+        setUndoEntry(null);
+      }
+      flashNotice(t.petGifs.restored(entry.item.name));
+    } catch (reason) {
+      setError(`${t.petGifs.restoreFailed}${String(reason)}`);
+    }
+  };
+
+  const undoRemove = () => {
+    if (!undoEntry) return;
+    void restoreTrashEntry(undoEntry);
   };
 
   const addFiles = async (files: FileList | null) => {
@@ -401,7 +565,7 @@ export function PetGifRotationSettings() {
                     onLostPointerCapture={cancelPointerDrag}
                     onContextMenu={(event) => {
                       event.preventDefault();
-                      void remove(item);
+                      requestRemove(item);
                     }}
                   >
                     <img
@@ -424,13 +588,13 @@ export function PetGifRotationSettings() {
                       title={t.petGifs.delete}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void remove(item);
+                        requestRemove(item);
                       }}
                       onContextMenu={(event) => {
                         // 让右键继续走格子自己的删除逻辑，不再弹系统菜单。
                         event.preventDefault();
                         event.stopPropagation();
-                        void remove(item);
+                        requestRemove(item);
                       }}
                     >
                       <Trash2 size={12} />
@@ -462,6 +626,109 @@ export function PetGifRotationSettings() {
             />
           </div>
         </>
+      )}
+
+      {/* 「恢复最近删除」常驻入口：即使轮播区收起来也能恢复误删的 GIF。 */}
+      <div className="pet-gif-settings__trash">
+        <button
+          type="button"
+          className="sw-secondary pet-gif-settings__trash-toggle"
+          aria-expanded={trashOpen}
+          disabled={trash.length === 0}
+          onClick={() => setTrashOpen((open) => !open)}
+        >
+          <Trash2 size={13} />
+          {t.petGifs.trashEntry(trash.length)}
+        </button>
+        <span className="pet-gif-settings__trash-hint">{t.petGifs.trashHint}</span>
+      </div>
+
+      {trashOpen && trash.length > 0 && (
+        <ul className="pet-gif-trash-list" role="list">
+          {trash.map((entry) => (
+            <li key={entry.id} className="pet-gif-trash-item">
+              <span className="pet-gif-trash-item__name" title={entry.item.name}>
+                {entry.item.name}
+              </span>
+              <span className="pet-gif-trash-item__meta">
+                {t.petGifs.trashMeta(
+                  PET_CHARACTER_LABELS[entry.character as PetCharacterId] ?? entry.character,
+                  t.petGifs.states[entry.state] ?? entry.state,
+                )}
+              </span>
+              <span className="pet-gif-trash-item__time">{formatDeletedAt(entry.deletedAt)}</span>
+              <button
+                type="button"
+                className="sw-secondary pet-gif-trash-item__restore"
+                onClick={() => void restoreTrashEntry(entry)}
+              >
+                {t.petGifs.trashRestore}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {undoEntry && (
+        <div className="pet-gif-undo" role="status" aria-live="polite">
+          <span className="pet-gif-undo__text">{t.petGifs.deleted(1)}</span>
+          <button type="button" className="pet-gif-undo__button" onClick={undoRemove}>
+            <Undo2 size={13} />
+            {t.petGifs.undo}
+          </button>
+        </div>
+      )}
+
+      {removal.status === "confirming" && removal.item && (
+        <div
+          className="pet-gif-confirm"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) cancelRemove();
+          }}
+        >
+          <div
+            className="pet-gif-confirm__card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pet-gif-confirm-title"
+            aria-describedby="pet-gif-confirm-desc"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="pet-gif-confirm__preview">
+              <img src={petGifItemSrc(removal.item)} alt="" draggable={false} />
+            </div>
+            <h3 className="pet-gif-confirm__title" id="pet-gif-confirm-title">
+              {t.petGifs.confirmTitle}
+            </h3>
+            <p className="pet-gif-confirm__name" title={removal.item.name}>
+              {removal.item.name}
+            </p>
+            <p className="pet-gif-confirm__desc" id="pet-gif-confirm-desc">
+              {removal.item.custom ? t.petGifs.confirmDeleteFile : t.petGifs.confirmDeleteBuiltin}
+            </p>
+            <div className="pet-gif-confirm__actions">
+              <button
+                type="button"
+                className="sw-secondary"
+                ref={confirmCancelRef}
+                autoFocus
+                onClick={cancelRemove}
+              >
+                {t.petGifs.confirmCancel}
+              </button>
+              <button
+                type="button"
+                className="sw-secondary pet-gif-confirm__danger"
+                disabled={removal.status !== "confirming"}
+                onClick={() => void confirmRemove()}
+              >
+                <Trash2 size={13} />
+                {t.petGifs.confirmDelete}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );

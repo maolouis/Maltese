@@ -328,3 +328,188 @@
 .pet-gif-settings__toggle.is-open .pet-gif-settings__chevron {
   transform: rotate(180deg);
 }
+
+/* ---------- 删除确认框（应用内样式，不用浏览器 confirm） ---------- */
+.pet-gif-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(28, 32, 43, 0.26);
+}
+
+.pet-gif-confirm__card {
+  width: min(336px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(24, 29, 42, 0.22);
+}
+
+.pet-gif-confirm__preview {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 4px;
+}
+
+.pet-gif-confirm__preview img {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid #edeff4;
+  background: #f7f8fb;
+}
+
+.pet-gif-confirm__title {
+  margin: 0;
+  font-size: 14px;
+  color: #2f3440;
+}
+
+.pet-gif-confirm__name {
+  margin: 0;
+  font-size: 12px;
+  color: #5b616e;
+  word-break: break-all;
+}
+
+.pet-gif-confirm__desc {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #8a909d;
+}
+
+.pet-gif-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.pet-gif-confirm__danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: #f0c4c0;
+  color: #c9473d;
+}
+
+.pet-gif-confirm__danger:hover {
+  background: #fdf3f2;
+}
+
+/* ---------- 撤销删除提示条（约 8 秒） ---------- */
+.pet-gif-undo {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px 8px 16px;
+  border-radius: 999px;
+  background: #2f3440;
+  color: #f4f6fa;
+  font-size: 12px;
+  box-shadow: 0 10px 28px rgba(24, 29, 42, 0.26);
+}
+
+.pet-gif-undo__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #9ad7b0;
+  color: #1f3d2c;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pet-gif-undo__button:hover {
+  background: #addfbd;
+}
+
+/* ---------- 恢复最近删除 ---------- */
+.pet-gif-settings__trash {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 10px 0 2px;
+  border-top: 1px solid #f0f1f5;
+}
+
+.pet-gif-settings__trash-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pet-gif-settings__trash-toggle:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.pet-gif-settings__trash-hint {
+  font-size: 11px;
+  color: #8a909d;
+}
+
+.pet-gif-trash-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pet-gif-trash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid #eef0f5;
+  border-radius: 10px;
+  background: #fafbfd;
+  font-size: 11.5px;
+  color: #5b616e;
+}
+
+.pet-gif-trash-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #3d424e;
+}
+
+.pet-gif-trash-item__meta,
+.pet-gif-trash-item__time {
+  white-space: nowrap;
+  color: #8a909d;
+}
+
+.pet-gif-trash-item__time {
+  color: #a2a8b4;
+}
+
+.pet-gif-trash-item__restore {
+  padding: 4px 10px;
+  font-size: 11.5px;
+}

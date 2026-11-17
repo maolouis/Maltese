@@ -168,3 +168,35 @@ HTML5 拖放事件（`dragstart/dragover/drop`）根本送不到网页 → React
   `pet-gifs/tuck/`，路径记在 `localStorage` 的 `maltese-tuck-gif`；「恢复默认」清掉这个键即可。
 - 岛内设置和独立设置窗口共用同一个控件（`src/TuckGifControl.tsx`）。
 
+## 删除 GIF：确认、撤销、回收站（2026-11-17）
+
+背景：表情轮播的方格右键 / 垃圾桶按钮原来**直接删除**，内置素材会立刻从轮播列表消失，
+自定义 GIF（`pet-gifs/<表情>/gif-*.gif`）还会当场删掉磁盘文件。用户误删一个 GIF 后
+没有任何挽回入口，属于 P0 数据丢失。现在改成三段式：
+
+1. **删除前确认**：右键或点垃圾桶只弹应用内确认框（不用浏览器原生 `confirm`），
+   框里显示该 GIF 的缩略图、文件名和会发生什么：
+   - 内置素材：「只会从轮播列表移除，内置素材文件不会被删除。」
+   - 自定义 GIF：「会从轮播列表移除，并删除这个 GIF 文件；8 秒内可以撤销。」
+   `Esc` / 点「取消」/ 点遮罩都只关闭确认框；默认焦点在「取消」。
+   确认流程是纯状态机（`src/utils/petGifRemoval.ts`），**未确认拿不到待删项**，
+   单测锁住「未确认不删」「删除中不重复删」。
+2. **可撤销的删除**：确认后自定义 GIF 先由 Rust `park_pet_gif` 复制到
+   `<应用数据目录>/pet-gifs-trash/<时间戳>-<计数器>-<原文件名>`，再删原文件、
+   写回配置；同时把一条记录写进 `localStorage` 的 `maltese-pet-gif-trash`
+   （含 `character/state/index/item/deletedAt/trashPath`，最多 10 条，新的在前，
+   被挤出去的最旧一条会顺手删掉它的磁盘副本）。底部提示条给「撤销删除」按钮，
+   约 8 秒内点击会把副本用 `restore_pet_gif` 复制回原路径，并按原下标插回轮播列表。
+3. **常驻「恢复最近删除」**：表情轮播卡片底部固定一个入口（不依赖轮播区是否展开），
+   展开后逐条列出最近删除的 GIF（文件名、形象 · 表情、删除时间），点「恢复」即可
+   走同一套恢复逻辑。
+
+实现位置：
+
+- `src/utils/petGifRemoval.ts`：确认状态机 + 回收站列表（上限/出栈顺序）+ 顺序恢复，纯函数、可单测。
+- `src/petGifTrash.ts`：`maltese-pet-gif-trash` 的读写、跨窗口事件、Tauri 文件命令封装。
+- `src/PetGifRotationSettings.tsx` / `.css`：确认框、撤销提示条、恢复入口与样式。
+- `src-tauri/src/pet_gifs.rs`：`park_pet_gif` / `restore_pet_gif` / `discard_trashed_pet_gif`。
+  恢复时拒绝覆盖已存在的同名文件；回收站目录和表情目录都做了路径越界校验。
+- 单测：`tests/pet-gif-removal.test.mjs`（12 条）。
+

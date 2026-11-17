@@ -330,6 +330,19 @@ export type Translations = {
     expandWithCount: (count: number) => string;
     collapseWithCount: (count: number) => string;
     characterLabel: (name: string) => string;
+    confirmTitle: string;
+    confirmDeleteBuiltin: string;
+    confirmDeleteFile: string;
+    confirmCancel: string;
+    confirmDelete: string;
+    undo: string;
+    restoreFailed: string;
+    restoreNoCopy: string;
+    restored: (name: string) => string;
+    trashEntry: (count: number) => string;
+    trashHint: string;
+    trashRestore: string;
+    trashMeta: (character: string, state: string) => string;
     states: Record<string, string>;
   };
 
