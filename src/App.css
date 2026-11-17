@@ -6398,10 +6398,6 @@ html.maltese-page-opening .island__collapsed {
   max-height: 300px;
 }
 
-.island__expanded .settings-section--pet-gifs .pet-gif-settings__scope-grid {
-  max-height: 160px;
-}
-
 /* 浮层比独立窗口窄：所有子元素都按容器宽度收缩，不出现横向滚动条。 */
 .island__expanded .settings-section--pet-gifs .pet-gif-settings,
 .island__expanded .settings-section--pet-gifs .pet-gif-settings * {

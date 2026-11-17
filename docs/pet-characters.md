@@ -53,13 +53,15 @@ node scripts/build-pet-manifest.mjs
 每个状态最多轮播 30 张：素材池里有的动作有 100 多张 GIF，全部预加载会吃掉几十 MB 内存，
 所以按均匀间隔抽一批，本次运行保持不变；设置页的「全选」仍然可以拿到完整素材池。
 
-## 待机轮播范围
+## 待机轮播范围（设置 UI 已下线，配置保留）
 
 - 「轮播范围」勾选的状态会在待机时合并轮播（动作/情绪状态仍优先播自己的动画）。
   **默认勾选全部 25 个状态**，所以待机时能看到全部素材，而不是只有 `idle` 那 30 张；
   旧版默认只有 `idle`，升级时用 `maltese-pet-gif-rotation-scope-v2` 标记迁移一次，用户之后改过的不再覆盖。
-- 设置页的「轮播范围」面板直接铺出合并后**实际会轮到的全部 GIF 缩略图**（带状态角标），
-  默认形象几百张，和主窗口的合并规则完全一致（`rotationFramesForState`）。
+- 2026-11-17 用户反馈「表情设置区只留轮播 GIF 网格」，设置页里的「轮播范围」面板（状态勾选、
+  「全选所有状态 / 仅当前状态」、「轮播中的 GIF」缩略图墙）已整块删除。**底层数据没动**：
+  `maltese-pet-gif-rotation-states` 的读写、默认全选、一次性迁移，以及 `rotationFramesForState()`
+  的合并规则都保持原样，已有用户配置照常读取。
 - 预加载改成「只提前 4 张」：之前是全量预加载，几百张 GIF 会一次性解码；现在每 10 秒前进一张，
   命中下一张前有 40 秒左右预热，内存占用不随素材数量线性增长。
 
@@ -68,41 +70,76 @@ node scripts/build-pet-manifest.mjs
 设置页「专属形象」卡片现在按形象分开保存：`maltese-pet-gif-rotation:<角色>`。
 旧版按状态保存的配置会自动迁移到小白，其他形象第一次使用时直接用素材默认值。
 
-## 表情轮播设置：方格展示 + 拖拽排序 + 右键删除
+## 表情轮播设置：方格网格 + 指针拖动排序 + 右键删除
 
-「表情轮播」现在有**两处入口，共用同一个组件**（`src/PetGifRotationSettings.tsx`）：
+「表情轮播」有**两处入口，共用同一个组件**（`src/PetGifRotationSettings.tsx`）：
 
 - 岛内展开浮层 → 顶部「设置」页签 → 岛内设置页的「表情轮播」小节；
 - 独立「桌宠设置」窗口（托盘 / 快捷入口页「设置」/ 岛内设置页右上「独立设置窗口」）。
 
 岛内入口是为了解决「改轮播 GIF 必须弹第二个窗口」的反馈（QA D5）：点「设置」页签不再弹独立
-设置窗口，就地展开岛内设置页，改 GIF、拖拽排序、右键删除全程只有主窗口一个窗口。
+设置窗口，就地展开岛内设置页，改 GIF、拖动排序、右键删除全程只有主窗口一个窗口。
 独立窗口里的那份保留不变；从岛内/快捷入口打独立窗口时会先收起浮层再弹窗，避免两个窗口同时出现。
+两处渲染的是同一个组件，折叠状态（`maltese-gif-settings-expanded`）共享。
 
 设置页「表情轮播」的 GIF 列表从「每行一张的长条 + ↑↓ 按钮」改成**缩略图方格墙**：
 `grid-template-columns: repeat(auto-fill, minmax(96px, 1fr))` 自适应列数，
 每格是 GIF 缩略图 + 左上角序号角标 + 底部文件名；「上移/下移」按钮和对应 i18n 文案已移除，
 `order()` 现在只用于序号角标和无障碍标签。
 
-- **拖动排序**：格子是 HTML5 `draggable`。`onDragStart` 记下源下标（同时写 `dataTransfer` 的 `text/plain`），
-  `onDragOver` 高亮悬停的目标格（`is-drop-target`：青色描边 + 3px 插入线），
-  被拖起的那格加 `is-dragging`（半透明 + 虚线）；松手 `onDrop` 用 `movePetGifItem(items, from, to)`
-  （`src/utils/gifRotationOrder.ts`）把源格子 `splice` 出来后放到目标下标，
-  再走组件原有的 `saveItems()` → `savePetGifRotationConfig({ ...config, [state]: next }, character)`
-  写回 `localStorage`（键 `maltese-pet-gif-rotation:<角色>`）并派发 `maltese-pet-gif-rotation-updated`。
-  主窗口 / 陪玩狗 / 跟随狗照旧通过 storage 事件和自定义事件同步，**没有新增存储**。
-  插入线方向随拖动方向变化：向上拖（源下标 > 目标下标）线在目标格**左侧**、插到目标格之前；
-  向下拖线在目标格**右侧**、插到目标格之后，视觉提示和松手结果一致（QA D4 修复）。
+组件里**只保留**：表情状态下拉、方格网格、张数提示 + 拖动/右键说明、全选、恢复默认顺序、
+添加 GIF（≤8 MB）、折叠按钮、错误/操作提示。2026-11-17 按用户反馈删掉了「轮播范围」面板
+和它的缩略图预览墙（用户原话：「只留轮播 gif，然后操作里面的小表情包就可以，下面这些没有
+什么用就不需要了」）——删掉的只是 UI，`petGifRotation.ts` 里的范围数据与默认值原样保留
+（见上一节）。折叠按钮文案跟着张数走：`展开（N 张）` / `收起（N 张）`，走 i18n
+`petGifs.expandWithCount` / `collapseWithCount`；旧文案键 `rotationScope* / selectAllStates /
+currentStateOnly / scopeCount / rotationFrames*` 已从 `src/i18n/types.ts` 与两份 locale 删除。
+
+### 拖动排序：Pointer Events（不是 HTML5 拖放）
+
+用户实机反馈「展开表情轮播后，鼠标拖动格子没有任何排序效果」。**真实原因**：Tauri v2 的
+窗口配置 `dragDropEnabled` 默认是 `true`，wry 会在窗口 HWND 上 `RevokeDragDrop()` +
+`RegisterDragDrop()` 自己的 `IDropTarget`（只处理 `CF_HDROP` 文件拖入），WebView2 里的
+HTML5 拖放事件（`dragstart/dragover/drop`）根本送不到网页 → React 的
+`onDragStart/onDragOver/onDrop` 一次都不会触发。Tauri 源码里的原话是
+「Disabling it is required to use HTML5 drag and drop on the frontend on Windows」。
+
+修复分两层：
+
+1. **配置层**：`src-tauri/tauri.conf.json` 的 `main` 窗口加 `"dragDropEnabled": false`；
+   `src-tauri/src/window_factory.rs` 给 `settings` 窗口加 `.disable_drag_drop_handler()`
+   （字段 `WindowSpec::drag_drop_enabled`）。本项目没有任何地方监听 `onDragDropEvent` /
+   文件拖入，关掉不影响其它功能；其它窗口保持 Tauri 默认。`window_factory` 里有一条单测
+   锁住「settings 关闭、其它窗口保持默认」。关掉原生拖放后 WebView2 会把「从资源管理器把文件
+   拖进窗口」当浏览器默认行为（导航到 `file://` 白页），所以 `src/main.tsx` 里全局
+   `preventDefault()` 掉 `dragover` / `drop`。
+2. **实现层**：排序改成 **Pointer Events**，不再依赖浏览器拖放——`onPointerDown` 记下源下标
+   并 `setPointerCapture()`；`pointermove` 用 `petGifDropTargetIndex()`
+   （`src/utils/gifRotationOrder.ts`，纯函数、可单测）拿格子的 `getBoundingClientRect`
+   算落点；`pointerup` 提交。4px 阈值区分「单击」和「拖动」，`pointercancel` /
+   `lostpointercapture` 清理状态。指针事件天然支持鼠标 / 触摸 / 笔；CSS 给格子加了
+   `touch-action: none` + `user-select: none`，触屏也能直接拖。拖到网格上下边缘会自动滚动
+   （触屏没有滚轮，靠它把格子拖到远处）；拖到自身格子上或拖出网格（24px 容错外）松手
+   = 不排序、不写盘。
+
+视觉与持久化：被拖的格子加 `is-dragging`（半透明 + 虚线），落点格加 `is-drop-target`
+（青色描边 + 3px 插入线；向上拖线在左侧、向下拖线在右侧，与松手结果一致）。松手用
+`movePetGifItem(items, from, to)` 换算顺序，再走 `saveItems()` →
+`savePetGifRotationConfig({ ...config, [state]: next }, character)` 写回
+`localStorage["maltese-pet-gif-rotation:<角色>"]` 并派发 `maltese-pet-gif-rotation-updated`；
+主窗口 / 陪玩狗 / 跟随狗照旧通过 storage 事件和自定义事件同步，**没有新增存储**。
+
 - **右键删除**：格子 `onContextMenu` 阻止默认菜单后直接删除（无确认弹窗）。自定义 GIF 仍先调
   `remove_pet_gif` 删掉应用数据目录里的文件，再 `saveItems` 过滤掉该项；删除成功后显示 2.4 秒的
-  「已删除 N 张 GIF」状态提示（`role="status"` / `aria-live="polite"`）。为了让触屏和触控板用户也能找到入口，
-  格子悬停或聚焦时右上角会浮出一个小删除按钮，走同一个 `remove()`，不会再弹二次确认。
-- **保留的能力**：表情状态下拉、全选、添加 GIF（≤8 MB）、恢复默认、折叠展开、轮播范围面板、错误提示都没动；
-  新增文案只动了 `petGifs` 命名空间（`reorderHint` 改成拖动/右键说明，新增 `deleted(count)`）。
+  「已删除 N 张 GIF」状态提示（`role="status"` / `aria-live="polite"`）。格子悬停或聚焦时右上角
+  也会浮出一个小删除按钮，走同一个 `remove()`，不会再弹二次确认。
 - 方格区域最大高度在独立设置窗口里 460px、岛内浮层里 300px，超出内部滚动，避免一个表情几百张图把设置页拉成一条长柱。
-- 相关文件：`src/PetGifRotationSettings.tsx`、`src/PetGifRotationSettings.css`（持久化仍复用 `src/petGifRotation.ts`）。
-- 已知限制：HTML5 拖拽在触摸屏上不触发，排序需要在桌面用鼠标拖；键盘可达性只做到格子可聚焦
-  （`:focus-visible` 描边），暂不支持键盘排序。
+- 单测：`tests/gif-rotation-order.test.mjs` 覆盖下标换算（向上/向下/相邻/首尾/原位/拖到自身）
+  和指针落点命中（命中格子、压在被拖格子上、间隙取最近、拖出网格取消）。
+- 相关文件：`src/PetGifRotationSettings.tsx`、`src/PetGifRotationSettings.css`、
+  `src/utils/gifRotationOrder.ts`（持久化仍复用 `src/petGifRotation.ts`）。
+- 已知限制：键盘可达性只做到格子可聚焦（`:focus-visible` 描边），暂不支持键盘排序；
+  触屏在网格内滚动请从格子间隙或网格边缘拖（拖动格子本身是排序手势）。
 
 ## 微博官方表情包（独立素材池）
 

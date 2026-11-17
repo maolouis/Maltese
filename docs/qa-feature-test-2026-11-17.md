@@ -240,7 +240,7 @@
 | D1 | P3 文档 | **已修复**：排障表 3 条提示改为与 `errorMessageForCode` 逐字一致 | `docs/video-plugin-usage.md` 排障表（原 248/250/252 行）；对照 `src/plugins/video/types.ts:283-298`；commit `17b3541` |
 | D2 | P3 文档 | **已修复**：「诊断日志」说明改为独立 `<details>` 折叠块，并补一行通道概览说明 | `docs/video-plugin-usage.md`「通道与诊断」表；对照 `src/plugins/video/VideoChannelCard.tsx:57-66`；commit `17b3541` |
 | D3 | P3 UI/i18n | **已修复**：新增 `accountStatusLabel()`，下拉框与右侧状态徽标统一显示中文（草稿/等待登录/已就绪/已暂停），不再出现 Rust 枚举值 | `src/plugins/video/VideoAutomationPlugin.tsx:28-41,276,280`；同步 `docs/video-plugin-usage.md:47,157`；commit `17b3541` |
-| D4 | P3 拖拽排序 | **已确认为真实缺陷并修复**（代码级 + 单测；未做真人拖拽，见 §8.2） | `src/utils/gifRotationOrder.ts`、`src/PetGifRotationSettings.tsx:120-126,325-334`、`src/PetGifRotationSettings.css:299-330`、`tests/gif-rotation-order.test.mjs`；commit `17b3541` |
+| D4 | P3 拖拽排序 | **已修复 + 验证方式**：见 §9.1（真实原因 = Tauri `dragDropEnabled` 抢占 WebView2 拖放，排序改为 Pointer Events）。验证方式：`node --test tests/gif-rotation-order.test.mjs` 8/8 通过（下标换算 + 指针落点命中）；`tsc --noEmit` / `cargo check` exit 0；实机人工 30 秒步骤见 §9.4 | `src/utils/gifRotationOrder.ts`、`src/PetGifRotationSettings.tsx`、`src/PetGifRotationSettings.css`、`src-tauri/tauri.conf.json`、`src-tauri/src/window_factory.rs`、`tests/gif-rotation-order.test.mjs`；commit `17b3541` + 本轮修复提交 |
 | D5 | P2 体验 | **已按方案 A 修复**（岛内设置页就地改轮播 GIF，一个窗口）；含 1 处入口语义变化待产品确认，见 §8.4 | `src/App.tsx`（页签 2164-2177、LayoutEditor 2385-2418 与 2829-2836、`openStandaloneSettings` 7723-7742）、`src/App.css`（文末「岛内设置页」段）、`docs/pet-characters.md`；commit `17b3541` |
 
 观察项未在本批处理：O1（`展开（N 张）/收起` 文案硬编码中文）保留原样——本批不夹带 i18n 重构；O2（右键删除无二次确认）为原设计，未改；O3（失焦自动收起）未改，D5 修好后从岛内入口不再触发该路径。
@@ -308,3 +308,103 @@
   - 快捷入口页「设置」→「先收起浮层再开独立窗口」的整条 UI 流程：本轮脚本的合成点击先触发了悬停云朵，
     没能稳定打开快捷入口页；代码路径见 §8.4，建议人工点一次确认（预期：岛收回小狗槽后再出现设置窗口，
     不会两个大窗口同屏）。
+
+## 9. 2026-11-17 追加修复轮（用户实机反馈：拖不动 P0 + 设置区精简 P1）
+
+> 角色：研发。版本仍 **2.0.2**（未改版本号、未 push、未打 tag），未动用户
+> `localStorage` / WebView2 profile。
+
+### 9.1 问题 1（P0）：表情轮播方格「拖不动」——真实原因
+
+- 现象：展开「表情轮播」后拖动格子没有任何排序效果；右键删除可用。
+- 逐条排查（按任务给的顺序，不跳步）：
+  1. **Tauri 抢走拖放（真因）**：Tauri v2 窗口配置 `dragDropEnabled` 默认 `true`。wry 会在窗口 HWND 上
+     `RevokeDragDrop()` 再 `RegisterDragDrop()` 自己的 `IDropTarget`（只处理 `CF_HDROP` 文件拖入），
+     WebView2 里的 HTML5 拖放事件（`dragstart/dragover/drop`）不再送到网页。证据：Tauri 2.11.5
+     `src/webview/mod.rs:971`「Disables the drag and drop handler. This is required to use HTML5 drag and
+     drop APIs on the frontend on Windows.」；wry 0.55.1 `src/webview2/drag_drop.rs:69-70` 的
+     `RevokeDragDrop` + `RegisterDragDrop`；本仓库 `src-tauri/tauri.conf.json` 与
+     `src-tauri/src/window_factory.rs` 此前都没关它 → 与 §8.5「合成鼠标拖动没有触发 HTML5 DnD」的
+     实测现象完全吻合。
+  2. `img` 抢拖拽：此前 `img` 已是 `draggable={false}`、`draggable` 在格子容器上 → 不是原因（本次仍全部显式写死）。
+  3. `onDragOver` 缺 `preventDefault`：此前已有 `event.preventDefault()` → 不是原因。
+  4. `pointer-events` / `user-select` / 滚动容器 / 阈值：`img` 是 `pointer-events: none`，无遮挡层，
+     拖动阈值与 `is-dragging` 清理逻辑正常 → 不是原因。
+  5. WebView2 下 HTML5 DnD 不稳 → 最终采用**指针事件方案**（下面的实现层）。
+- **修复（两层）**：
+  - 配置层：`src-tauri/tauri.conf.json` 的 `main` 窗口加 `"dragDropEnabled": false`；
+    `window_factory.rs` 新增 `WindowSpec::drag_drop_enabled`（默认 `true`，`settings` 设 `false`）
+    并调用 `.disable_drag_drop_handler()`。本项目没有任何 `onDragDropEvent` / 文件拖入功能，
+    关掉不影响其它窗口（其它窗口保持 Tauri 默认）；`window_factory` 加单测锁住这个差异。
+    关掉原生拖放后 WebView2 会把文件拖入当浏览器默认导航（白页），所以 `src/main.tsx` 里
+    全局 `preventDefault()` 掉 `dragover` / `drop`，把这条路一起堵上。
+  - 实现层：`PetGifRotationSettings` 的排序从 HTML5 `draggable` 改成 **Pointer Events**
+    （`onPointerDown` + `setPointerCapture` + `petGifDropTargetIndex()` 纯函数按格子矩形算落点 +
+    4px 拖动阈值 + 触屏/笔 + 拖到上下边缘自动滚动 + `pointercancel/lostpointercapture` 清理）。
+    被拖格半透明（`is-dragging`）、目标格青色描边 + 插入线（`is-drop-target` / `--after`，向上拖在左侧、
+    向下拖在右侧）保留；松手仍走 `savePetGifRotationConfig` 持久化到
+    `localStorage["maltese-pet-gif-rotation:<角色>"]`。
+
+### 9.2 问题 2（P1）：表情设置区只留轮播 GIF 网格
+
+删掉的区块（`src/PetGifRotationSettings.tsx`，岛内浮层与独立设置窗口共用同一组件，两处同时生效）：
+
+- 「轮播范围」整块：状态勾选 chips、`全选所有状态` / `仅当前状态` 按钮、「轮播中的 GIF」缩略图预览墙——
+  JSX 与 CSS（`pet-gif-settings__scope*`、`pet-gif-scope-item`、`src/App.css` 里岛内
+  `.pet-gif-settings__scope-grid` 限高）一并删除，删除后没有空行/空容器。
+- 保留：表情状态下拉、方格网格、张数提示 + 拖动/右键说明、全选、恢复默认、添加 GIF（≤8 MB）、
+  折叠按钮、错误/操作提示。
+- 布局：`pet-gif-settings__toolbar` 直接把「N 张 GIF + 拖动说明 + 全选 + 恢复默认」一行放好，
+  下面紧接错误/提示、网格、添加区，没有留空洞；折叠按钮文案改为 `展开（N 张）` / `收起（N 张）`。
+- 底层数据保留：`maltese-pet-gif-rotation-states` 的读写、默认全选、一次性迁移标记
+  `maltese-pet-gif-rotation-scope-v2`、`rotationFramesForState()` 合并规则都没改，已有用户配置照常读取。
+- i18n：删除 `petGifs.rotationScope / rotationScopeHint / selectAllStates / currentStateOnly /
+  scopeCount / rotationFrames / rotationFramesEmpty`；新增 `expandWithCount / collapseWithCount /
+  characterLabel`（折叠文案与「当前形象：xxx」不再硬编码中文），`zh-CN` / `en` 键集保持完全一致。
+
+### 9.3 验证输出
+
+| 命令 | 结果 |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc --noEmit` | exit 0 |
+| `cd src-tauri; cargo check` | exit 0（仅既有 warning） |
+| `node --test tests/*.test.mjs` | `tests 66 / pass 66 / fail 0`（原 62 + 新增 4 条） |
+| `node --test tests/gif-rotation-order.test.mjs` | `tests 8 / pass 8 / fail 0` |
+| `cargo test --lib window_factory` | 测试代码编译通过；运行阶段本机报 `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`（既有环境限制，见 §8.3 同期记录），未取得运行结果 |
+| `node_modules\.bin\vite.cmd build --target esnext --minify false` | exit 0（`dist/assets/index-Bslj4aO4.js` 2,271.07 kB、`index-CY7QozIL.css` 283.88 kB） |
+| `node_modules\.bin\tauri.cmd build --ci --config src-tauri/tauri.release.conf.json --no-bundle` | exit 0，产出 `src-tauri\target\release\maltese-assistant.exe`（28,669,952 B，SHA-256 `56DA781E…196212E`，2026-11-17 12:26:47）；**未替换** 用户在 `E:\Maltese2` 的安装（见 §9.5） |
+| 构建产物抽查（dist JS 文本） | 含「收起（/展开（」「拖动方格调整播放顺序」、`data-gif-index`，**不含**「轮播范围」→ 精简后的设置区与新的 Pointer 拖拽代码确实进了构建 |
+
+配置改动也被真实校验过：临时往 `tauri.conf.json` 的 window 里塞一个拼错的字段，
+`cargo check` 立刻报 `unknown field ... expected one of ... dragDropEnabled ...`（说明 tauri-build
+在 check 阶段就会校验窗口配置，`dragDropEnabled` 是合法字段、拼错会直接失败），随后已还原。
+
+新增/修改的单测（`tests/gif-rotation-order.test.mjs`）：
+
+- 首尾边界：第一格 ↔ 最后一格互拖；
+- 拖到自身（`from === to`）返回同一数组，单格/空列表也不动；
+- 指针落点命中：命中格子占用该格、压在被拖格子上不排序、空列表返回 null；
+- 间隙取最近一格、网格 24px 容错内可落位、拖出网格返回 null（松手取消）。
+
+### 9.4 人工 30 秒验证步骤（实机拖拽）
+
+1. 双击小狗展开浮层 → 顶部「设置」页签 → 滚到「表情轮播」→ 点「展开（N 张）」。
+2. 按住第 1 格向右下拖到第 3 格：被拖格子变半透明虚线，指针下格子出现青色描边 + **右侧**插入线。
+3. 松手：顺序应为「原第 2、原第 3、原第 1…」，序号角标同步重排；收起再展开、或关掉设置窗口重开，
+   顺序保持（已写 `localStorage`）。
+4. 按住某格向上/向左拖到前面的格子：插入线在目标格**左侧**，松手插到该格之前。
+5. 拖出网格外松手：顺序不变（取消，不写盘）；右键任一格：直接删除。
+6. 触屏/笔：直接按住格子拖动同样生效（格子 `touch-action: none`，拖到网格上下边缘会自动滚动）。
+
+### 9.5 本轮没有做实机 UI 交互的原因（如实说明）
+
+- 构建产物已经出来（§9.3），但**没有**替换 `E:\Maltese2` 里用户正在用的 exe：替换要先结束用户
+  桌面宠物进程、跑完再还原，属于会打断用户当前使用的操作，本轮研发自测不擅自执行。
+- 拖拽演练会写用户数据：展开方格墙会写 `maltese-gif-settings-expanded`，拖动排序会写
+  `maltese-pet-gif-rotation:<角色>` 的顺序——任务明确要求**不动用户 localStorage / profile**，
+  所以没有在用户 profile 下做真实拖动。
+- 若要做隔离验证：按 §8.5 的 devfix 方式（临时 identifier + 放进 `E:\Maltese2`）跑新 exe，
+  用 §9.4 的 6 步拖一次，再检查该隔离 profile 里的 `maltese-pet-gif-rotation:xiaobai` 顺序，
+  确认写入成功即可；这条留给人工/下一轮自动化，不作为本轮「已通过」结论。
+- 可确信的部分：拖拽不再依赖 HTML5 拖放（Pointer Events + `setPointerCapture`，落点算法有单测），
+  且 `dragDropEnabled` 的抢拖放问题既有 Tauri/wry 源码证据、也被构建期配置校验与单测锁住。

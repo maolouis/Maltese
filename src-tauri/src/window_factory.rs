@@ -29,6 +29,14 @@ struct WindowSpec {
     focusable: bool,
     shadow: bool,
     center: bool,
+    /// 是否让 Tauri/wry 接管拖放（原生文件拖放处理器）。
+    ///
+    /// 默认 `true` 时 wry 会在窗口 HWND 上 `RevokeDragDrop` + `RegisterDragDrop`
+    /// 自己的 IDropTarget，只处理 `CF_HDROP` 文件拖入，**网页里的 HTML5 拖放事件
+    /// （dragstart/dragover/drop）在 Windows 上收不到**。设置窗口里的表情方格墙
+    /// 用 Pointer Events 排序，不依赖 HTML5 DnD，这里保持和主窗口一致关掉它，
+    /// 免得将来给设置页加网页内拖放时又踩一次。
+    drag_drop_enabled: bool,
 }
 
 /// 默认值与 `tauri.conf.json` 的默认窗口配置一致（有边框 / 不透明 / 可缩放）。
@@ -55,6 +63,7 @@ fn base(
         focusable: true,
         shadow: true,
         center: false,
+        drag_drop_enabled: true,
     }
 }
 
@@ -107,6 +116,8 @@ fn settings() -> WindowSpec {
     window_spec.min_width = Some(460.0);
     window_spec.min_height = Some(560.0);
     window_spec.center = true;
+    // 设置窗口里嵌着表情轮播方格墙（拖动排序），拖放必须留给网页自己处理。
+    window_spec.drag_drop_enabled = false;
     window_spec
 }
 
@@ -278,6 +289,10 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
     if window_spec.center {
         builder = builder.center();
     }
+    if !window_spec.drag_drop_enabled {
+        // 见 `WindowSpec::drag_drop_enabled`：关掉原生拖放处理器，网页才收得到拖放。
+        builder = builder.disable_drag_drop_handler();
+    }
 
     let window = builder
         .build()
@@ -330,5 +345,16 @@ mod tests {
     fn main_is_not_lazily_created() {
         assert!(spec_for("main").is_none());
         assert!(spec_for("nope").is_none());
+    }
+
+    /// 设置窗口（和 tauri.conf.json 里的 main）必须关掉原生拖放处理器，否则
+    /// Windows 上网页收不到拖动事件，表情方格墙「拖不动」。
+    #[test]
+    fn settings_disables_native_drag_drop_handler() {
+        assert!(!spec_for("settings").expect("settings").drag_drop_enabled);
+        // 其它窗口没有网页内拖放需求，保持 Tauri 默认（原生文件拖入行为不变）。
+        for label in ["translation", "bubble", "plugin", "billiards", "pinned"] {
+            assert!(spec_for(label).expect(label).drag_drop_enabled, "{label}");
+        }
     }
 }

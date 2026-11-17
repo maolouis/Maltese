@@ -327,13 +327,9 @@ export type Translations = {
     tooLarge: string;
     deleteFailed: string;
     order: (index: number) => string;
-    rotationScope: string;
-    rotationScopeHint: string;
-    selectAllStates: string;
-    currentStateOnly: string;
-    scopeCount: (count: number, total: number) => string;
-    rotationFrames: string;
-    rotationFramesEmpty: string;
+    expandWithCount: (count: number) => string;
+    collapseWithCount: (count: number) => string;
+    characterLabel: (name: string) => string;
     states: Record<string, string>;
   };
 
