@@ -1428,7 +1428,7 @@ export function IslandShell({
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     void listen("maltese-pin-current-page", () => {
-      void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+      void invoke("pin_page_to_desktop", { page }).catch((error) => console.error("pin_page_to_desktop failed", error));
     }).then((cleanup) => {
       unlisten = cleanup;
     });
@@ -2056,7 +2056,7 @@ export function IslandShell({
                     className="pet-bubble-panel__pin"
                     title="把这个标签页固定在桌面上，随时能看"
                     onClick={() => {
-                      void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+                      void invoke("pin_page_to_desktop", { page }).catch((error) => console.error("pin_page_to_desktop failed", error));
                       onOverlayClose();
                     }}
                   >
@@ -2201,7 +2201,7 @@ export function IslandShell({
                 aria-label="固定当前标签到桌面"
                 onClick={(event) => {
                   event.stopPropagation();
-                  void invoke("pin_page_to_desktop", { page }).catch(() => undefined);
+                  void invoke("pin_page_to_desktop", { page }).catch((error) => console.error("pin_page_to_desktop failed", error));
                 }}
               >
                 <Pin size={16} strokeWidth={2} aria-hidden="true" />

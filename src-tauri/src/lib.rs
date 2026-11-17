@@ -1500,8 +1500,19 @@ async fn open_billiards_window(app: AppHandle) -> Result<(), String> {
 
 // 「固定标签页在桌面」：把当前标签页放到一个独立的置顶窗口里。
 // async：固定窗口是懒创建的（原因见 `open_settings_window` 的注释）。
+//
+// 用户反馈「置于顶层的按钮失效」：这里补了三件事——
+// 1) 记录「要固定的页面」，置顶窗口前端挂载后主动来读（否则首次固定时
+//    `maltese-pinned-page` 事件早于新窗口 listen，页面永远退回默认「聊天」）；
+// 2) 窗口已存在但被最小化/隐藏时先 `unminimize()` 再 `show()`，否则点按钮没反应；
+// 3) `set_always_on_top(true)` 放在 show 之后再做一次，保证重新固定后仍然置顶。
+static PINNED_PAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 #[tauri::command]
 async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
+    if let Ok(mut current) = PINNED_PAGE.lock() {
+        *current = Some(page.clone());
+    }
     let window = window_factory::ensure(&app, "pinned")?;
     // 第一次固定时放在右下角，避免挡住桌宠和面板。
     if let Ok(position) = window.outer_position() {
@@ -1515,8 +1526,9 @@ async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String>
             }
         }
     }
-    let _ = window.set_always_on_top(true);
+    let _ = window.unminimize();
     window.show().map_err(|error| error.to_string())?;
+    let _ = window.set_always_on_top(true);
     window.set_focus().map_err(|error| error.to_string())?;
     let _ = window.emit(
         "maltese-pinned-page",
@@ -1525,8 +1537,17 @@ async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String>
     Ok(())
 }
 
+/// 置顶窗口前端挂载后读一次「当前要固定的页面」。
+#[tauri::command]
+fn get_pinned_page() -> Option<String> {
+    PINNED_PAGE.lock().ok().and_then(|page| page.clone())
+}
+
 #[tauri::command]
 fn unpin_page_from_desktop(app: AppHandle) -> Result<(), String> {
+    if let Ok(mut current) = PINNED_PAGE.lock() {
+        *current = None;
+    }
     if let Some(window) = app.get_webview_window("pinned") {
         let _ = window.hide();
     }
@@ -4363,6 +4384,7 @@ pub fn run() {
             open_settings_window,
             close_billiards_window,
             pin_page_to_desktop,
+            get_pinned_page,
             unpin_page_from_desktop,
             set_island_overlay,
             plan_island_overlay,

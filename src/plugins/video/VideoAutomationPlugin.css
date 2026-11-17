@@ -651,3 +651,99 @@
   background: #243a2c;
   border: 1px solid #638d70;
 }
+
+/* 强制可读模式。宿主岛屿的透明玻璃样式不能覆盖视频插件正文。 */
+.island__expanded .video-automation,
+.island__expanded .video-automation__summary,
+.island__expanded .video-automation__browser,
+.island__expanded .video-automation__account {
+  background: #ffffff !important;
+  color: #14251b !important;
+  border: 2px solid #315c42 !important;
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+
+.island__expanded .video-automation * {
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+
+.island__expanded .video-automation .assistant-panel__label,
+.island__expanded .video-automation__phase,
+.island__expanded .video-automation__steps,
+.island__expanded .video-automation__muted,
+.island__expanded .video-automation__login,
+.island__expanded .video-automation__provider,
+.island__expanded .video-automation__params label,
+.island__expanded .video-automation__advanced > summary,
+.island__expanded .video-automation__comment > summary,
+.island__expanded .video-automation__account > summary,
+.island__expanded .video-automation__history summary,
+.island__expanded .video-automation__diagnostics summary {
+  color: #14251b !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+.island__expanded .video-automation__phase {
+  font-size: 16px !important;
+  font-weight: 800 !important;
+}
+
+.island__expanded .video-automation__steps {
+  font-size: 13px !important;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation * {
+  text-shadow: none !important;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__muted,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__login,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__steps {
+  color: #274735 !important;
+  opacity: 1 !important;
+  font-size: 13px !important;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__phase {
+  color: #102f20 !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+}
+
+.island__expanded .video-automation__provider select,
+.island__expanded .video-automation__row select,
+.island__expanded .video-automation__params input,
+.island__expanded .video-automation__account-form input,
+.island__expanded .video-automation__comment textarea {
+  border: 2px solid #315c42 !important;
+  background: #ffffff !important;
+  color: #14251b !important;
+  font-size: 13px !important;
+}
+
+.island__expanded .video-automation__primary,
+.island__expanded .video-automation__secondary,
+.island__expanded .video-automation__danger {
+  border: 2px solid #234a32 !important;
+  background: #287a49 !important;
+  color: #ffffff !important;
+  font-size: 13px !important;
+  font-weight: 800 !important;
+}
+
+.island__expanded .video-automation__primary:hover,
+.island__expanded .video-automation__secondary:hover:not(:disabled),
+.island__expanded .video-automation__danger:hover {
+  background: #165c34 !important;
+}
+
+.island__expanded .video-automation__error {
+  border: 2px solid #a52e22 !important;
+  background: #fff1ef !important;
+  color: #761c14 !important;
+  font-size: 13px !important;
+}

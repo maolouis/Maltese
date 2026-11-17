@@ -36,6 +36,14 @@ export default function PinnedPanel() {
   });
 
   useEffect(() => {
+    let cancelled = false;
+    // 首次固定时 Rust 侧先创建窗口、再 emit「maltese-pinned-page」，新窗口的
+    // listen 往往还没挂上，页面就会退回默认「聊天」——这里主动读一次 Rust 记的页面。
+    void invoke<string | null>("get_pinned_page")
+      .then((page) => {
+        if (!cancelled && page && isTab(page)) setPage(page);
+      })
+      .catch((error) => console.error("get_pinned_page failed", error));
     let unlisten: (() => void) | null = null;
     void listen<{ page?: string }>("maltese-pinned-page", (event) => {
       const next = event.payload?.page || "chat";
@@ -43,7 +51,10 @@ export default function PinnedPanel() {
     }).then((cleanup) => {
       unlisten = cleanup;
     });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const selectTab = (next: TabId) => {

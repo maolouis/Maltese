@@ -1,14 +1,19 @@
-// 聊天里用的形象头像：从角色素材里各截一张正面帧，统一 160×160 透明 PNG，
-// 存放在 assets/pets/avatars/（和 GIF 一起被打进安装包资源目录）。
-import { petAssetUrl } from "./petAssetBase";
+// 聊天里用的形象头像：三个 160×160 透明 PNG，直接打进前端产物。
+//
+// 以前它们和 GIF 素材一起外置，靠 petAssetBase 在运行时解析资源目录。
+// 但聊天窗口里只要资源目录解析慢一步或没命中，头像就是裂图；
+// 这三张图总共不到 50 KB，没必要承担外置素材的解析风险，所以改为 import 打包。
+import xiaobaiAvatar from "./assets/pet-avatars/xiaobai.png";
+import xiaojimaoAvatar from "./assets/pet-avatars/xiaojimao.png";
+import duoAvatar from "./assets/pet-avatars/duo.png";
 import type { PetCharacterId } from "./petCharacters";
 
 export const PET_AVATAR_FILES: Record<PetCharacterId, string> = {
-  xiaobai: "/assets/pets/avatars/xiaobai.png",
-  xiaojimao: "/assets/pets/avatars/xiaojimao.png",
-  duo: "/assets/pets/avatars/duo.png",
+  xiaobai: xiaobaiAvatar,
+  xiaojimao: xiaojimaoAvatar,
+  duo: duoAvatar,
 };
 
 export function petAvatarUrl(character: PetCharacterId): string {
-  return petAssetUrl(PET_AVATAR_FILES[character] ?? PET_AVATAR_FILES.xiaobai);
+  return PET_AVATAR_FILES[character] ?? xiaobaiAvatar;
 }
