@@ -436,20 +436,35 @@ fn ensure_island_on_screen(window: &WebviewWindow) {
     let _ = window.show();
 }
 
+/// 是否允许这次按下开始一次拖拽。
+///
+/// 只在「几何已经落定」的收起态允许：缩边 / 唤醒 / 闲逛的位移动画进行中时
+/// 窗口坐标是过渡值，这时开始拖拽会把某个动画中间帧当成用户放置位置写进
+/// `custom_position`，再通过 `island-position-changed` 持久化到 localStorage。
+/// 实机表现就是：锁右下角的小狗睡醒后停在「比锁角基线低 8px」的坐标上，
+/// 而且这笔偏移再也回不去（见 docs/bugfix-2026-11-17.md「8px 位移判定」）。
+/// 动画只有 320ms，落定后再按一次即可，代价远小于位置被写脏。
+fn drag_start_allowed(state: IslandWindowState, animating: bool) -> bool {
+    matches!(state.mode, IslandMode::Collapsed)
+        && !state.is_tucked
+        && !state.is_dragging
+        && !animating
+}
+
 #[tauri::command]
 fn start_island_drag(app: AppHandle) -> Result<(), String> {
     let window = main_window(&app)?;
     hide_pet_bubble_silent(&app);
     let current_state = read_window_state();
+    let animating = POSITION_ANIMATING.load(Ordering::SeqCst);
 
-    if !matches!(current_state.mode, IslandMode::Collapsed)
-        || current_state.is_tucked
-        || current_state.is_dragging
-    {
+    if !drag_start_allowed(current_state, animating) {
         return Ok(());
     }
 
     let position = window.outer_position().map_err(|error| error.to_string())?;
+    // 拖拽起点：收尾时只有真的移动过才值得通知前端持久化。
+    let drag_origin = position;
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&mut cursor) }.map_err(|error| error.to_string())?;
     // 记录光标相对窗口左上角的偏移，后面按光标位移手动移动窗口。
@@ -518,8 +533,16 @@ fn start_island_drag(app: AppHandle) -> Result<(), String> {
         };
 
         if did_finish_drag {
+            // 只有窗口真的被拖动过（松手位置 != 按下位置）才通知前端写 localStorage。
+            // 零位移的「按下→松手」不是拖拽，锁角模式下不该用它覆盖角落基线；
+            // 这条判据也是「非拖拽路径不写 focusd-island-position」的兜底。
             if let Some(position) = final_position {
-                let _ = window.emit("island-position-changed", position);
+                if position != (IslandPosition {
+                    x: drag_origin.x,
+                    y: drag_origin.y,
+                }) {
+                    let _ = window.emit("island-position-changed", position);
+                }
             }
             // 拖拽只改变位置，不改变层级：松手后重新断言置顶，窗口仍留在最顶层。
             let _ = window.set_always_on_top(true);
@@ -3917,6 +3940,74 @@ mod tests {
 
         custom.is_tucked = false;
         assert_eq!(resolve_stage_position(custom, 100, 12, -48), (420, 180));
+    }
+
+    // 判据 1（8px 位移）：唤醒落位必须是锁角基线，而不是「工作区底边 - 狗槽」。
+    // 锁右下角的小狗在 2560×1440 / 工作区底边 1432 / 收起 1.6× 下，
+    // 基线是 (2285, 1195)，比未锁角默认位（margin_y=0）高 16px。
+    #[test]
+    fn wake_restores_the_lock_corner_baseline_instead_of_the_work_area_default() {
+        let collapsed_scale = 1.6;
+        let scale = 1.0;
+        let work_right = 2560;
+        let work_bottom = 1432;
+        let slot_w = (slot_width_css(collapsed_scale) * scale).round() as i32;
+        let slot_h = (slot_height_css(collapsed_scale) * scale).round() as i32;
+        assert_eq!((slot_w, slot_h), (259, 221));
+
+        // lock_island_corner 的公式：工作区四角 + 16px 边距，写进 custom_position。
+        const LOCK_MARGIN: i32 = 16;
+        let locked = IslandPosition {
+            x: work_right - slot_w - LOCK_MARGIN,
+            y: work_bottom - slot_h - LOCK_MARGIN,
+        };
+        assert_eq!(locked, IslandPosition { x: 2285, y: 1195 });
+
+        // 未锁角的默认收起位：工作区底边 - 狗槽 - margin_y(默认 0)。
+        let default_y = work_bottom - slot_h;
+        assert_eq!(default_y - locked.y, LOCK_MARGIN);
+
+        let mut positioned = state(IslandMode::Collapsed, collapsed_scale, DEFAULT_EXPANDED_ISLAND_HEIGHT);
+        positioned.custom_position = Some(locked);
+
+        // 缩边：x 保持锁角基线，y 交给缩边公式。
+        positioned.is_tucked = true;
+        assert_eq!(
+            resolve_stage_position(positioned, 0, default_y, -48).0,
+            locked.x
+        );
+        // 唤醒：x/y 都必须精确回到锁角基线（差 0px，实机验收口径 ≤2px）。
+        positioned.is_tucked = false;
+        assert_eq!(
+            resolve_stage_position(positioned, 0, default_y, -48),
+            (locked.x, locked.y)
+        );
+    }
+
+    // 判据 2（8px 位移）：唤醒/缩边/闲逛的位移动画进行中不允许开始拖拽，
+    // 否则会把动画中间帧当成用户放置位置写进 custom_position 并持久化。
+    #[test]
+    fn drag_start_is_rejected_until_the_geometry_has_settled() {
+        let settled = state(IslandMode::Collapsed, 1.0, DEFAULT_EXPANDED_ISLAND_HEIGHT);
+        assert!(drag_start_allowed(settled, false));
+
+        // 动画进行中（缩边 / 唤醒 / 闲逛）：拒绝。
+        assert!(!drag_start_allowed(settled, true));
+
+        // 缩边态按下：拒绝（唤醒由点击/悬停驱动，不该顺带改位置）。
+        let mut tucked = settled;
+        tucked.is_tucked = true;
+        assert!(!drag_start_allowed(tucked, false));
+
+        // 已经在拖：拒绝重复进入。
+        let mut dragging = settled;
+        dragging.is_dragging = true;
+        assert!(!drag_start_allowed(dragging, false));
+
+        // 展开态：拒绝（浮层矩形不是狗位）。
+        let mut expanded = settled;
+        expanded.mode = IslandMode::Expanded;
+        assert!(!drag_start_allowed(expanded, false));
     }
 
     #[test]
