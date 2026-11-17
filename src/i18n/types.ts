@@ -313,9 +313,8 @@ export type Translations = {
     addHint: string;
     empty: string;
     reorderHint: string;
-    moveUp: string;
-    moveDown: string;
     delete: string;
+    deleted: (count: number) => string;
     selectAll: string;
     selectAllHint: string;
     allSelected: string;

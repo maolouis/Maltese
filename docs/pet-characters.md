@@ -68,6 +68,30 @@ node scripts/build-pet-manifest.mjs
 设置页「专属形象」卡片现在按形象分开保存：`maltese-pet-gif-rotation:<角色>`。
 旧版按状态保存的配置会自动迁移到小白，其他形象第一次使用时直接用素材默认值。
 
+## 表情轮播设置：方格展示 + 拖拽排序 + 右键删除
+
+设置页「表情轮播」的 GIF 列表从「每行一张的长条 + ↑↓ 按钮」改成**缩略图方格墙**：
+`grid-template-columns: repeat(auto-fill, minmax(96px, 1fr))` 自适应列数，
+每格是 GIF 缩略图 + 左上角序号角标 + 底部文件名；「上移/下移」按钮和对应 i18n 文案已移除，
+`order()` 现在只用于序号角标和无障碍标签。
+
+- **拖动排序**：格子是 HTML5 `draggable`。`onDragStart` 记下源下标（同时写 `dataTransfer` 的 `text/plain`），
+  `onDragOver` 高亮悬停的目标格（`is-drop-target`：青色描边 + 左侧 3px 插入线），
+  被拖起的那格加 `is-dragging`（半透明 + 虚线）；松手 `onDrop` 把源格子 `splice` 出来后插到目标下标，
+  再走组件原有的 `saveItems()` → `savePetGifRotationConfig({ ...config, [state]: next }, character)`
+  写回 `localStorage`（键 `maltese-pet-gif-rotation:<角色>`）并派发 `maltese-pet-gif-rotation-updated`。
+  主窗口 / 陪玩狗 / 跟随狗照旧通过 storage 事件和自定义事件同步，**没有新增存储**。
+- **右键删除**：格子 `onContextMenu` 阻止默认菜单后直接删除（无确认弹窗）。自定义 GIF 仍先调
+  `remove_pet_gif` 删掉应用数据目录里的文件，再 `saveItems` 过滤掉该项；删除成功后显示 2.4 秒的
+  「已删除 N 张 GIF」状态提示（`role="status"` / `aria-live="polite"`）。为了让触屏和触控板用户也能找到入口，
+  格子悬停或聚焦时右上角会浮出一个小删除按钮，走同一个 `remove()`，不会再弹二次确认。
+- **保留的能力**：表情状态下拉、全选、添加 GIF（≤8 MB）、恢复默认、折叠展开、轮播范围面板、错误提示都没动；
+  新增文案只动了 `petGifs` 命名空间（`reorderHint` 改成拖动/右键说明，新增 `deleted(count)`）。
+- 方格区域最大高度 460px、超出内部滚动，避免一个表情几百张图把设置页拉成一条长柱。
+- 相关文件：`src/PetGifRotationSettings.tsx`、`src/PetGifRotationSettings.css`（持久化仍复用 `src/petGifRotation.ts`）。
+- 已知限制：HTML5 拖拽在触摸屏上不触发，排序需要在桌面用鼠标拖；键盘可达性只做到格子可聚焦
+  （`:focus-visible` 描边），暂不支持键盘排序。
+
 ## 微博官方表情包（独立素材池）
 
 `assets/pets/stickers/weibo/` 存了一份从官方微博 [@线条小狗Maltese](https://weibo.com/u/7776232700) 收集的整套表情包：第 1–33 弹加 emoji、漫画、新春、小小狗/小小金毛、补充包等特辑，共 36 组 296 张，已归一化成 240×240、保留透明底的多帧 GIF。

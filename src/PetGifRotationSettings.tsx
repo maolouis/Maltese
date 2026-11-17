@@ -1,6 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { ArrowDown, ArrowUp, CheckCheck, ChevronDown, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, ChevronDown, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useTranslation } from "./i18n";
 import {
   defaultPetGifItems,
@@ -22,6 +22,8 @@ type CustomPetGif = {
 };
 
 const MAX_GIF_BYTES = 8 * 1024 * 1024;
+/** 删除等操作的状态提示保留时长。 */
+const NOTICE_MS = 2400;
 
 export function PetGifRotationSettings() {
   const t = useTranslation();
@@ -38,8 +40,13 @@ export function PetGifRotationSettings() {
   });
   const [state, setState] = useState("idle");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  // 拖拽排序：dragIndex 是被拖的格子，dropIndex 是当前悬停的目标格子。
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const noticeTimer = useRef<number | null>(null);
 
   const items = config[state] ?? [];
   const states = Object.keys(t.petGifs.states);
@@ -69,6 +76,30 @@ export function PetGifRotationSettings() {
     return merged;
   }, [character, config, rotationStates]);
 
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
+
+  // 切换表情时清掉上一列的拖拽残留，避免高亮/序号错位。
+  useEffect(() => {
+    setDragIndex(null);
+    setDropIndex(null);
+  }, [state]);
+
+  const flashNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(""), NOTICE_MS);
+  };
+
+  const resetDrag = () => {
+    setDragIndex(null);
+    setDropIndex(null);
+  };
+
   const saveItems = (nextItems: PetGifRotationItem[]) => {
     savePetGifRotationConfig({ ...config, [state]: nextItems }, character);
   };
@@ -85,11 +116,15 @@ export function PetGifRotationSettings() {
     savePetGifRotationStates(next);
   };
 
-  const move = (index: number, offset: number) => {
-    const target = index + offset;
-    if (target < 0 || target >= items.length) return;
+  // 拖动排序：把 from 处的格子取出，插到 to 处（to 为落点格子的当前位置）。
+  // 复用 saveItems → savePetGifRotationConfig 写回配置，主窗口会通过 storage 事件同步。
+  const reorder = (from: number, to: number) => {
+    if (from === to) return;
+    if (from < 0 || to < 0 || from >= items.length || to >= items.length) return;
     const next = [...items];
-    [next[index], next[target]] = [next[target], next[index]];
+    const [moved] = next.splice(from, 1);
+    if (!moved) return;
+    next.splice(to, 0, moved);
     saveItems(next);
   };
 
@@ -100,6 +135,8 @@ export function PetGifRotationSettings() {
         await invoke("remove_pet_gif", { path: item.path });
       }
       saveItems(items.filter((entry) => entry.id !== item.id));
+      resetDrag();
+      flashNotice(t.petGifs.deleted(1));
     } catch (reason) {
       setError(`${t.petGifs.deleteFailed}${String(reason)}`);
     }
@@ -276,67 +313,89 @@ export function PetGifRotationSettings() {
         </div>
   
         {error && <p className="pet-gif-settings__error">{error}</p>}
+        {notice && (
+          <p className="pet-gif-settings__notice" role="status" aria-live="polite">
+            {notice}
+          </p>
+        )}
   
         {items.length === 0 ? (
           <p className="pet-gif-settings__empty">{t.petGifs.empty}</p>
         ) : (
-          <div className="pet-gif-settings__list">
-            {items.map((item, index) => (
-              <article className="pet-gif-item" key={item.id}>
-                <span className="pet-gif-item__order" aria-label={t.petGifs.order(index + 1)}>
-                  {index + 1}
-                </span>
-                <img
-                  className="pet-gif-item__preview"
-                  src={petGifItemSrc(item)}
-                  alt=""
-                  loading="lazy"
-                  draggable={false}
-                />
-                <div className="pet-gif-item__copy">
-                  <strong title={item.name}>{item.name}</strong>
-                  <span>{item.custom ? t.petGifs.custom : t.petGifs.builtin}</span>
-                  <code
-                    className="pet-gif-item__path"
-                    title={item.path ?? item.src}
-                    aria-label={`${t.petGifs.pathLabel}: ${item.path ?? item.src}`}
-                  >
-                    {item.path ?? item.src}
-                  </code>
-                </div>
-                <div className="pet-gif-item__actions">
+          <div className="pet-gif-settings__grid" role="list" aria-label={t.petGifs.title}>
+            {items.map((item, index) => {
+              const dragging = dragIndex === index;
+              const dropTarget = dropIndex === index && dragIndex !== null && dragIndex !== index;
+              return (
+                <figure
+                  key={item.id}
+                  role="listitem"
+                  className={`pet-gif-tile${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}`}
+                  draggable
+                  tabIndex={0}
+                  aria-label={`${t.petGifs.order(index + 1)} · ${item.name}`}
+                  title={`${t.petGifs.order(index + 1)} · ${item.name} · ${item.path ?? item.src ?? ""}`}
+                  onDragStart={(event) => {
+                    setDragIndex(index);
+                    setDropIndex(index);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", String(index));
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    if (dropIndex !== index) setDropIndex(index);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const raw = event.dataTransfer.getData("text/plain");
+                    const parsed = raw === "" ? Number.NaN : Number(raw);
+                    const from =
+                      Number.isInteger(parsed) && parsed >= 0 ? parsed : dragIndex;
+                    resetDrag();
+                    if (from === null) return;
+                    reorder(from, index);
+                  }}
+                  onDragEnd={resetDrag}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    void remove(item);
+                  }}
+                >
+                  <img
+                    className="pet-gif-tile__preview"
+                    src={petGifItemSrc(item)}
+                    alt=""
+                    loading="lazy"
+                    draggable={false}
+                  />
+                  <span className="pet-gif-tile__order" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <figcaption className="pet-gif-tile__name" title={item.name}>
+                    {item.name}
+                  </figcaption>
                   <button
                     type="button"
-                    className="pet-gif-item__button"
-                    aria-label={t.petGifs.moveUp}
-                    title={t.petGifs.moveUp}
-                    disabled={index === 0}
-                    onClick={() => move(index, -1)}
-                  >
-                    <ArrowUp size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="pet-gif-item__button"
-                    aria-label={t.petGifs.moveDown}
-                    title={t.petGifs.moveDown}
-                    disabled={index === items.length - 1}
-                    onClick={() => move(index, 1)}
-                  >
-                    <ArrowDown size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="pet-gif-item__button pet-gif-item__button--danger"
-                    aria-label={t.petGifs.delete}
+                    className="pet-gif-tile__delete"
+                    aria-label={`${t.petGifs.delete} · ${item.name}`}
                     title={t.petGifs.delete}
-                    onClick={() => void remove(item)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void remove(item);
+                    }}
+                    onContextMenu={(event) => {
+                      // 让右键继续走格子自己的删除逻辑，不再弹系统菜单。
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void remove(item);
+                    }}
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={12} />
                   </button>
-                </div>
-              </article>
-            ))}
+                </figure>
+              );
+            })}
           </div>
         )}
   
