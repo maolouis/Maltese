@@ -95,14 +95,14 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const start = useCallback(async () => {
     setLocalError(null);
     try {
-      await video.start(provider, selectedAccountId || undefined);
+      await video.start(provider, selectedAccountId || undefined, { autoComment });
       onNotice(provider === "bilibili" ? "小狗开始看 B 站了" : "小狗开始看抖音了");
     } catch (reason) {
       const info = describeVideoError(reason, "启动失败，请稍后再试。");
       setLocalError(info);
       onNotice(`启动失败：${info.message}`);
     }
-  }, [onNotice, provider, selectedAccountId, video]);
+  }, [autoComment, onNotice, provider, selectedAccountId, video]);
 
   const stop = useCallback(async () => {
     setLocalError(null);

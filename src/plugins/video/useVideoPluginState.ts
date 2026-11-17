@@ -50,7 +50,7 @@ export type VideoPluginState = {
   refresh: () => Promise<void>;
   loadBrowserStatus: () => Promise<void>;
   closeBrowser: () => Promise<void>;
-  start: (provider: "bilibili" | "douyin", accountId?: string) => Promise<void>;
+  start: (provider: "bilibili" | "douyin", accountId?: string, options?: { autoComment?: boolean }) => Promise<void>;
   stop: () => Promise<void>;
   updateConfig: (patch: Partial<VideoConfig>) => Promise<void>;
   createAccount: (input: {
@@ -198,7 +198,11 @@ export function useVideoPluginState(): VideoPluginState {
     };
   }, []);
 
-  const start = useCallback(async (provider: "bilibili" | "douyin", accountId?: string) => {
+  const start = useCallback(async (
+    provider: "bilibili" | "douyin",
+    accountId?: string,
+    options?: { autoComment?: boolean },
+  ) => {
     await invoke("video_start_session", {
       provider,
       config: {
@@ -208,7 +212,7 @@ export function useVideoPluginState(): VideoPluginState {
         sampleIntervalSeconds: config.sampleIntervalSeconds,
         dailyDeliveries: config.dailyDeliveries,
         modelSummary: config.modelSummary,
-        autoComment: config.autoComment,
+        autoComment: options?.autoComment ?? config.autoComment,
       },
       accountId: accountId || undefined,
     });
