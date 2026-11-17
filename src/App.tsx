@@ -67,6 +67,14 @@ import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages"
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { previewPetLinkage } from "./petLinkPreview";
+import {
+  buildLinkPlan,
+  loadPetLinkHistory,
+  rememberPairHash,
+  savePetLinkHistory,
+  sceneIdForAction,
+  PET_LINK_SOLO_SECOND_MS,
+} from "./petLinkScript";
 import { resolvePetGif } from "./petAssets";
 import {
   rotationFramesForState,
@@ -75,7 +83,7 @@ import {
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
-import { PET_CHARACTERS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
+import { PET_CHARACTERS, PET_CHARACTER_LABELS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
 import { TuckGifControl } from "./TuckGifControl";
 import { useTuckGifSource } from "./tuckGif";
 import { UpdatePanel } from "./UpdatePanel";
@@ -154,6 +162,7 @@ import { DiaryTimeline, type DiaryEvent } from "./DiaryTimeline";
 import {
   getPetLinkBus,
   linkActionForPetAction,
+  readCompanionLabels,
   PET_LINK_BONGO_THROTTLE_MS,
   PET_LINK_MAIN_HOP_MS,
   PET_LINK_MAIN_REACTION_MS,
@@ -348,6 +357,12 @@ type IslandPosition = {
 
 type BongoPosition = "bottomCenter" | "bottomLeft" | "bottomRight" | "topCenter";
 
+/** 主狗说台词时气泡标题（小白 / 小鸡毛 / 两只一起）。 */
+function mainSaysLabel(character: string): string {
+  if (character === "xiaobai") return PET_CHARACTER_LABELS.xiaobai;
+  if (character === "xiaojimao") return PET_CHARACTER_LABELS.xiaojimao;
+  return PET_CHARACTER_LABELS.duo;
+}
 type IslandSettings = {
   topEdgeLayoutVersion: 1;
   appearanceMode: AppearanceMode;
@@ -2812,7 +2827,7 @@ function LayoutEditor({
           type="button"
           className="settings-inline-action"
           disabled={!settings.petLinkage}
-          onClick={() => void previewPetLinkage()}
+          onClick={() => void previewPetLinkage({ scenes: t.petLink.scenes, mainCharacter: petCharacter })}
         >
           {t.petLink.previewButton}
         </button>
@@ -9181,13 +9196,51 @@ function IslandApp({
       && !linkContext.isTucked
       && !linkContext.sleeping
     ) {
+      // 双狗剧本：一次联动产出一对台词（小鸡毛先说、小白 120ms 后应）。
+      const sceneId = sceneIdForAction(linkAction);
+      const bank = t.petLink.scenes[sceneId];
+      const labels = readCompanionLabels();
+      const recent = loadPetLinkHistory();
+      const plan = buildLinkPlan({
+        action: linkAction,
+        labels,
+        bank,
+        mainCharacter: proactiveCharacter,
+        recent,
+      });
       // happy/celebrate 同时通知 Bongo（即使没有陪玩狗也要发，否则 Bongo 收不到）。
+      const lines = plan ? plan.lines
+        .filter((line) => line.who !== "main")
+        .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
+          acc[line.who] = { line: line.line, speaker: line.speaker };
+          return acc;
+        }, {}) : undefined;
       getPetLinkBus("main").emitAction(linkAction, {
         origin: mainOriginRef.current,
         toBongo: action === "happy" || action === "celebrate",
+        sceneId: plan?.sceneId ?? sceneId,
+        lines,
+        mainLine: plan?.mainLine ?? undefined,
+        mainDelayMs: plan?.mainDelayMs ?? 0,
       });
+      if (plan) {
+        savePetLinkHistory(window.localStorage, rememberPairHash(recent, plan.hash));
+        // 主狗说自己的那句；没有随从时再补一句自我回应（A/B 剧本）。
+        if (plan.mainLine) {
+          window.setTimeout(() => {
+            showCloudBubble(mainSaysLabel(proactiveCharacter), plan.mainLine ?? "");
+          }, plan.mainDelayMs);
+        }
+        if (labels.length === 0) {
+          const pair = plan.sceneId && bank ? bank.pairs[plan.pairIndex] : undefined;
+          const second = pair?.main ?? t.petLink.scenes.pet.pairs[0]?.main;
+          if (second) {
+            window.setTimeout(() => showCloudBubble(mainSaysLabel(proactiveCharacter), second), PET_LINK_SOLO_SECOND_MS);
+          }
+        }
+      }
     }
-  }, [recordDiaryEvent, startPetInteraction, t, tuckIsland]);
+  }, [proactiveCharacter, recordDiaryEvent, showCloudBubble, startPetInteraction, t, tuckIsland]);
   useEffect(() => {
     if (!isTauri()) {
       return;
@@ -9209,6 +9262,26 @@ function IslandApp({
       unlisten?.();
     };
   }, [triggerPetAction]);
+  // 设置窗口里的「试一下联动」把主狗那句转给主窗口显示（预览可能从设置窗口点）。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void listen<{ title?: string; line?: string; delayMs?: number }>("maltese-pet-link-say", (event) => {
+      const line = event.payload?.line?.trim();
+      if (!line) return;
+      const title = event.payload?.title?.trim() || "";
+      const delayMs = Math.max(0, Number(event.payload?.delayMs) || 0);
+      window.setTimeout(() => showCloudBubble(title, line), delayMs);
+    }).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showCloudBubble]);
   // L2 反向：Bongo 敲空格 → 主狗摇尾巴（播 happy 1.2s）。只在收起态、没缩边、
   // 没睡觉时响应；响应期间抑制联动广播，避免「主狗 happy → Bongo 敲」的回声。
   useEffect(() => {
@@ -9230,8 +9303,40 @@ function IslandApp({
       window.setTimeout(() => {
         linkSuppressedRef.current = false;
       }, PET_LINK_MAIN_REACTION_MS);
+      // S4 双狗桥段：Bongo 敲击后小鸡毛 hop 回应、小白 peek 并说一句。
+      const bongoBank = t.petLink.scenes.bongo;
+      const bongoLabels = readCompanionLabels();
+      const bongoRecent = loadPetLinkHistory();
+      const bongoPlan = buildLinkPlan({
+        action: "happy",
+        labels: bongoLabels,
+        bank: bongoBank,
+        mainCharacter: proactiveCharacter,
+        recent: bongoRecent,
+      });
+      if (bongoPlan) {
+        const lines = bongoPlan.lines
+          .filter((line) => line.who !== "main")
+          .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
+            acc[line.who] = { line: line.line, speaker: line.speaker };
+            return acc;
+          }, {});
+        getPetLinkBus("main").emitAction("happy", {
+          origin: mainOriginRef.current,
+          sceneId: "bongo",
+          lines,
+          mainLine: bongoPlan.mainLine ?? undefined,
+          mainDelayMs: bongoPlan.mainDelayMs,
+        });
+        savePetLinkHistory(window.localStorage, rememberPairHash(bongoRecent, bongoPlan.hash));
+        if (bongoPlan.mainLine) {
+          window.setTimeout(() => {
+            showCloudBubble(mainSaysLabel(proactiveCharacter), bongoPlan.mainLine ?? "");
+          }, bongoPlan.mainDelayMs);
+        }
+      }
     });
-  }, [flipLinkHop, triggerPetAction]);
+  }, [flipLinkHop, proactiveCharacter, showCloudBubble, t, triggerPetAction]);
   const petState = useMemo<PetState>(() => {
     if (petAction) {
       return petAction;

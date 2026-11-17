@@ -1,5 +1,10 @@
 export type LocaleCode = "zh-CN" | "en";
 
+export type DuoScene = {
+  /** 每组 = { 小鸡毛主动句, 小白回应句, 主狗自说句 }。 */
+  pairs: { active: string; shy: string; main: string }[];
+};
+
 export type Translations = {
   /** Native language name shown in the locale picker. */
   localeLabel: string;
@@ -355,6 +360,13 @@ export type Translations = {
     companionLines: string[];
     previewButton: string;
     previewHint: string;
+    /** 双狗互动剧本（小鸡毛先说、小白回应，一问一答成对）。 */
+    scenes: {
+      pet: DuoScene;
+      eating: DuoScene;
+      cheerful: DuoScene;
+      bongo: DuoScene;
+    };
   };
 
   updateNotice: {

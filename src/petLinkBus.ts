@@ -21,8 +21,12 @@ export type PetLinkAction = "pet" | "eating" | "happy" | "celebrate";
 export type PetLinkTarget = {
   /** 目标窗口 label：companion-1 … companion-4。 */
   label: string;
-  /** 错峰延迟（0–300ms）。 */
+  /** 错峰延迟（0–120ms）。 */
   delayMs: number;
+  /** 这只狗要说的台词（双狗剧本；缺省时接收端用通用台词兜底）。 */
+  line?: string;
+  /** 说话角色（决定 GIF 与台词是否一致）。 */
+  speaker?: "xiaobai" | "xiaojimao";
 };
 
 export type PetLinkMessage =
@@ -40,6 +44,12 @@ export type PetLinkMessage =
       origin?: { x: number; y: number };
       /** 这次动作要不要同时通知 Bongo（happy/celebrate 必敲）。 */
       toBongo?: boolean;
+      /** 剧本场景（pet / eating / cheerful / bongo），dev 日志与验收用。 */
+      sceneId?: string;
+      /** 主狗自己说的那句（随从说另一句；无随从时是自说）。 */
+      mainLine?: string;
+      /** 主狗那句的延迟（成对台词里另一只先说）。 */
+      mainDelayMs?: number;
     }
   | {
       kind: "bongo-hit";
@@ -65,7 +75,7 @@ export const PET_LINK_BUBBLE_COOLDOWN_MS = 800;
 /** 陪玩狗动作持续时间（A1：2.6s±0.3s 后回 idle）。 */
 export const PET_LINK_ACTION_MS = 2600;
 /** 气泡停留（增强版 1.2s）。 */
-export const PET_LINK_BUBBLE_MS = 1200;
+export const PET_LINK_BUBBLE_MS = 1800;
 /** 位移反馈：朝主狗方向 8–16px 再回位。 */
 export const PET_LINK_SHIFT_MIN_PX = 8;
 export const PET_LINK_SHIFT_MAX_PX = 16;
@@ -385,6 +395,14 @@ export type PetLinkEmitOptions = {
   origin?: { x: number; y: number };
   /** 是否同时通知 Bongo（happy/celebrate 必敲）。 */
   toBongo?: boolean;
+  /** 双狗剧本：每个目标窗口要说的那句台词。 */
+  lines?: Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>;
+  /** 剧本场景 id（pet / eating / cheerful / bongo）。 */
+  sceneId?: string;
+  /** 主狗自己说的那句。 */
+  mainLine?: string;
+  /** 主狗那句的延迟（成对台词里另一只先说）。 */
+  mainDelayMs?: number;
   now?: number;
 };
 
@@ -432,11 +450,17 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
         if (!enabled()) return [];
         const labels = emitOptions?.labels ?? companionLabels();
         const at = emitOptions?.now ?? now();
-        const targets = governor.planTargets(labels, action, at, { force: emitOptions?.force });
+        const planned = governor.planTargets(labels, action, at, { force: emitOptions?.force });
+        // 把剧本台词挂到命中目标上（双狗各说一句，来自同一组）。
+        const lines = emitOptions?.lines;
+        const targets = planned.map((target) => {
+          const entry = lines ? lines[target.label] : undefined;
+          return entry ? { ...target, line: entry.line, speaker: entry.speaker } : target;
+        });
         const toBongo = emitOptions?.toBongo === true;
-        // 没有陪玩狗时也要把消息发出去（Bongo 可能在场），否则「主狗 celebrate →
-        // Bongo 必敲」在 petCount=1 时永远收不到。
-        if (targets.length === 0 && !toBongo) return [];
+        // 没有陪玩狗时也要把消息发出去（Bongo 可能在场 / 主狗要自说），
+        // 否则「主狗 celebrate → Bongo 必敲」在 petCount=1 时永远收不到。
+        if (targets.length === 0 && !toBongo && !emitOptions?.mainLine) return [];
         seq += 1;
         post({
           kind: "action",
@@ -449,6 +473,9 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
           bubble: shouldAttachBubble(action),
           origin: emitOptions?.origin,
           toBongo,
+          sceneId: emitOptions?.sceneId,
+          mainLine: emitOptions?.mainLine,
+          mainDelayMs: emitOptions?.mainDelayMs,
         });
         return targets;
       } catch {

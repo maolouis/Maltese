@@ -96,20 +96,24 @@ body,
 .companion-pet__bubble {
   position: absolute;
   left: 50%;
-  bottom: 100%;
+  /* 气泡钉在窗口内部顶部：原来 bottom:100% 会落到窗口外被裁掉（用户「没有台词」的根因）。 */
+  top: 2px;
+  bottom: auto;
   transform: translateX(-50%);
-  margin-bottom: 4px;
+  width: max-content;
   max-width: 160px;
   padding: 4px 9px;
   border-radius: 10px;
   background: #ffffff;
   color: #2b2f3a;
-  font-size: 12px;
-  line-height: 1.25;
-  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.32;
+  white-space: normal;
+  text-align: center;
+  z-index: 6;
   box-shadow: 0 4px 12px rgba(5, 7, 12, 0.18);
   pointer-events: none;
-  animation: companion-bubble-in 160ms ease-out;
+  animation: companion-bubble-in 140ms ease-out;
 }
 
 @keyframes companion-bubble-in {

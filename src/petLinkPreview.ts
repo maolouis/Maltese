@@ -8,12 +8,22 @@
 // - 单例锁避免连点叠加；无论成功失败都走 finally 复原。
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { loadPetCharacter } from "./petCharacters";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   getPetLinkBus,
   PET_LINK_PREVIEW_MS,
   PET_LINK_SETTINGS_KEY,
 } from "./petLinkBus";
+import {
+  buildLinkPlan,
+  loadPetLinkHistory,
+  PET_LINK_SOLO_SECOND_MS,
+  rememberPairHash,
+  savePetLinkHistory,
+  type SceneBanks,
+} from "./petLinkScript";
 
 type PreviewSettings = {
   petCount: number;
@@ -76,11 +86,34 @@ function extrasConfig(settings: PreviewSettings, petCount: number, bongoEnabled:
 
 let running = false;
 
-/** 返回 true 表示演示已播放（不代表窗口一定可见，日志里会记录失败）。 */
-export async function previewPetLinkage(): Promise<boolean> {
+/**
+ * 返回 true 表示演示已播放（不代表窗口一定可见，日志里会记录失败）。
+ * `scenes` / `mainCharacter` 由调用方从 i18n 与当前形象传入（台词不硬编码在本模块）。
+ */
+export async function previewPetLinkage(options?: {
+  scenes?: SceneBanks;
+  mainCharacter?: string;
+}): Promise<boolean> {
   if (!isTauri() || running) return false;
   running = true;
   const settings = readSettings();
+  const mainCharacter = options?.mainCharacter ?? loadPetCharacter();
+  const bank = options?.scenes?.pet;
+  const recent = loadPetLinkHistory();
+  // 预览按当前配置播完整剧本：有随从就让随从说一句、主狗说另一句；
+  // 没有随从（petCount=1）就让主狗自说两句（A/B 剧本），保证一次看到「成对台词」。
+  const companionLabels = ["companion-1"];
+  const hasCompanion = settings.petCount > 1;
+  const plan = bank
+    ? buildLinkPlan({
+        action: "pet",
+        labels: hasCompanion ? companionLabels : [],
+        bank,
+        mainCharacter,
+        recent,
+        force: true,
+      })
+    : null;
   try {
     // 1) 临时把随从数量提到 2（只作用于本次原生同步，不落盘）。
     await invoke("sync_desktop_extras", {
@@ -92,13 +125,46 @@ export async function previewPetLinkage(): Promise<boolean> {
       .outerPosition()
       .then((pos) => ({ x: pos.x, y: pos.y }))
       .catch(() => undefined);
-    // 3) 强制发一次联动：跳过概率/冷却，只发给 companion-1，保证看得见。
+    const lines = plan
+      ? plan.lines
+          .filter((line) => line.who !== "main")
+          .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
+            acc[line.who] = { line: line.line, speaker: line.speaker };
+            return acc;
+          }, {})
+      : undefined;
+    // 3) 强制发一次完整联动：跳过概率/冷却，剧本台词一起下发。
     getPetLinkBus("main").emitAction("pet", {
       force: true,
-      labels: ["companion-1"],
+      labels: hasCompanion ? companionLabels : [],
       origin,
       toBongo: settings.bongoEnabled,
+      sceneId: plan?.sceneId ?? "pet",
+      lines,
+      mainLine: plan?.mainLine ?? undefined,
+      mainDelayMs: plan?.mainDelayMs ?? 0,
     });
+    if (plan) {
+      savePetLinkHistory(window.localStorage, rememberPairHash(recent, plan.hash));
+      // 主狗那句交给主窗口显示（预览可能是在设置窗口点的）。
+      if (plan.mainLine) {
+        void emit("maltese-pet-link-say", {
+          title: mainSaysTitle(mainCharacter),
+          line: plan.mainLine,
+          delayMs: plan.mainDelayMs,
+        }).catch(() => undefined);
+      }
+      if (!hasCompanion) {
+        const pair = bank?.pairs[plan.pairIndex];
+        if (pair?.main) {
+          void emit("maltese-pet-link-say", {
+            title: mainSaysTitle(mainCharacter),
+            line: pair.main,
+            delayMs: PET_LINK_SOLO_SECOND_MS,
+          }).catch(() => undefined);
+        }
+      }
+    }
     await new Promise((resolve) => window.setTimeout(resolve, PET_LINK_PREVIEW_MS));
     return true;
   } catch (error) {
@@ -111,4 +177,10 @@ export async function previewPetLinkage(): Promise<boolean> {
     }).catch((error) => console.error("preview_pet_link restore failed", error));
     running = false;
   }
+}
+
+function mainSaysTitle(character: string): string {
+  if (character === "xiaobai") return "小白";
+  if (character === "xiaojimao") return "小鸡毛";
+  return "小白和小鸡毛";
 }

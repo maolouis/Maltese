@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { useTranslation } from "./i18n";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
 import { describeProactivePlan, proactivePlan, saveProactiveLevel } from "./proactiveChat";
@@ -242,6 +243,7 @@ function Segments<T extends string>({
 }
 
 export default function SettingsWindow() {
+  const t = useTranslation();
   const [settings, setSettings] = useState<PetSettings>(load);
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const [shortcut, setShortcut] = useState(loadWakeShortcut);
@@ -425,7 +427,7 @@ export default function SettingsWindow() {
           className="sw-secondary"
           disabled={!settings.petLinkage}
           onClick={() => {
-            void previewPetLinkage();
+            void previewPetLinkage({ scenes: t.petLink.scenes });
           }}
         >
           试一下联动

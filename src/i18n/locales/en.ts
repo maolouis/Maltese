@@ -664,6 +664,36 @@ const en: Translations = {
     companionLines: ["Me too!", "Pat me~", "Yummy!", "So happy!", "Wait for me!", "Hehe~"],
     previewButton: "Try linkage",
     previewHint: "Need a second dog (or Bongo). Click \"Try linkage\" to bring one in temporarily for a 3s demo (action, shift, bubble); your settings stay unchanged.",
+    scenes: {
+      pet: {
+        pairs: [
+          { active: "Snowy! The human petted me first!", shy: "…Mm. I'll wait my turn.", main: "…Good work today." },
+          { active: "Head pats! Half for you!", shy: "…Then I'll come a little closer.", main: "I'll nap over there." },
+          { active: "The human's hand is so warm!", shy: "Don't crowd… I'm here too.", main: "Nice to have company." },
+        ],
+      },
+      eating: {
+        pairs: [
+          { active: "I'll eat half and save half for you!", shy: "You go first. I'm not in a hurry.", main: "Eat slowly, don't choke." },
+          { active: "Yummy! Snowy, try some!", shy: "…Keep it. I'll just sniff.", main: "You go first. I'm not in a hurry." },
+          { active: "Got it! You take a bite too!", shy: "Slow down, don't choke.", main: "You eat. I'll watch." },
+        ],
+      },
+      cheerful: {
+        pairs: [
+          { active: "Yay! Jump together!", shy: "…Just once.", main: "Today… seems nice." },
+          { active: "So great! Spin spin!", shy: "Mm. Let's just stay like this.", main: "Mm. Let's just stay like this." },
+          { active: "Then I'll spin with you!", shy: "…Thank you.", main: "…Thank you." },
+        ],
+      },
+      bongo: {
+        pairs: [
+          { active: "Dong! I'll drum too!", shy: "…A little quieter.", main: "Dong." },
+          { active: "O-okay, softer dong…", shy: "You'll wake the human.", main: "Dong." },
+          { active: "Listen! Rhythm!", shy: "…I heard it.", main: "Dong." },
+        ],
+      },
+    },
   },
   messagePreview: {
     label: "Show message preview",

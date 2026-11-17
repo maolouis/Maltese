@@ -9,6 +9,7 @@ import {
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { usePetCharacter } from "./petCharacters";
+import { resolveCompanionRole } from "./petLinkScript";
 import { useTranslation } from "./i18n";
 import {
   acceptLinkMessage,
@@ -57,7 +58,10 @@ export default function CompanionPet() {
     }
   }, []);
   const [look, setLook] = useState<PetLook>(readLook);
-  const character = usePetCharacter();
+  const mainCharacter = usePetCharacter();
+  // 随从窗口没有角色身份：按 companion-* 奇偶分配小白/小鸡毛（与主狗重复则交换）。
+  const role = useMemo(() => resolveCompanionRole(label, mainCharacter), [label, mainCharacter]);
+  const character = role.character;
   const gifRotationConfig = usePetGifRotationConfig(character);
   const gifRotationStates = usePetGifRotationStates();
   const idleFrames = useMemo(
@@ -149,35 +153,55 @@ export default function CompanionPet() {
         enabled: readPetLinkageEnabled(),
       });
       if (!result.accept || message.kind !== "action") return;
+      const target = message.targets.find((item) => item.label === label);
+      // 动作人设：小鸡毛蹦过来（朝主狗 + 向另一只狗靠近 + 大脉冲），
+      // 小白退半步再缓慢回靠（反向位移 + 小幅点头）。
+      const active = role.speaker === "xiaojimao";
+      const storyLine = target?.line?.trim();
       window.setTimeout(() => {
-        setReactionState(linkStateForAction(message.action));
-        // 位移反馈：朝主狗方向挪 8–16px，CSS transition 回位。
-        setShift(shiftToward(message.origin));
+        setReactionState(
+          active ? linkStateForAction(message.action) : message.action === "pet" ? "chin" : linkStateForAction(message.action),
+        );
+        const toward = shiftToward(message.origin);
+        // 同框时朝「另一只狗」再靠近一点：奇数（小白）往右，偶数（小鸡毛）往左。
+        const index = Number(/companion-(\d+)/.exec(label)?.[1] ?? "1");
+        const peerDx = index % 2 === 1 ? 10 : -10;
+        setShift(
+          active
+            ? { x: toward.x + peerDx, y: toward.y }
+            : { x: Math.round(-toward.x * 0.5), y: Math.round(-toward.y * 0.5) },
+        );
         if (shiftTimer.current !== null) window.clearTimeout(shiftTimer.current);
         shiftTimer.current = window.setTimeout(() => {
           shiftTimer.current = null;
           setShift(null);
-        }, PET_LINK_ACTION_MS);
+        }, active ? 520 : 1200);
         if (reactionTimer.current !== null) window.clearTimeout(reactionTimer.current);
         reactionTimer.current = window.setTimeout(() => {
           reactionTimer.current = null;
           setReactionState(null);
         }, PET_LINK_ACTION_MS);
-        if (result.bubble && lines.length > 0) {
-          setBubble(lines[Math.floor(Math.random() * lines.length)] ?? lines[0]);
-          if (bubbleTimer.current !== null) window.clearTimeout(bubbleTimer.current);
-          bubbleTimer.current = window.setTimeout(() => {
-            bubbleTimer.current = null;
-            setBubble("");
-          }, PET_LINK_BUBBLE_MS);
+        // 台词：优先用主窗口下发的成对台词；没有就退回通用台词。
+        if (result.bubble) {
+          const fallback = lines[Math.floor(Math.random() * lines.length)] ?? lines[0] ?? "";
+          const text = storyLine || fallback;
+          if (text) {
+            setBubble(text);
+            if (bubbleTimer.current !== null) window.clearTimeout(bubbleTimer.current);
+            bubbleTimer.current = window.setTimeout(() => {
+              bubbleTimer.current = null;
+              setBubble("");
+            }, PET_LINK_BUBBLE_MS);
+          }
         }
       }, result.delayMs);
     });
-  }, [label, lines]);
+  }, [label, lines, role.speaker]);
 
   useEffect(
     () => () => {
       if (reactionTimer.current !== null) window.clearTimeout(reactionTimer.current);
+      if (shiftTimer.current !== null) window.clearTimeout(shiftTimer.current);
       if (bubbleTimer.current !== null) window.clearTimeout(bubbleTimer.current);
     },
     [],
@@ -241,7 +265,7 @@ export default function CompanionPet() {
           opacity: look.opacity,
           // 联动位移：朝主狗方向挪一下再回位（CSS transition 负责平滑）。
           transform: shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined,
-          transition: "transform 260ms cubic-bezier(0.22, 1.2, 0.36, 1)",
+          // 小鸡毛「蹦过去」快（260ms）；小白「退半步再缓慢回靠」（1200ms）。\n          transition: role.speaker === "xiaojimao"\n            ? "transform 260ms cubic-bezier(0.22, 1.2, 0.36, 1)"\n            : "transform 1200ms cubic-bezier(0.33, 0.7, 0.4, 1)",
         }}
       />
     </div>

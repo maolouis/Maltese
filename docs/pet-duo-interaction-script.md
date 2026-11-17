@@ -144,3 +144,17 @@
 7. **验收工具**：dev 下 `console.debug("[pet-link-script]", sceneId, lineId, speaker)`，方便按 V1–V2 点验。
 
 **不改 Rust**（除非要补 `look-*` 素材/队形，本轮不涉及）。
+
+---
+
+## 9. 实现状态（2026-11-17 研发回填）
+
+- 已按本文实现机制部分：`src/petLinkScript.ts`（台词配对/角色身份/去重/节拍）、
+  `petLinkBus` 消息扩展（`line/speaker/sceneId/mainLine`）、主狗说话、随从按角色播 GIF 与动作、
+  Bongo 驱动 S4 剧本、`petCount=1` 的 A/B 自说剧本、「试一下联动」播完整成对剧本。
+- 已修气泡裁切（`top:2px` 钉窗口内），气泡 1.8s；像素证据见
+  [multi-instance-linkage-design.md §10](multi-instance-linkage-design.md)。
+- 台词库已按本文 §3 落入 i18n（S1/S2/S3/S4 各 3 组，zh/en）；S5–S7 场景机制已具备
+  （`sceneId` 可扩展），但触发点（久坐/夜间/回归）尚未接。
+- 未实现：`duo` 主狗同框时的「主狗台词 speaker 随机取一人」细节（当前 duo 当小鸡毛处理）、
+  真实双窗口同框时的队形/靠近幅度调优（需实机看效果）。

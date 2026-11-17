@@ -225,3 +225,53 @@
 - 关掉「实例联动」→ 0 次联动（单测覆盖 `enabled=false` 不发事件）；
 - 联动期间主窗口 rAF 间隔 <25ms（联动只做 CSS transform/animation，不触发布局计算）。
 - 单测：`tests/pet-link-bus.test.mjs` 17 条（含首只必中/第二只概率、force 预览、toBongo 路由、origin/bubble 下发）。
+
+---
+
+## 10. 双狗互动（2026-11-17 第二轮，按 `docs/pet-duo-interaction-script.md`）
+
+### 10.1 「没有台词」的真实原因（已实测定证）
+
+- 旧样式 `DesktopExtras.css` 的 `.companion-pet__bubble` 是 `position:absolute; bottom:100%`，
+  父容器 `.companion-pet` 为 100% 窗口高（200×180）→ 气泡被推到**窗口顶边之外**，
+  再被 `html, body, #root { overflow: hidden }` 与窗口矩形裁掉，所以永远看不到。
+- 只有随从有通用台词、主狗不说话、Bongo 无台词，观感就是「只换了个表情包」。
+- 气泡时长 1200ms 偏短。
+
+**像素证据**（用仓库真实 `DesktopExtras.css` + 200×180 视口，headless 渲染后统计近白像素）：
+
+| 版本 | 近白像素 | 气泡 bbox |
+| --- | --- | --- |
+| 修复前（`bottom:100%` 对照组） | **0** | 无（完全被裁掉） |
+| 修复后（`top:2px` 钉在窗口内） | **2741** | x 22–177，y 2–24（完整在窗口内） |
+
+### 10.2 机制实现
+
+- `src/petLinkScript.ts`（新增，纯函数、可单测）：场景映射（pet/eating/cheerful/bongo）、
+  成对台词选取（同一组的两句）、最近 5 条不重复（`localStorage["maltese-pet-link-history"]`，
+  只存 hash、滚动 20 条）、随从角色身份 `resolveCompanionRole()`（companion 奇数=小白、
+  偶数=小鸡毛，与主狗重复则交换）、`buildLinkPlan()` 产出「谁在几毫秒后说哪句」。
+- `src/petLinkBus.ts`：消息新增 `targets[].line/speaker`、`sceneId/mainLine/mainDelayMs`；
+  气泡时长 1200 → **1800ms**；发送端把剧本台词挂到命中的目标上。
+- 主窗口 `App.tsx`：主狗动作 → 生成剧本 → 广播（随从各说一句）+ 主狗自己用云朵气泡说另一句；
+  `petCount=1` 时主狗自说两句（第二句 1200ms 后）；Bongo 敲击 → 播 S4 剧本（毛/白成对台词）。
+- `CompanionPet.tsx`：按 label 解析角色身份并据此选 GIF（小白/小鸡毛不同素材池）；
+  台词优先用消息里下发的那句；动作人设：小鸡毛「蹦过去」（260ms 位移 + 1.08 脉冲 + 朝另一只狗靠近 10px），
+  小白「退半步再缓慢回靠」（反向位移 + 1200ms 回位 + `chin` 小幅点头）。
+- `SettingsWindow.tsx`：独立设置窗口也支持「试一下联动」（把主狗那句通过
+  `maltese-pet-link-say` 转给主窗口显示）。
+- 气泡落位：`top:2px`、宽 ≤160px、字号 11.5px、1.8s、z-index 6、`pointer-events:none`，
+  同一窗口最多 1 个（全局 ≤2 由 targets ≤2 保证）。
+
+### 10.3 台词与去重
+
+台词在 i18n `petLink.scenes.{pet,eating,cheerful,bongo}.pairs[]`（zh/en 各 3 组，每组
+`{active, shy, main}`）。选择规则：同一场景内最近 5 条说过的组不重复，全说过则回退到最久未用；
+同一次联动两只狗必须来自同一组（不跨组拼接）。「试一下联动」用 `force` 固定第一组，保证一次看全。
+
+### 10.4 验收（可测）
+
+- 有随从时一次联动产出 **≥2 条台词**（主狗 + 随从，不同角色），先说的先显示（差 ≥120ms）；
+- `petCount=1`：主狗自说两句（A），有 Bongo 时追加 Bongo 敲击回应（B）；
+- 关掉「实例联动」：0 句台词、0 动作；
+- 单测：`tests/pet-link-script.test.mjs` 9 条（成对、角色映射、去重滚动、force、无随从不崩）。
