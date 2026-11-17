@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Copy, Hand, ImagePlus, LoaderCircle, Send, Settings2, Trash2, Wrench, X } from "lucide-react";
+import { Copy, Hand, ImagePlus, LoaderCircle, RotateCcw, Send, Settings2, Square, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
 import { LocalChatSettings } from "./LocalChatSettings";
 import { PetSkillsSettings } from "./PetSkillsSettings";
@@ -23,6 +23,14 @@ import {
   thinkingEffort,
   type LocalChatConfig,
 } from "./localChat";
+import {
+  chatMaxTokens,
+  chatTimeouts,
+  clearChatBusy,
+  markChatBusy,
+  shouldKeepReasoning,
+  shouldPersistReply,
+} from "./chatGuard";
 import "./PetChat.css";
 
 type DshChatReply = { text: string; sessionId: string | null };
@@ -144,6 +152,12 @@ export function PetChat() {
   const [enabledSkills] = useState(loadEnabledSkills);
   const [customSkills] = useState(loadCustomSkills);
   const listRef = useRef<HTMLDivElement | null>(null);
+  /** 正在进行的流式请求：用于「停止生成」和防止旧请求回写。 */
+  const activeRequestRef = useRef<{ requestId: string; cancelled: boolean } | null>(null);
+  /** 最近一次失败的提问：给「重试」按钮用。 */
+  const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
+  /** 首字是否已经到达（分级超时用）。 */
+  const firstDeltaRef = useRef(false);
 
   // 打开聊天总是停在最新一条：挂载时直接跳到底部（不要动画），
   // 之后消息变化、窗口/面板高度变化（展开动画、聊天框高度设置）都重新贴底。

@@ -6,6 +6,7 @@ use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
@@ -28,8 +29,51 @@ fn persona(character: &str) -> &'static str {
 const MAX_HISTORY_TURNS: usize = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 const CHAT_TIMEOUT: Duration = Duration::from_secs(180);
+/// 流式请求的服务端兜底：首字最迟 12s，整体最迟 75s（前端更严格，这里是第二道保险）。
+const STREAM_FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(12);
+const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(75);
+/// 空正文兜底：关思考重发时的最小预算。
+const EMPTY_RETRY_MIN_TOKENS: u32 = 512;
+/// 空正文兜底：仍为空时给用户的人话（绝不返回空白）。
+const EMPTY_REPLY_FALLBACK: &str =
+    "我在，但这轮没想好怎么回……你再说一遍，或者把「思考」调浅一点试试。";
 const STRATA_LAUNCHER: &str = r"F:\Strata\bin\strata.cmd";
 const STRATA_BASE_URL: &str = "http://127.0.0.1:8080";
+
+/// 正在被用户「停止生成」取消的 requestId。
+static STREAM_CANCELS: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    OnceLock::new();
+
+fn cancel_registry() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    STREAM_CANCELS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn mark_cancelled(request_id: &str) -> bool {
+    cancel_registry()
+        .lock()
+        .map(|mut set| set.insert(request_id.to_string()))
+        .unwrap_or(false)
+}
+
+fn take_cancelled(request_id: &str) -> bool {
+    cancel_registry()
+        .lock()
+        .map(|mut set| set.remove(request_id))
+        .unwrap_or(false)
+}
+
+fn is_cancelled(request_id: &str) -> bool {
+    cancel_registry()
+        .lock()
+        .map(|set| set.contains(request_id))
+        .unwrap_or(false)
+}
+
+/// 「停止生成」：标记 requestId，流式循环下一次检查时主动断开连接（释放模型槽位）。
+#[tauri::command]
+pub fn local_chat_cancel(request_id: String) {
+    let _ = mark_cancelled(&request_id);
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,10 +315,74 @@ pub async fn local_chat_stream(
         .timeout(CHAT_TIMEOUT)
         .build()
         .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
+
+    let text = stream_once(
+        &app,
+        &request_id,
+        &client,
+        &endpoint,
+        &model,
+        api_key.as_deref(),
+        messages.clone(),
+        settings.clone(),
+    )
+    .await?;
+
+    if !text.trim().is_empty() {
+        return Ok(text.trim().to_string());
+    }
+
+    // 空正文兜底（与非流式 `local_chat` 对齐）：思考可能把预算吃光了，
+    // 关掉思考、把预算抬到至少 512 再流一次；仍为空就给可读兜底话术，绝不返回空白。
+    emit_stream_event(
+        &app,
+        &request_id,
+        "progress",
+        "这次只有思考没有正文，小狗换个方式再说一次…",
+    );
+    let retry_settings = LocalChatGenerationSettings {
+        max_tokens: Some(settings.max_tokens.unwrap_or(256).max(EMPTY_RETRY_MIN_TOKENS)),
+        temperature: settings.temperature,
+        top_p: settings.top_p,
+        enable_thinking: Some(false),
+        reasoning_effort: Some("none".into()),
+        reasoning_budget_tokens: Some(0),
+    };
+    let retried = stream_once(
+        &app,
+        &request_id,
+        &client,
+        &endpoint,
+        &model,
+        api_key.as_deref(),
+        messages,
+        retry_settings,
+    )
+    .await
+    .unwrap_or_default();
+    if !retried.trim().is_empty() {
+        return Ok(retried.trim().to_string());
+    }
+    emit_stream_event(&app, &request_id, "done", EMPTY_REPLY_FALLBACK);
+    Ok(EMPTY_REPLY_FALLBACK.to_string())
+}
+
+/// 发一次流式请求：带「取消 / 首字超时 / 总超时」检查，返回正文（可能为空）。
+#[allow(clippy::too_many_arguments)]
+async fn stream_once(
+    app: &AppHandle,
+    request_id: &str,
+    client: &Client,
+    endpoint: &Url,
+    model: &str,
+    api_key: Option<&str>,
+    messages: Vec<Value>,
+    settings: LocalChatGenerationSettings,
+) -> Result<String, String> {
     let mut request = client
         .post(endpoint.clone())
-        .json(&generation_payload(&model, messages, &settings, true));
-    if let Some(key) = api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        .json(&generation_payload(model, messages, &settings, true));
+    if let Some(key) = api_key.map(str::trim).filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }
     let response = request.send().await.map_err(|error| {
@@ -290,14 +398,33 @@ pub async fn local_chat_stream(
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         let error = api_error(status.as_u16(), &body);
-        emit_stream_event(&app, &request_id, "error", &error);
+        emit_stream_event(app, request_id, "error", &error);
         return Err(error);
     }
 
+    let started = std::time::Instant::now();
+    let mut first_token_at: Option<std::time::Instant> = None;
     let mut stream = response.bytes_stream();
     let mut pending = String::new();
     let mut full_text = String::new();
     while let Some(chunk) = stream.next().await {
+        if is_cancelled(request_id) {
+            let _ = take_cancelled(request_id);
+            let message = "已停止生成。";
+            emit_stream_event(app, request_id, "error", message);
+            return Err(message.to_string());
+        }
+        let elapsed = started.elapsed();
+        if first_token_at.is_none() && elapsed > STREAM_FIRST_TOKEN_TIMEOUT {
+            let message = "模型没响应，已停止。可能还在加载，稍后再试一次。";
+            emit_stream_event(app, request_id, "error", message);
+            return Err(message.to_string());
+        }
+        if elapsed > STREAM_TOTAL_TIMEOUT {
+            let message = "模型这轮太慢了，已停止。可以调浅思考或稍后重试。";
+            emit_stream_event(app, request_id, "error", message);
+            return Err(message.to_string());
+        }
         let chunk = chunk.map_err(|error| format!("读取本地模型流失败：{error}"))?;
         pending.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(newline) = pending.find('\n') {
@@ -315,19 +442,21 @@ pub async fn local_chat_stream(
             };
             // 思考内容单独发一类事件，前端折叠展示；正文照旧按 delta 累积。
             if let Some(reasoning) = extract_reasoning_delta(&value) {
-                emit_stream_event(&app, &request_id, "reasoning", &reasoning);
+                emit_stream_event(app, request_id, "reasoning", &reasoning);
             }
             if let Some(delta) = extract_delta(&value) {
+                if first_token_at.is_none() {
+                    first_token_at = Some(std::time::Instant::now());
+                }
                 full_text.push_str(&delta);
-                emit_stream_delta(&app, &request_id, &delta);
+                emit_stream_delta(app, request_id, &delta);
             }
         }
     }
-    if full_text.trim().is_empty() {
-        return Err("本地模型没有返回文字。请检查模型名称和服务日志。".into());
+    if !full_text.trim().is_empty() {
+        emit_stream_event(app, request_id, "done", &full_text);
     }
-    emit_stream_event(&app, &request_id, "done", &full_text);
-    Ok(full_text.trim().to_string())
+    Ok(full_text)
 }
 
 fn emit_stream_delta(app: &AppHandle, request_id: &str, text: &str) {

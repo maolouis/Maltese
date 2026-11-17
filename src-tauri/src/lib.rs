@@ -4360,6 +4360,7 @@ pub fn run() {
             dsh_chat::dsh_chat,
             local_chat::local_chat,
             local_chat::local_chat_stream,
+            local_chat::local_chat_cancel,
             local_chat::local_chat_models,
             local_chat::strata_launch,
             local_chat::ensure_local_model,

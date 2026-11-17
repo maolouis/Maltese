@@ -1,65 +1,50 @@
-# 子 agent 编制与责任边界（团队常设）
+# 子 agent 编制（2026-11-17 精简版）
 
-> 规则：**不再为每个任务新开 agent**。每个角色只保留 1 个常设 agent，新任务用 `send_message` 交给它继续做；
-> 只有角色本身缺失时才新建。所有 agent 共享同一工作目录，写入必须落在各自的 write scope 内。
+> 原则：**只留必要的 6 个角色**；一次性 agent 全部归档，不再派活。新任务一律用 `send_message` 续跑常设 agent。
+> 写入必须落在各自 write scope 内；只有用户明确说「发布」才升版本号 + push + 打 tag + 发 Release。
 
-## 1. 常设编制（4 个角色，各 1 个 agent）
+## 一、常设角色（唯一在用的）
 
-| 角色 | 常设 agent | 职责（只做这些） | 不做 |
+| 角色 | agent | 负责模块 | write scope |
 | --- | --- | --- | --- |
-| **产品** | `product-acceptance` | 需求澄清、验收标准（Given/When/Then）、优先级与取舍、用户视角结论、`docs/` 里的产品类文档 | 不改代码、不跑构建、不判定技术可行性 |
-| **测试** | `qa-feature-test` | 按验收标准设计用例、实机构建与观测、缺陷复现与定位（只读）、缺陷清单 D1/D2…、验收报告 | 不改 `src/`、`src-tauri/`、`tests/`；不修缺陷 |
-| **研发** | `dev-fix` | 根因定位、实现修复、补单测、构建自测、修复记录；**唯一可改源码的角色** | 不改验收标准；不替测试判定通过 |
-| **交付验证** | `delivery-verify` | 三条硬验证（tsc / cargo check / node --test）、版本与仓库卫生、产物核对、交付结论（可交付 / 有条件 / 返工） | 不改代码、不改产品条款 |
+| 产品 | `product-acceptance` | 需求澄清、验收标准、优先级、人设/文案脚本、产品文档 | `docs/**`（产品/验收/脚本类 md） |
+| 测试 | `qa-feature-test` | 用例设计、实机观测、缺陷复现定位、验收报告 | `docs/qa-*.md`、`work/**` |
+| 研发·核心 | `dev-fix` | 聊天与模型链路、消息提醒、隐私边界、数据结构、构建 | `src/PetChat*`、`src/localChat*`、`src-tauri/src/local_chat.rs`、`dsh_chat.rs`、`wechat_*`、`qq_*`、`tests/**` |
+| 研发·桌面 | `dev-shell`（首次派活时创建） | 主岛窗口几何、最小化/漂移、置顶、多实例联动、插件面板 UI | `src/App.tsx`、`src/App.css`、`src/DesktopExtras.css`、`src/petLink*`、`src/plugins/**`、`src-tauri/src/{lib,window_factory,desktop_extras,desktop_icons,instance_lock}.rs` |
+| 预研 | `research-im-source` | 技术选型调研、方案对比、可行性结论 | `docs/research-*.md` |
+| 交付 | `delivery-verify` | 三条硬验证、仓库卫生、产物核对、交付结论 | `docs/delivery-*.md` |
 
-> 历史遗留的一次性 agent（`proactive-diag`、`startup-diag`、`multi-instance-impl`、`qa-regression`、`plugins-ux-dev`、
-> `gif-grid-dev`、`dev-adjudicate`、`b2-matrix`、`dev-fix-qa`、`dev-drag-fix`）**不再派活用**，只作为历史记录。
-> 它们的产出已经落在 `docs/` 里，需要继续时一律交给上面 4 个常设 agent。
+**研发分模块规则**：同一文件同一时间只归一个研发；跨模块改动由 lead 拆成两条任务分别派给 `dev-fix` 与 `dev-shell`，禁止两边同时改同一文件。
 
-## 2. 写入边界（write scope）
+## 二、归档（不再派活，仅作历史记录）
 
-| agent | 允许写 | 明确禁止 |
-| --- | --- | --- |
-| product-acceptance | `docs/**` 下的产品/验收类 md | 任何源码、`tests/`、版本文件 |
-| qa-feature-test | `docs/qa-*.md`、`work/**`（截图/日志） | 任何源码、`tests/`、用户 localStorage/profile |
-| dev-fix | `src/**`、`src-tauri/**`、`tests/**`、`docs/`（修复记录） | 版本号四处（`package.json` / `tauri.conf.json` / `Cargo.toml` / README 徽章）、远端推送 |
-| delivery-verify | `docs/delivery-*.md` | 任何源码、版本号、发布动作 |
-
-**只有用户明确说「发布」**，才允许：升版本号 + `git push` + 打 tag + 发 Release。平时一律"只本地提交"。
-
-## 3. 任务流转（固定 4 步，不跳步）
-
-```
-产品：定义验收标准（docs/bug-acceptance-*.md）
-  ↓
-测试：按标准跑 → 缺陷清单（D1…Dn，含复现/证据/可疑代码）
-  ↓
-研发：修缺陷（补单测、构建自测、写修复记录）
-  ↓
-交付验证：三条硬验证 + 版本/仓库卫生 → 交付结论
-```
-
-- 研发修完必须回到测试复测（同一 agent，`send_message` 续跑，不开新 agent）；
-- 交付验证只认测试的复测结论 + 自己的三条命令，不认研发自述；
-- 任何角色发现"根因在别的角色范围内"，写进报告并 `send_message` 移交，不越界改。
-
-## 4. 进度可见
-
-每个任务在认领/推进/完成时更新 `.arts/team-progress.json`（结构见 `docs/team-progress.md`），
-用 `node scripts/team-progress.mjs --watch` 看步骤级进度。团队任务板（`team_task_*`）与这份 JSON 保持同步：
-- 建任务 → 认领（claim）→ 每步更新 → 完成（complete）；
-- 一个任务在同一时刻只有一个 owner。
-
-## 5. 当前待办（按角色）
-
-| 角色 | 待办 |
+| agent | 曾负责 |
 | --- | --- |
-| 产品 | 确认设置入口语义（顶部设置 → 岛内设置页 vs 独立窗口）；给「对话 vs 主动」P0 三条排优先级 |
-| 测试 | 复测拖拽排序 / 右键删除（真人鼠标）；复测「对话首字」在思考档位下的表现 |
-| 研发 | 待产品确认后修「对话思考不出正文」P0 三条（主动让路 / token 联动 / 流式空正文重试） |
-| 交付验证 | 待上述修复完成后做一轮完整交付验证（含产物重建） |
+| `startup-diag` | 启动显示不全诊断 |
+| `proactive-diag` | 主动消息不触发诊断 |
+| `multi-instance-impl` | 多实例启动 P0/P1 修复 |
+| `qa-regression` | B1/B2 回归定位 |
+| `dev-adjudicate` | 8px 位移判定 |
+| `b2-matrix` | B2 强触发矩阵录制 |
+| `dev-fix-qa` | D1–D5 缺陷修复 |
+| `gif-grid-dev` | GIF 方格/拖拽/右键删除初版 |
+| `dev-drag-fix` | 拖拽失效修复 |
+| `plugins-ux-dev` | 插件说明改点击 + 视频文档 |
+| `release-2-1-0` | v2.1.0 发版（已叫停，未产生副作用） |
 
-## 6. 汇报格式
+归档 agent 的产出都已在 `docs/`，需要跟进时由对应常设角色接手，**不再新开一次性 agent**。
 
-每个 agent 回报固定四段：**改了什么 / 结论与证据（文件:行号）/ 验证输出 / 还没验证什么**。
-禁止只说"已完成"而不给证据；禁止用"应该可以"代替实测。
+## 三、固定流转
+
+```
+产品定验收标准 → 测试跑缺陷清单 → 研发（按模块）修 + 补单测 → 测试复测 → 交付验证出结论 → （用户点头）发布
+```
+
+## 四、汇报格式（所有 agent 统一四段）
+
+**改了什么 / 结论与证据（文件:行号）/ 验证输出 / 还没验证什么**
+禁止"已完成"式空口汇报；禁止用"应该可以"代替实测。
+
+## 五、进度
+
+`.arts/team-progress.json`（`node scripts/team-progress.mjs --watch`），团队任务板同步 claim → 完成。
