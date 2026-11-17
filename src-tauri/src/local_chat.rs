@@ -501,7 +501,7 @@ fn extract_reasoning_delta(value: &Value) -> Option<String> {
 /// 确保本机模型（F:\Strata 里的 Strata 服务）已经在跑。
 /// 主动聊天、聊天发送前调用：服务没起来就顺手拉起，避免一路退化成模板台词。
 #[tauri::command]
-pub async fn ensure_local_model(base_url: String) -> Result<bool, String> {
+pub async fn ensure_local_model(base_url: String, model: Option<String>) -> Result<bool, String> {
     let endpoint = match Url::parse(&base_url) {
         Ok(url) => url,
         Err(_) => return Ok(false),
@@ -519,7 +519,69 @@ pub async fn ensure_local_model(base_url: String) -> Result<bool, String> {
         .build()
         .map_err(|error| error.to_string())?;
     if client.get(&health).send().await.map(|response| response.status().is_success()).unwrap_or(false) {
-        return Ok(true);
+        // 端口在跑 ≠ 模型已加载：`status.value == "unloaded"` 时第一个请求可能长时间
+        // 没有任何 SSE 事件（用户看到的就是「完全没回复」）。这里用一次极短的补全预热模型。
+        let mut body: Option<String> = None;
+        if let Ok(response) = client.get(&health).send().await {
+            if response.status().is_success() {
+                body = response.text().await.ok();
+            }
+        }
+        let parsed: Value = body
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or(Value::Null);
+        let loaded = parsed
+            .get("data")
+            .and_then(|data| data.as_array())
+            .map(|items| {
+                items.iter().any(|item| {
+                    item.pointer("/status/value")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value == "loaded")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if loaded {
+            return Ok(true);
+        }
+        let model_id = model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .or_else(|| {
+                parsed
+                    .pointer("/data/0/id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            });
+        if let Some(model_id) = model_id {
+            let warm_payload = json!({
+                "model": model_id,
+                "messages": [{ "role": "user", "content": "你好" }],
+                "max_tokens": 1,
+                "temperature": 0.1,
+                "stream": false
+            });
+            let warm_client = Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(240))
+                .build()
+                .map_err(|error| error.to_string())?;
+            if let Ok(response) = warm_client
+                .post(format!("{}://{host}:{port}/v1/chat/completions", endpoint.scheme()))
+                .json(&warm_payload)
+                .send()
+                .await
+            {
+                if response.status().is_success() {
+                    return Ok(true);
+                }
+            }
+        }
+        return Ok(false);
     }
     // 没在跑：拉起 Strata，最多等 120 秒。
     strata_launch().await?;

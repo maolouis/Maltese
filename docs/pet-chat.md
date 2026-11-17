@@ -221,3 +221,27 @@
 - 阈值跨越（体力跌破 35 / 情绪升过 75）在聊天里插一条灰色小字「（小白看起来有点累了）」，
   每 10 分钟最多一次、去重，**不写进消息、不发给模型**；
 - 单测：`tests/pet-state-bar.test.mjs` 6 条（文案/显隐/阈值/节流/折叠容错/忙碌文案）。
+
+## 模型「未加载 / 单槽位排队」导致的「完全没回复」（2026-11-17 实机取证）
+
+实机抓到用户看到的那句报错原文与错误码（持久化在 `localStorage["maltese-chat-last-error"]`）：
+
+```
+{"code":"CHAT_UNKNOWN","raw":"Error: 模型中途 20 秒没有新内容，已停止。","at":...}
+{"code":"CHAT_TIMEOUT","raw":"Error: 模型中途 45 秒没有新内容，已停止。","at":...}
+```
+UI 显示：`模型响应超时，已停止。首次加载会比较慢，稍后重试或调浅思考。`（带「重试」按钮）
+
+真正原因（本机 Strata 实测）：
+- 端口活着 ≠ 模型可用：`GET /health` 会出现 `"loaded": false`，此时 `/v1/chat/completions`
+  会先**加载模型**，期间长时间没有任何 SSE 事件；旧的前端看门狗把它当成「卡死」取消。
+- 单槽位：`/slots` `is_processing: true` 时新请求排在队头后面，同样长时间无事件。
+
+修复：
+- `local_chat.rs::ensure_local_model` 现在会检查 `/v1/models` 的 `status.value`：`unloaded` 时
+  先发一次 `max_tokens:1` 的极短补全把模型**预热**（最多 240s），前端发送前等待它完成；
+  打不开聊天也会在后台预热。
+- 前端看门狗：**没有任何事件时不中止**（只提示「排队 / 模型忙」），开始输出后才按 45s 空窗判卡死，
+  总上限 180s；错误映射新增 `CHAT_MODEL_NOT_READY` / `CHAT_BUSY` / `CHAT_BACKEND_ERROR`。
+- 失败时把完整错误对象写 `console.error` 并持久化到 `maltese-chat-last-error`（不含聊天正文），
+  方便下次直接取证。

@@ -166,6 +166,18 @@ export function PetChat() {
   const [enabledSkills] = useState(loadEnabledSkills);
   const [customSkills] = useState(loadCustomSkills);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // 打开聊天就后台预热本地模型：Strata 端口在跑但模型可能还是 unloaded，
+  // 第一个请求会长时间没有 SSE 事件（用户看到「完全没回复」）。
+  useEffect(() => {
+    if (!isTauri() || chatConfig.backend !== "local" || !chatConfig.baseUrl.trim()) return;
+    const timer = window.setTimeout(() => {
+      void invoke<boolean>("ensure_local_model", {
+        baseUrl: chatConfig.baseUrl,
+        model: chatConfig.model,
+      }).catch(() => undefined);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [chatConfig.backend, chatConfig.baseUrl, chatConfig.model]);
   /** 正在进行的流式请求：用于「停止生成」和防止旧请求回写。 */
   const activeRequestRef = useRef<{ requestId: string; cancelled: boolean } | null>(null);
   /** 最近一次失败的提问：给「重试」按钮用。 */
@@ -321,7 +333,7 @@ export function PetChat() {
       const depth = chatConfig.thinkingDepth;
       const ensureModel = async () => {
         try {
-          const ready = await invoke<boolean>("ensure_local_model", { baseUrl: chatConfig.baseUrl });
+          const ready = await invoke<boolean>("ensure_local_model", { baseUrl: chatConfig.baseUrl, model: chatConfig.model });
           return Boolean(ready);
         } catch {
           return false;
@@ -587,6 +599,20 @@ export function PetChat() {
     setFailedPrompt(null);
     markChatBusy(window.localStorage);
     try {
+      // 本地模型：发送前确认「端口在跑 + 模型已加载」。冷启动可能要 1–2 分钟，
+      // 期间 busy 文案会显示加载中；加载失败/超时给中文原因，不让请求静默挂着。
+      if (chatConfig.backend === "local") {
+        const ready = await Promise.race([
+          invoke<boolean>("ensure_local_model", {
+            baseUrl: chatConfig.baseUrl,
+            model: chatConfig.model,
+          }).catch(() => false),
+          new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 240_000)),
+        ]);
+        if (!ready) {
+          throw new Error("模型没有准备好：加载失败或超时（请确认模型服务已启动，首次加载可能需要 1–2 分钟）。");
+        }
+      }
       let replyText: string | undefined;
       // 「动手」流程：先让模型判断要不要调用本机技能。
       // 关键是这一步必须“短”：只给紧凑的技能清单、关思考、限 96 token，
@@ -711,6 +737,12 @@ export function PetChat() {
       const info = describeChatError(reason);
       // 完整错误对象（含 code/raw）打到 console，方便下次直接从控制台取证。
       console.error("[chat] error", { code: info.code, raw: info.raw, error: reason });
+      // 持久化最后一次错误，方便用户反馈时直接取证（不含聊天正文）。
+      try {
+        window.localStorage.setItem("maltese-chat-last-error", JSON.stringify({ code: info.code, raw: info.raw.slice(0, 500), at: Date.now() }));
+      } catch {
+        // 忽略
+      }
       const message = info.message;
       setError(message);
       // 失败/取消时不要把思考内容当答案留在界面上。

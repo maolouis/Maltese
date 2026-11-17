@@ -7,6 +7,7 @@ import {
   chatTimeouts,
   clearChatBusy,
   describeChatError,
+  isLikelyQueued,
   isTemplateRejection,
   markChatBusy,
   shouldAbortStream,
@@ -38,15 +39,19 @@ test("思考预算联动：max_tokens 至少是「预算 + 256」，关思考时
 
 test("分级超时：首字与总时长随思考档位变化", () => {
   // 实测修正：首次 prefill 可到 16–55s，固定 8s 首字会误杀正常请求。
-  assert.deepEqual(chatTimeouts("off"), { firstTokenMs: 15_000, totalMs: 120_000, idleMs: 20_000 });
-  assert.deepEqual(chatTimeouts("normal"), { firstTokenMs: 25_000, totalMs: 120_000, idleMs: 20_000 });
-  assert.deepEqual(chatTimeouts("deep"), { firstTokenMs: 25_000, totalMs: 120_000, idleMs: 20_000 });
+  assert.deepEqual(chatTimeouts("off"), { firstTokenMs: 15_000, totalMs: 180_000, idleMs: 45_000 });
+  assert.deepEqual(chatTimeouts("normal"), { firstTokenMs: 25_000, totalMs: 180_000, idleMs: 45_000 });
+  assert.deepEqual(chatTimeouts("deep"), { firstTokenMs: 25_000, totalMs: 180_000, idleMs: 45_000 });
   assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: null, now: 14_000, depth: "off" }).abort, false);
-  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: null, now: 16_000, depth: "off" }).abort, true);
+  // 没有任何事件时不再中止（可能单槽位排队/加载中），只到总时长才停
+  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: null, now: 16_000, depth: "off" }).abort, false);
+  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: null, now: 16_000, depth: "off" }).abort, false);
+  assert.equal(isLikelyQueued({ startedAt: 0, lastActivityAt: null, now: 30_000, depth: "normal" }), true);
+  assert.equal(isLikelyQueued({ startedAt: 0, lastActivityAt: 10_000, now: 60_000, depth: "normal" }), false);
   // 已经开始输出（哪怕是思考流）后，不能因为「首字慢」被误杀
   assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: 54_000, now: 55_000, depth: "normal" }).abort, false);
-  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: 30_000, now: 51_000, depth: "normal" }).abort, true, "20s 空窗要中止");
-  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: 110_000, now: 121_000, depth: "deep" }).abort, true, "总时长兜底");
+  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: 30_000, now: 76_000, depth: "normal" }).abort, true, "45s 空窗要中止");
+  assert.equal(shouldAbortStream({ startedAt: 0, lastActivityAt: 170_000, now: 181_000, depth: "deep" }).abort, true, "总时长兜底");
 });
 
 test("对话优先：正在聊天或刚结束 60s 内，主动聊天让路", () => {
