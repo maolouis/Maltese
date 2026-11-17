@@ -6,21 +6,29 @@
 
 import { thinkingBudget, type ThinkingDepth } from "./localChat.ts";
 
-/** 思考档位对应的「首字最迟多久」：浅/标准/深 分别 8s / 20s / 20s（深档首字同样放宽）。 */
+/**
+ * 超时策略（2026-11-17 实测修正）：
+ * - 本机 Strata 首次 prefill 实测可到 16–55s，**首字 8s 会误杀正常请求**；
+ * - 改为「空闲超时」：只要还有事件（reasoning/delta/progress）就不算卡死；
+ * - 首字（无任何事件）15s；思考档 25s；总上限 120s；一旦开始输出，只看空窗与总时长。
+ */
 export const CHAT_FIRST_TOKEN_TIMEOUT_MS: Record<ThinkingDepth, number> = {
-  off: 8_000,
-  shallow: 8_000,
-  normal: 20_000,
-  deep: 20_000,
+  off: 15_000,
+  shallow: 15_000,
+  normal: 25_000,
+  deep: 25_000,
 };
 
-/** 总时长上限：浅/标准 60s，深 90s。 */
+/** 总时长上限：120s（本机实测流式 36s、非流式 55s 都可能出现，不能掐断）。 */
 export const CHAT_TOTAL_TIMEOUT_MS: Record<ThinkingDepth, number> = {
-  off: 60_000,
-  shallow: 60_000,
-  normal: 60_000,
-  deep: 90_000,
+  off: 120_000,
+  shallow: 120_000,
+  normal: 120_000,
+  deep: 120_000,
 };
+
+/** 已经开始输出后，允许的最长「完全没有新事件」的空窗。 */
+export const CHAT_IDLE_TIMEOUT_MS = 20_000;
 
 /** 正文预算的下限（没有思考时也至少给这么多 token）。 */
 export const CHAT_MIN_REPLY_TOKENS = 512;
@@ -40,11 +48,93 @@ export function chatMaxTokens(configMaxTokens: number, depth: ThinkingDepth): nu
 }
 
 /** 该档位是否需要「首字超时」保护（关思考也一样要有，只是更短）。 */
-export function chatTimeouts(depth: ThinkingDepth): { firstTokenMs: number; totalMs: number } {
+export function chatTimeouts(depth: ThinkingDepth): { firstTokenMs: number; totalMs: number; idleMs: number } {
   return {
     firstTokenMs: CHAT_FIRST_TOKEN_TIMEOUT_MS[depth],
     totalMs: CHAT_TOTAL_TIMEOUT_MS[depth],
+    idleMs: CHAT_IDLE_TIMEOUT_MS,
   };
+}
+
+export type StreamAbortInput = {
+  /** 请求开始时间（毫秒时间戳）。 */
+  startedAt: number;
+  /** 最近一次收到任何事件的时间；从未收到为 null。 */
+  lastActivityAt: number | null;
+  now: number;
+  depth: ThinkingDepth;
+};
+
+/**
+ * 流式请求是否该中止（纯函数，便于单测）：
+ * - 还没有任何事件：超过首字时限 → 中止；
+ * - 已经开始输出：只看「空窗」是否超过 idleMs，以及总时长；
+ * - 任何情况下总时长超过上限 → 中止。
+ * 关键点：**已经吐出过文字的请求不会因为「首字慢」被误杀**。
+ */
+export function shouldAbortStream(input: StreamAbortInput): { abort: boolean; reason: string } {
+  const profile = chatTimeouts(input.depth);
+  const elapsed = input.now - input.startedAt;
+  if (elapsed >= profile.totalMs) {
+    return { abort: true, reason: `模型这轮超过 ${Math.round(profile.totalMs / 1000)} 秒还没结束，已停止。可调浅思考或稍后重试。` };
+  }
+  if (input.lastActivityAt === null) {
+    if (elapsed >= profile.firstTokenMs) {
+      return { abort: true, reason: `模型 ${Math.round(profile.firstTokenMs / 1000)} 秒内没有任何输出，已停止。可能还在加载，稍后重试。` };
+    }
+    return { abort: false, reason: "" };
+  }
+  if (input.now - input.lastActivityAt >= profile.idleMs) {
+    return { abort: true, reason: `模型中途 ${Math.round(profile.idleMs / 1000)} 秒没有新内容，已停止。` };
+  }
+  return { abort: false, reason: "" };
+}
+
+export type ChatErrorInfo = { code: string; message: string; raw: string };
+
+const ERROR_MAP: Array<{ test: RegExp; code: string; message: string }> = [
+  { test: /连接不到|ECONNREFUSED|Connection refused|os error 10061/i, code: "CHAT_BACKEND_DOWN", message: "连不上本地模型服务：请确认模型已启动（聊天设置里有「启动模型」）。" },
+  { test: /超时|timeout|timed out|太慢|没有任何输出|空窗/i, code: "CHAT_TIMEOUT", message: "模型响应超时，已停止。首次加载会比较慢，稍后重试或调浅思考。" },
+  { test: /400|template|chat template|Bad Request/i, code: "CHAT_BAD_REQUEST", message: "模型拒绝了这次请求（可能是对话模板不兼容），已尝试去掉状态上下文重试。" },
+  { test: /401|403|api.?key|鉴权|unauthorized/i, code: "CHAT_AUTH", message: "模型接口鉴权失败，请检查聊天设置里的 API Key。" },
+  { test: /没有返回|空|empty/i, code: "CHAT_EMPTY", message: "模型没有返回正文，已自动重试；仍无内容请调浅思考再试。" },
+];
+
+/** 把任意错误映射成中文可读原因 + 错误码（原始内容进 console）。 */
+export function describeChatError(error: unknown): ChatErrorInfo {
+  // Error 对象直接 JSON.stringify 会得到 "{}"：必须取 message，否则错误详情丢失。
+  const raw = error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : typeof error === "string"
+      ? error
+      : (() => {
+          try {
+            return JSON.stringify(error);
+          } catch {
+            return String(error);
+          }
+        })();
+  for (const item of ERROR_MAP) {
+    if (item.test.test(raw)) return { code: item.code, message: item.message, raw };
+  }
+  return { code: "CHAT_UNKNOWN", message: "模型这次没能回答（已记录原因），可以点「重试」再试一次。", raw };
+}
+
+/** 是否是「模板/请求被拒」类错误：用于自动降级为不注入状态上下文。 */
+export function isTemplateRejection(error: unknown): boolean {
+  // Error 对象直接 JSON.stringify 会得到 "{}"：必须取 message，否则错误详情丢失。
+  const raw = error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : typeof error === "string"
+      ? error
+      : (() => {
+          try {
+            return JSON.stringify(error);
+          } catch {
+            return String(error);
+          }
+        })();
+  return /400|bad request|template|消息格式|messages/i.test(raw);
 }
 
 /** 对话占用标志：发消息时写入时间戳，主动聊天看到 60s 内有人聊天就跳过。 */

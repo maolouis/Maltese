@@ -24,13 +24,23 @@ import {
   type LocalChatConfig,
 } from "./localChat";
 import {
+  CHAT_TOTAL_TIMEOUT_MS,
   chatMaxTokens,
   chatTimeouts,
   clearChatBusy,
+  describeChatError,
+  isTemplateRejection,
   markChatBusy,
+  shouldAbortStream,
   shouldPersistReply,
 } from "./chatGuard";
-import { buildChatVitalsContext } from "./petContext";
+import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
+import { PetStateBar } from "./PetStateBar";
+import {
+  detectThresholdCross,
+  shouldShowNotice,
+  STATE_NOTICE_AT_KEY,
+} from "./petStateBarLogic";
 import "./PetChat.css";
 
 type DshChatReply = { text: string; sessionId: string | null };
@@ -92,14 +102,6 @@ function createId() {
  * 把小狗状态/近期互动拼成一条 system 消息放进历史（不污染用户消息）。
  * 没有状态数据时返回原历史，提示词与旧版完全一致。
  */
-function withVitalsContext(
-  history: ChatMessage[],
-): Array<{ role: string; content: string }> {
-  const turns = history.slice(-16).map((item) => ({ role: item.role, content: item.text }));
-  const vitals = buildChatVitalsContext();
-  return vitals ? [{ role: "system", content: vitals }, ...turns] : turns;
-}
-
 function loadMessages(): ChatMessage[] {
   try {
     const raw = window.localStorage.getItem(MESSAGES_KEY);
@@ -170,7 +172,47 @@ export function PetChat() {
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   /** 首字是否已经到达（分级超时用）。 */
   const firstDeltaRef = useRef(false);
-  /** 正在进行的流式请求：用于「停止生成」和防止旧请求回写。 */
+  // 聊天里的「小狗状态条」+ 阈值跨越灰色提示（只展示，不写记录、不发给模型）。
+  const [stateNotices, setStateNotices] = useState<string[]>([]);
+  const prevVitalsRef = useRef<VitalsSummary | null>(loadVitalsSummary());
+  const [noticeAtInitial] = useState<number>(() => {
+    try {
+      const raw = Number(window.localStorage.getItem(STATE_NOTICE_AT_KEY));
+      return Number.isFinite(raw) ? raw : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const lastNoticeAtRef = useRef<number>(noticeAtInitial);
+  useEffect(() => {
+    const refresh = () => {
+      const next = loadVitalsSummary();
+      const cross = detectThresholdCross(
+        prevVitalsRef.current,
+        next,
+        PET_CHARACTER_LABELS[character as keyof typeof PET_CHARACTER_LABELS] ?? "小狗",
+      );
+      prevVitalsRef.current = next;
+      if (!cross) return;
+      const now = Date.now();
+      if (!shouldShowNotice(lastNoticeAtRef.current, now)) return;
+      lastNoticeAtRef.current = now;
+      try {
+        window.localStorage.setItem(STATE_NOTICE_AT_KEY, String(now));
+      } catch {
+        // 忽略
+      }
+      setStateNotices((current) => [...current.slice(-2), cross.text]);
+    };
+    window.addEventListener("storage", refresh);
+    window.addEventListener("maltese-pet-vitals-changed", refresh);
+    const timer = window.setInterval(refresh, 2_000);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("maltese-pet-vitals-changed", refresh);
+      window.clearInterval(timer);
+    };
+  }, [character]);
 
   // 打开聊天总是停在最新一条：挂载时直接跳到底部（不要动画），
   // 之后消息变化、窗口/面板高度变化（展开动画、聊天框高度设置）都重新贴底。
@@ -360,96 +402,122 @@ export function PetChat() {
     ],
   );
   // 带界面的流式回复：边生成边把字显示出来，并把最终文本返回给调用方。
+  // 带界面的流式回复：边生成边把字显示出来，并把最终文本返回给调用方。
+  // 超时策略（实测修正）：用「空闲 watchdog」而不是固定首字 8s —— 本机首次 prefill 可到
+  // 16–55s；只要还有事件就不算卡死；一旦开始输出，只看 20s 空窗与 120s 总时长。
+  // 模板不兼容自动降级：注入状态上下文被 400 拒绝时，去掉注入重试一次，不让整条消息失败。
   const streamLocalReply = useCallback(
     async (message: string, history: ChatMessage[], images: string[]) => {
-      const requestId = createId();
-      const active = { requestId, cancelled: false };
-      activeRequestRef.current = active;
-      firstDeltaRef.current = false;
       const depth = chatConfig.thinkingDepth;
-      const timeouts = chatTimeouts(depth);
-      let rejectGuard: ((error: Error) => void) | null = null;
-      const guard = new Promise<never>((_, reject) => {
-        rejectGuard = reject;
-      });
-      const failWith = (reason: string) => {
-        if (active.cancelled) return;
-        active.cancelled = true;
-        // 让 Rust 侧尽快断开连接、释放模型槽位。
-        void invoke("local_chat_cancel", { requestId }).catch(() => undefined);
-        rejectGuard?.(new Error(reason));
-      };
-      let firstTimer: number | null = null;
-      let totalTimer: number | null = null;
-      const unlisten = chatConfig.stream
-        ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
-          if (event.payload.requestId !== requestId || active.cancelled) return;
-          if (event.payload.kind === "delta") {
-            firstDeltaRef.current = true;
-            setStreamingReply((current) => current + event.payload.text);
-          } else if (event.payload.kind === "reasoning") {
-            setStreamingReasoning((current) => current + event.payload.text);
-          } else if (event.payload.kind === "error") {
-            setError(event.payload.text);
-          }
-        })
-        : null;
-      try {
-        // 分级硬超时：首字迟迟不来 / 整轮太慢都主动中止并复位 busy。
-        firstTimer = window.setTimeout(() => {
-          if (!firstDeltaRef.current) {
-            failWith("模型没响应，已停止。可能还在加载，稍后再试一次。");
-          }
-        }, timeouts.firstTokenMs);
-        totalTimer = window.setTimeout(() => {
-          failWith("模型这轮太慢了，已停止。可以调浅思考或稍后重试。");
-        }, timeouts.totalMs);
-        const payload = {
-          requestId,
-          baseUrl: chatConfig.baseUrl,
-          model: chatConfig.model,
-          apiKey: chatConfig.apiKey.trim() || null,
-          message,
-          // 小狗自我状态 + 近期互动作为「系统上下文」注入（不进用户消息，也没有状态时整段省略）。
-          history: withVitalsContext(history),
-          character,
-          images: images.length > 0 ? images : null,
-          settings: {
-            // 思考预算会吃 token：至少给「预算 + 256」，避免只有思考没有正文。
-            maxTokens: chatMaxTokens(chatConfig.maxTokens, depth),
-            temperature: chatConfig.temperature,
-            topP: chatConfig.topP,
-            enableThinking: depth !== "off",
-            reasoningEffort: thinkingEffort(depth),
-            reasoningBudgetTokens: thinkingBudget(depth),
-          },
+      const historyTurns = history.slice(-16).map((item) => ({ role: item.role, content: item.text }));
+
+      const runAttempt = async (injectVitals: boolean): Promise<string> => {
+        const requestId = createId();
+        const active = { requestId, cancelled: false };
+        activeRequestRef.current = active;
+        firstDeltaRef.current = false;
+        const startedAt = Date.now();
+        let lastActivityAt: number | null = null;
+        let rejectGuard: ((error: Error) => void) | null = null;
+        const guard = new Promise<never>((_, reject) => {
+          rejectGuard = reject;
+        });
+        const failWith = (reason: string) => {
+          if (active.cancelled) return;
+          active.cancelled = true;
+          // 让 Rust 侧尽快断开连接、释放模型槽位。
+          void invoke("local_chat_cancel", { requestId }).catch(() => undefined);
+          rejectGuard?.(new Error(reason));
         };
-        const reply = chatConfig.stream
-          ? await Promise.race([invoke<string>("local_chat_stream", payload), guard])
-          : await Promise.race([
-              invoke<string>("local_chat", {
-                baseUrl: payload.baseUrl,
-                model: payload.model,
-                apiKey: payload.apiKey,
-                message: payload.message,
-                history: payload.history,
-                character: payload.character,
-                images: payload.images,
-              }),
-              guard,
-            ]);
-        if (active.cancelled) {
-          throw new Error("已停止生成。");
+        let watchdog: number | null = null;
+        const unlisten = chatConfig.stream
+          ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
+            if (event.payload.requestId !== requestId || active.cancelled) return;
+            // 任何事件都算「还活着」：思考流也算，避免思考档位被首字超时误杀。
+            lastActivityAt = Date.now();
+            if (event.payload.kind === "delta") {
+              firstDeltaRef.current = true;
+              setStreamingReply((current) => current + event.payload.text);
+            } else if (event.payload.kind === "reasoning") {
+              setStreamingReasoning((current) => current + event.payload.text);
+            } else if (event.payload.kind === "error") {
+              setError(event.payload.text);
+            }
+          })
+          : null;
+        try {
+          watchdog = window.setInterval(() => {
+            if (active.cancelled) return;
+            const now = Date.now();
+            if (!chatConfig.stream) {
+              // 非流式没有中间事件，只按总时长兜底。
+              if (now - startedAt >= CHAT_TOTAL_TIMEOUT_MS[depth]) {
+                failWith("模型这轮太慢了，已停止。可以调浅思考或稍后重试。");
+              }
+              return;
+            }
+            const verdict = shouldAbortStream({ startedAt, lastActivityAt, now, depth });
+            if (verdict.abort) failWith(verdict.reason);
+          }, 1_000);
+          const vitals = injectVitals ? buildChatVitalsContext() : null;
+          const payload = {
+            requestId,
+            baseUrl: chatConfig.baseUrl,
+            model: chatConfig.model,
+            apiKey: chatConfig.apiKey.trim() || null,
+            message,
+            // 自我状态 + 近期互动作为 system 上下文注入（不进用户消息；无状态时整段省略）。
+            history: vitals ? [{ role: "system", content: vitals }, ...historyTurns] : historyTurns,
+            character,
+            images: images.length > 0 ? images : null,
+            settings: {
+              // 思考预算会吃 token：至少给「预算 + 256」，避免只有思考没有正文。
+              maxTokens: chatMaxTokens(chatConfig.maxTokens, depth),
+              temperature: chatConfig.temperature,
+              topP: chatConfig.topP,
+              enableThinking: depth !== "off",
+              reasoningEffort: thinkingEffort(depth),
+              reasoningBudgetTokens: thinkingBudget(depth),
+            },
+          };
+          const reply = chatConfig.stream
+            ? await Promise.race([invoke<string>("local_chat_stream", payload), guard])
+            : await Promise.race([
+                invoke<string>("local_chat", {
+                  baseUrl: payload.baseUrl,
+                  model: payload.model,
+                  apiKey: payload.apiKey,
+                  message: payload.message,
+                  history: payload.history,
+                  character: payload.character,
+                  images: payload.images,
+                }),
+                guard,
+              ]);
+          if (active.cancelled) throw new Error("已停止生成。");
+          if (!reply || !reply.trim()) {
+            throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
+          }
+          return reply;
+        } finally {
+          if (watchdog !== null) window.clearInterval(watchdog);
+          unlisten?.();
+          if (activeRequestRef.current === active) activeRequestRef.current = null;
         }
-        if (!reply || !reply.trim()) {
-          throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
+      };
+
+      const injected = Boolean(buildChatVitalsContext());
+      try {
+        return await runAttempt(injected);
+      } catch (error) {
+        if (injected && isTemplateRejection(error)) {
+          // 模型模板不接受 system 消息：去掉状态上下文重试一次，而不是让整条消息失败。
+          console.warn("[chat] template rejected vitals context, retrying without it", error);
+          setStreamingReply("");
+          setStreamingReasoning("");
+          return await runAttempt(false);
         }
-        return reply;
-      } finally {
-        if (firstTimer !== null) window.clearTimeout(firstTimer);
-        if (totalTimer !== null) window.clearTimeout(totalTimer);
-        unlisten?.();
-        if (activeRequestRef.current === active) activeRequestRef.current = null;
+        throw error;
       }
     },
     [
@@ -463,8 +531,7 @@ export function PetChat() {
       chatConfig.thinkingDepth,
       chatConfig.topP,
     ],
-  );
-  const send = useCallback(async (overrideText?: string) => {
+  );  const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? draft).trim();
     const sendImages = attachments.map((item) => item.send);
     const thumbnails = attachments.map((item) => item.thumb);
@@ -628,7 +695,10 @@ export function PetChat() {
       setStreamingReply("");
       setStreamingReasoning("");
     } catch (reason) {
-      const message = String(reason);
+      const info = describeChatError(reason);
+      // 完整错误对象（含 code/raw）打到 console，方便下次直接从控制台取证。
+      console.error("[chat] error", { code: info.code, raw: info.raw, error: reason });
+      const message = info.message;
       setError(message);
       // 失败/取消时不要把思考内容当答案留在界面上。
       setStreamingReply("");
@@ -765,6 +835,9 @@ export function PetChat() {
         </div>
       </header>
 
+      {/* 小狗状态条：一行紧凑显示体力/情绪/亲密/专注；无数据时整行不渲染。 */}
+      <PetStateBar busy={busy} waitSeconds={waitSeconds} thinkingOn={thinkingOn} />
+
       {showModelSettings && (
         <LocalChatSettings onClose={() => setShowModelSettings(false)} />
       )}
@@ -900,6 +973,12 @@ export function PetChat() {
             思考深度：{thinkingLabel}，模型在推理；深度越大首字越慢，可在设置里调到「关」或「浅」加快回复。
           </p>
         )}
+        {/* 状态阈值跨越的灰色小字：不写进消息、不发给模型 */}
+        {stateNotices.map((notice, index) => (
+          <p key={`${notice}-${index}`} className="pet-chat__state-notice">
+            {notice}
+          </p>
+        ))}
       </div>
 
       {error && (

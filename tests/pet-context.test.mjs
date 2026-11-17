@@ -90,7 +90,7 @@ test("损坏/缺字段的存储不报错、不生成上下文", () => {
 test("体力低时主动消息会选到「累/困/趴」类台词与安静角度", () => {
   const low = context({ vitals: { energy: 20, mood: 50, bond: 50 } });
   const line = pickFallback(low, [], "care");
-  assert.ok(/困|累|趴|睡/.test(line), "低体力应优先累/困类台词，实际：" + line);
+  assert.ok(/困|累|趴|睡|眼皮/.test(line), "低体力应优先累/困类台词，实际：" + line);
   const angle = pickAngle([], { energy: 20, mood: 50, bond: 50 });
   assert.ok(["care", "empathy", "self"].includes(angle), "低体力应选安静角度，实际：" + angle);
   // 没有 vitals 时 pickAngle 仍可能选任意角度（保持旧行为，不强制）
