@@ -73,6 +73,8 @@ type PetSettings = {
   roam: boolean;
   sleepAfterSeconds: number;
   tuckedVisibleHeight: number;
+  /** 多实例联动：主狗动作传染给陪玩狗 / Bongo 呼应，默认开。 */
+  petLinkage: boolean;
 };
 
 const DEFAULTS: PetSettings = {
@@ -118,6 +120,7 @@ const DEFAULTS: PetSettings = {
   roam: false,
   sleepAfterSeconds: 150,
   tuckedVisibleHeight: 80,
+  petLinkage: true,
 };
 
 function load(): PetSettings {
@@ -398,6 +401,14 @@ export default function SettingsWindow() {
         </p>
         <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
         <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
+        {(settings.petCount > 1 || settings.bongoEnabled) && (
+          <Switch
+            label="实例联动"
+            hint="主狗被摸头/喂食/开心时，陪玩狗会跟着动一下；Bongo 会敲鼓呼应"
+            checked={settings.petLinkage}
+            onChange={(value) => update("petLinkage", value)}
+          />
+        )}
         {settings.bongoEnabled && (
           <>
             <Slider label="Bongo 大小" value={settings.bongoSize} min={220} max={700} step={10} suffix="px" onChange={(value) => update("bongoSize", value)} />

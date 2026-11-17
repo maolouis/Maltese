@@ -347,6 +347,12 @@ export type Translations = {
     states: Record<string, string>;
   };
 
+  petLink: {
+    label: string;
+    hint: string;
+    companionLines: string[];
+  };
+
   updateNotice: {
     available: (version: string) => string;
     body: string;

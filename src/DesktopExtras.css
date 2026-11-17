@@ -72,3 +72,46 @@ body,
   pointer-events: none;
   transform-origin: center bottom;
 }
+/* —— 多实例联动（L1 情绪传染 / L2 Bongo 呼应）—— */
+.companion-pet {
+  position: relative;
+}
+
+.companion-pet--reacting img {
+  filter: drop-shadow(0 8px 12px rgba(5, 7, 12, 0.24)) drop-shadow(0 0 10px rgba(120, 205, 150, 0.55));
+}
+
+.companion-pet__bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translateX(-50%);
+  margin-bottom: 4px;
+  max-width: 160px;
+  padding: 4px 9px;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #2b2f3a;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(5, 7, 12, 0.18);
+  pointer-events: none;
+  animation: companion-bubble-in 160ms ease-out;
+}
+
+@keyframes companion-bubble-in {
+  from { opacity: 0; transform: translate(-50%, 4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.bongo-pet--hit img {
+  animation: bongo-hit-pulse 560ms ease-out;
+}
+
+@keyframes bongo-hit-pulse {
+  0% { scale: 1; }
+  18% { scale: 1.07; }
+  55% { scale: 0.98; }
+  100% { scale: 1; }
+}

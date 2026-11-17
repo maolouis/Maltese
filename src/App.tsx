@@ -149,6 +149,11 @@ import {
 import { getCollapsedTextUnits, getTodoTitleLineCount } from "./utils/text";
 import { formatTodoElapsed, getTodoElapsedMs } from "./todoTimer";
 import { DiaryTimeline, type DiaryEvent } from "./DiaryTimeline";
+import {
+  getPetLinkBus,
+  linkActionForPetAction,
+  PET_LINK_MAIN_REACTION_MS,
+} from "./petLinkBus";
 import "./PetBubble.css";
 import "./App.css";
 
@@ -377,6 +382,8 @@ type IslandSettings = {
   fullscreenHideExtras: boolean;
   /** 全屏时 Bongo 是否也收起来（可与 fullscreenAvoid 的“不处理”并存）。 */
   fullscreenHideBongo: boolean;
+  /** 多实例联动：主狗动作传染给陪玩狗 / Bongo 呼应（默认开）。 */
+  petLinkage: boolean;
   fpsMode: PetFpsMode;
   bubbleOn: boolean;
   bubbleDurationMs: number;
@@ -669,6 +676,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   fullscreenAvoid: "tuck",
   fullscreenHideExtras: true,
   fullscreenHideBongo: true,
+  petLinkage: true,
   fpsMode: "balanced",
   bubbleOn: true,
   bubbleDurationMs: 6000,
@@ -952,6 +960,8 @@ function normalizeSettings(
       : DEFAULT_SETTINGS.fullscreenAvoid,
     fullscreenHideExtras: settings?.fullscreenHideExtras !== false,
     fullscreenHideBongo: settings?.fullscreenHideBongo !== false,
+    // 实例联动默认开（产品口径）：只有显式关掉才 false。
+    petLinkage: settings?.petLinkage !== false,
     fpsMode: settings?.fpsMode === "smooth" || settings?.fpsMode === "normal" || settings?.fpsMode === "saver"
       ? settings.fpsMode
       : DEFAULT_SETTINGS.fpsMode,
@@ -2163,17 +2173,15 @@ export function IslandShell({
                 }}
               >{t.island.plugins}</button>
               <button
-                className={`island-tab ${page === "layout" ? "dot-button--active" : ""}`}
+                className="island-tab"
                 type="button"
                 title={t.island.layoutEditor}
                 aria-label={t.island.layoutEditor}
-                aria-pressed={page === "layout"}
                 onClick={(event) => {
                   event.stopPropagation();
-                  // D5：以前这里直接 open_settings_window，浮层展开时又弹一个独立窗口，
-                  // 两个窗口抢焦点、浮层失焦自动收起，观感是「点一下闪出两个窗口」。
-                  // 现在切到岛内「设置」页（布局编辑），改轮播 GIF 也能就地完成。
-                  onPageChange("layout");
+                  // 恢复旧版行为：顶部「设置」直接打开浅色的独立设置窗口，
+                  // 不再切到岛内深色设置页；只有窗口打不开时才退回岛内页面。
+                  void invoke("open_settings_window").catch(() => onPageChange("layout"));
                 }}
               >设置</button>
             </nav>
@@ -2758,6 +2766,13 @@ function LayoutEditor({
           checked={settings.bongoEnabled}
           onChange={(bongoEnabled) => onSettingsChange({ ...settings, bongoEnabled })}
         />
+        {(settings.petCount > 1 || settings.bongoEnabled) && (
+          <ToggleControl
+            label="实例联动（陪玩狗跟着主狗动、Bongo 敲鼓呼应）"
+            checked={settings.petLinkage}
+            onChange={(petLinkage) => onSettingsChange({ ...settings, petLinkage })}
+          />
+        )}
         {settings.bongoEnabled && (
           <>
             <SliderControl
@@ -6712,8 +6727,12 @@ function IslandApp({
     }
   }, []);
 
+  // 拖动中/刚拖完的几秒内不联动（设计文档 §5）。
+  const islandDragCooldownRef = useRef(0);
   const startIslandDrag = useCallback(() => {
     setIsPositionDetached(true);
+    // 拖动中/刚拖完的几秒内不联动（设计文档 §5），避免陪玩狗跟着乱动。
+    islandDragCooldownRef.current = Date.now() + 4000;
     void invoke("start_island_drag").catch((error) => {
       setIsPositionDetached(isPositionDetached);
       console.error("Failed to start island drag", error);
@@ -9057,6 +9076,11 @@ function IslandApp({
     () => getAgentStatusLabel(agentStatus, t),
     [agentStatus, t],
   );
+  // 多实例联动：Bongo → 主狗的响应不再广播回陪玩狗，避免「主狗 happy → Bongo 敲 →
+  // 主狗又 happy」的回声环。
+  const linkSuppressedRef = useRef(false);
+  // 联动上下文：只有「收起态 + 没缩边 + 没睡觉 + 不在拖动」时才联动（设计文档 §5）。
+  const linkContextRef = useRef({ mode, isTucked, sleeping: false });
   const triggerPetAction = useCallback((action: PetAction) => {
     hidePetOverlay();
     if (soundOnRef.current) {
@@ -9079,6 +9103,21 @@ function IslandApp({
       petActionTimer.current = null;
       setPetAction(null);
     }, action === "sleeping" ? 5000 : 2600);
+    // MVP-1 情绪传染：把主狗动作广播给陪玩狗（自己不再转发，接收端有回声抑制）。
+    // 只在「收起态 + 没缩边 + 没睡觉 + 不在拖动」时发；失败不影响主狗动作。
+    const linkAction = linkActionForPetAction(action);
+    const linkContext = linkContextRef.current;
+    const dragging = Date.now() < islandDragCooldownRef.current;
+    if (
+      linkAction
+      && !linkSuppressedRef.current
+      && !dragging
+      && linkContext.mode === "collapsed"
+      && !linkContext.isTucked
+      && !linkContext.sleeping
+    ) {
+      getPetLinkBus("main").emitAction(linkAction);
+    }
   }, [recordDiaryEvent, startPetInteraction, t, tuckIsland]);
   useEffect(() => {
     if (!isTauri()) {
@@ -9101,6 +9140,26 @@ function IslandApp({
       unlisten?.();
     };
   }, [triggerPetAction]);
+  // L2 反向：Bongo 敲空格 → 主狗摇尾巴（播 happy 1.2s）。只在收起态、没缩边、
+  // 没睡觉时响应；响应期间抑制联动广播，避免「主狗 happy → Bongo 敲」的回声。
+  useEffect(() => {
+    if (!isTauri()) return;
+    const bus = getPetLinkBus("main");
+    let lastHitAt = 0;
+    return bus.subscribe((message) => {
+      if (message.kind !== "bongo-hit") return;
+      const now = Date.now();
+      if (now - lastHitAt < 800) return;
+      const linkContext = linkContextRef.current;
+      if (linkContext.mode !== "collapsed" || linkContext.isTucked || linkContext.sleeping) return;
+      lastHitAt = now;
+      linkSuppressedRef.current = true;
+      triggerPetAction("happy");
+      window.setTimeout(() => {
+        linkSuppressedRef.current = false;
+      }, PET_LINK_MAIN_REACTION_MS);
+    });
+  }, [triggerPetAction]);
   const petState = useMemo<PetState>(() => {
     if (petAction) {
       return petAction;
@@ -9120,6 +9179,9 @@ function IslandApp({
     }
     return "idle";
   }, [activityMood, agentVisualState, mediaLooksLikeVideo, mediaState.audioActive, mediaState.playbackStatus, petAction, qqMail.preview, qqNotifications.preview]);
+
+  // 联动上下文跟随最新状态（触发动作的回调是稳定引用，这里用 ref 读最新值）。
+  linkContextRef.current = { mode, isTucked, sleeping: petState === "sleeping" };
 
   return (
     <main

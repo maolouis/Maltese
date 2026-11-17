@@ -248,3 +248,7 @@ pointer 事件探针 + 用 `Input.dispatchMouseEvent` 走真实指针路径后�
 2. 按住第 1 张方格往右/下拖到第 3 张位置，松手：序号应立刻重排，刷新/重开设置页顺序保持。
 3. 点一次「全选现有表情」：数字只应增加缺的那几张（不是整个素材池再来一遍）。
 4. 若仍拖不动：把 DevTools Console 里 `[pet-gif-drag]` 相关日志（或页面错误）连同现象一起反馈。
+
+> 多实例联动（情绪传染 / Bongo 呼应）见 [multi-instance-linkage-design.md](multi-instance-linkage-design.md)：
+> 主狗被摸头/喂食/开心时，陪玩狗会跟着动、Bongo 会敲鼓呼应；开关在「设置 → 桌宠」的
+> 「实例联动」（岛内设置页与独立设置窗口都有，默认开，需小狗数量 ≥2 或打开 Bongo）。

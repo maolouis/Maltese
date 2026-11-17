@@ -140,3 +140,45 @@
 2. `petLinkage` 默认开是否可接受？关闭入口放主设置页还是独立设置窗口（本文建议两处都放，默认开）。
 3. L3 真·转头是否补素材（`assets/pets/chars/*/look-*`）；不补的话产品文案就叫「一起看过来」。
 4. 是否允许联动触发主狗动作（Bongo→主狗），还是严格「主狗单向驱动其它实例」；本文按双向设计，若担心打断用户操作可先只做单向。
+---
+
+## 8. 初版实现状态（2026-11-17）
+
+按产品 MVP 只落地了 L1 + L2 两条（其它不夹带），开关默认开。
+
+### 已实现
+
+| 项 | 内容 | 文件 |
+| --- | --- | --- |
+| L1 情绪传染 | 主狗 `pet/eating/happy/celebrate` 动作 → 随机 1–2 只陪玩狗（`companion-*`）跟播对应动作 + 约 1/3 概率一句小气泡；2.6s 后回 idle | `src/petLinkBus.ts`、`src/App.tsx`（`triggerPetAction` 广播）、`src/CompanionPet.tsx`（接收 + 气泡）、`src/DesktopExtras.css` |
+| L2 Bongo 呼应 | ①主狗 happy/celebrate → Bongo 敲一下（切「空格爪子」帧 + 560ms 缩放脉冲）；②Bongo 空格按下沿 → 主狗播 happy 1.2s | `src/BongoPet.tsx`、`src/App.tsx`（监听 `bongo-hit`） |
+| 设置开关 | 「实例联动」默认开；岛内设置页与独立设置窗口各一处，仅在小狗数量 ≥2 或 Bongo 开启时显示 | `src/App.tsx`、`src/SettingsWindow.tsx`、i18n `petLink` |
+| 总线 | `BroadcastChannel("maltese-pet-link")`（多窗口同源，优先）+ Tauri 全局事件兜底 | `src/petLinkBus.ts` |
+
+### 防线（与 §5 一致，单测锁定）
+
+| 参数 | 值 |
+| --- | --- |
+| 联动概率 | 0.6 |
+| 单次最多实例 | 2 |
+| 错峰 | 0–300ms（第一只 0，其余随机） |
+| 同动作冷却 | 1.5s（发送端 + 接收端各一层） |
+| 全局限速 | ≤4 次/秒 |
+| 气泡冷却 | 每实例 8s |
+| 回声抑制 | 接收端丢弃 `source === self` 与旧 `seq`；接收端**不转发** |
+| 不联动场景 | 缩边 / 睡觉 / 展开面板 / 隐藏 / 拖动中（以及 Bongo 触发主狗时抑制回传） |
+
+### 未做（按产品范围）
+
+- L3「一起看过来」（`peek` 近似或补 `look-*` 素材）；
+- L4 队形/位置跟随、L5 声音、L6 跨进程；
+- 联动声音（初版静音）。
+
+### 验证
+
+- `node --test tests/pet-link-bus.test.mjs`：12 条（概率 / 上限 / 错峰 / 冷却 / 限速 / 回声 /
+  气泡冷却 / 开关关闭不发事件 / 消息形态 / 设置读取）。
+- `tsc --noEmit`、`cargo check` 通过；未改 Rust。
+- 人工 30 秒看效果：设置里把「小狗数量」调到 ≥2（或打开 Bongo）→ 摸头/喂食主狗
+  → 1–2 只陪玩狗跟着动一下（偶尔冒小气泡）；主狗开心时 Bongo 会敲一下；
+  Bongo 按空格时主狗摇尾巴。关掉「实例联动」后上述现象消失。

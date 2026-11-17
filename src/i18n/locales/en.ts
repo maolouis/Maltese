@@ -656,6 +656,11 @@ const en: Translations = {
       save: "Save",
     },
   },
+  petLink: {
+    label: "Pet linkage",
+    hint: "When the main dog is petted, fed or happy, companion dogs react too and Bongo taps along. Needs more than one dog or Bongo enabled.",
+    companionLines: ["Me too!", "Pat me~", "Yummy!", "So happy!", "Wait for me!", "Hehe~"],
+  },
 };
 
 export default en;

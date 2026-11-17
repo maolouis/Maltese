@@ -659,6 +659,11 @@ const zhCN: Translations = {
       save: "保存",
     },
   },
+  petLink: {
+    label: "实例联动",
+    hint: "主狗被摸头/喂食/开心时，陪玩狗会跟着动一下；Bongo 会敲鼓呼应。需要小狗数量 ≥2 或打开 Bongo。",
+    companionLines: ["我也要！", "摸摸我～", "好吃！", "我也开心！", "等等我！", "嘿嘿～"],
+  },
 };
 
 export default zhCN;
