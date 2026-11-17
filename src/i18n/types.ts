@@ -374,6 +374,36 @@ export type Translations = {
     };
   };
 
+  /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重。 */
+  petVitals: {
+    title: string;
+    hint: string;
+    toggle: string;
+    energy: string;
+    mood: string;
+    bond: string;
+    focus: string;
+    levels: {
+      great: string;
+      good: string;
+      ok: string;
+      low: string;
+      tired: string;
+      lonely: string;
+      focused: string;
+    };
+    details: string;
+    detailsHint: string;
+    refresh: string;
+    lastUpdate: (time: string) => string;
+    pet: string;
+    feed: string;
+    off: string;
+    privacy: string;
+    focusing: string;
+    thinking: string;
+  };
+
   updateNotice: {
     available: (version: string) => string;
     body: string;

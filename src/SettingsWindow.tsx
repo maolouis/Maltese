@@ -20,6 +20,9 @@ import { TuckGifControl } from "./TuckGifControl";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { previewPetLinkage } from "./petLinkPreview";
+import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
+import { CHAT_BUSY_KEY } from "./chatGuard";
+import PetVitalsCard from "./PetVitalsCard";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -80,6 +83,8 @@ type PetSettings = {
   petLinkage: boolean;
   /** 消息只提醒、不显示文字；开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
   messagePreview: boolean;
+  /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重，默认开。 */
+  petVitalsEnabled: boolean;
 };
 
 const DEFAULTS: PetSettings = {
@@ -127,6 +132,7 @@ const DEFAULTS: PetSettings = {
   tuckedVisibleHeight: 80,
   petLinkage: true,
   messagePreview: false,
+  petVitalsEnabled: true,
 };
 
 function load(): PetSettings {
@@ -257,6 +263,23 @@ export default function SettingsWindow() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [desktopIconsVisible, setDesktopIconsVisible] = useState<boolean | null>(null);
   const saveTimer = useRef<number | null>(null);
+  // 只读快照：设置窗口不写指标（主窗口是唯一写入方），每 10s 重新读一次。
+  const [vitalsSnapshot, setVitalsSnapshot] = useState<PetVitalsSnapshot>(() => readPetVitals());
+  const [chatThinking, setChatThinking] = useState(false);
+  useEffect(() => {
+    const read = () => {
+      setVitalsSnapshot(readPetVitals());
+      try {
+        const busyAt = Number(window.localStorage.getItem(CHAT_BUSY_KEY) || 0);
+        setChatThinking(Number.isFinite(busyAt) && Date.now() - busyAt < 10 * 60_000);
+      } catch {
+        setChatThinking(false);
+      }
+    };
+    read();
+    const timer = window.setInterval(read, 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     void invoke<boolean>("get_launch_at_startup")
@@ -455,6 +478,20 @@ export default function SettingsWindow() {
         {settings.followMouse && (
           <Slider label="跟随宠大小" value={settings.cursorPetSize} min={30} max={180} step={1} suffix="px" onChange={(value) => update("cursorPetSize", value)} />
         )}
+      </section>
+
+      <section className="sw-card">
+        <h2>小狗的状态</h2>
+        <PetVitalsCard
+          enabled={settings.petVitalsEnabled}
+          onToggleEnabled={(value) => update("petVitalsEnabled", value)}
+          vitals={vitalsSnapshot}
+          focusActive={false}
+          thinking={chatThinking}
+          // 设置窗口不写指标：发事件给主窗口，由主窗口的 triggerPetAction 计数。
+          onPet={() => void emit("maltese-pet-action", { action: "pet" }).catch(() => undefined)}
+          onFeed={() => void emit("maltese-pet-action", { action: "eating" }).catch(() => undefined)}
+        />
       </section>
 
       <PetGifRotationSettings />

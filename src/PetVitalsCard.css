@@ -1,0 +1,188 @@
+/* 小狗状态卡（体力/情绪/亲密/专注）：浅绿主色，和设置页其它卡片一致。 */
+.pet-vitals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(120, 205, 150, 0.08);
+  border: 1px solid rgba(120, 205, 150, 0.28);
+  color: inherit;
+}
+
+.pet-vitals__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pet-vitals__title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.pet-vitals__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.pet-vitals__hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0.7;
+}
+
+.pet-vitals__level {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #2f8d57;
+}
+
+.pet-vitals__level[data-level="tired"],
+.pet-vitals__level[data-level="low"] {
+  color: #a97b1f;
+}
+
+.pet-vitals__level[data-level="lonely"] {
+  color: #8a6aa8;
+}
+
+.pet-vitals__bars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pet-vitals__bar {
+  display: grid;
+  grid-template-columns: 34px 1fr 28px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.pet-vitals__bar-name {
+  opacity: 0.75;
+}
+
+.pet-vitals__bar-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(43, 47, 58, 0.12);
+  overflow: hidden;
+}
+
+.pet-vitals__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8ed6a6, #57b87b);
+  transition: width 320ms ease;
+}
+
+.pet-vitals__bar[data-metric="mood"] .pet-vitals__bar-fill {
+  background: linear-gradient(90deg, #ffd3a1, #f5a55c);
+}
+
+.pet-vitals__bar[data-metric="bond"] .pet-vitals__bar-fill {
+  background: linear-gradient(90deg, #f6b8c8, #e97f9e);
+}
+
+.pet-vitals__bar[data-metric="focus"] .pet-vitals__bar-fill {
+  background: linear-gradient(90deg, #a8c8f5, #5d8fdc);
+}
+
+.pet-vitals__bar-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.pet-vitals__off {
+  margin: 0;
+  font-size: 11px;
+  color: #a97b1f;
+}
+
+.pet-vitals__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pet-vitals__action {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 205, 150, 0.6);
+  background: #ffffff;
+  color: #2f8d57;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.pet-vitals__action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pet-vitals__link {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font-size: 11px;
+  color: #2f8d57;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pet-vitals__details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.pet-vitals__details dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.pet-vitals__details dt {
+  font-weight: 500;
+}
+
+.pet-vitals__details dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pet-vitals__privacy {
+  margin: 0;
+  opacity: 0.65;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

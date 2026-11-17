@@ -67,7 +67,19 @@ import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages"
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { shouldSkipProactiveForChat } from "./chatGuard";
+import { MINIMIZE_BLUR_SETTLE_MS, shouldCollapseOnBlur } from "./islandMinimizeGuard";
 import { previewPetLinkage } from "./petLinkPreview";
+// 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重 + 设置页卡片。
+import {
+  buildIdlePlaylist,
+  vitalsBucketKey,
+  vitalsEventForPetAction,
+  weightsForVitals,
+  type PetVitals,
+  type PetVitalsSnapshot,
+} from "./petVitals";
+import { usePetVitals } from "./usePetVitals";
+import PetVitalsCard from "./PetVitalsCard";
 import {
   buildLinkPlan,
   loadPetLinkHistory,
@@ -431,6 +443,8 @@ type IslandSettings = {
   autoRotateExpressions: boolean;
   proactiveBubbles: boolean;
   proactiveChat: boolean;
+  /** 桌宠自我状态（体力/情绪/亲密/专注，只影响待机轮播权重）。默认开。 */
+  petVitalsEnabled: boolean;
   proactiveChatMinutes: number;
   /** 主动聊天方式：定时（interval）或跟随状态变化（state）。 */
   proactiveChatMode: ProactiveChatMode;
@@ -477,6 +491,11 @@ type IslandShellProps = {
   agentVisualState: AgentVisualState;
   agentStatusLabel: string;
   petState: PetState;
+  /** 自我状态（体力/情绪/亲密/专注）：只用来给 idle 轮播加权。 */
+  petVitals?: PetVitals | null;
+  petVitalsEnabled?: boolean;
+  /** 单击小狗换表情也算一次「摸头」（埋点）。 */
+  onPetClickReport?: () => void;
   petInteraction: PetInteractionSession | null;
   onPetAction: (action: PetAction) => void;
   onPetHoverStart: () => void;
@@ -725,6 +744,8 @@ const DEFAULT_SETTINGS: IslandSettings = {
   autoRotateExpressions: true,
   proactiveBubbles: true,
   proactiveChat: false,
+  // 默认开：只影响待机轮播权重，关掉后退回原行为。
+  petVitalsEnabled: true,
   proactiveChatMinutes: 30,
   proactiveChatMode: "interval",
   proactiveLevel: 50,
@@ -1028,6 +1049,7 @@ function normalizeSettings(
     autoRotateExpressions: settings?.autoRotateExpressions !== false,
     proactiveBubbles: settings?.proactiveBubbles !== false,
     proactiveChat: settings?.proactiveChat === true,
+    petVitalsEnabled: settings?.petVitalsEnabled !== false,
     proactiveChatMinutes: clamp(
       Math.round(Number(settings?.proactiveChatMinutes ?? DEFAULT_SETTINGS.proactiveChatMinutes)),
       5,
@@ -1441,6 +1463,9 @@ export function IslandShell({
   agentVisualState,
   agentStatusLabel,
   petState,
+  petVitals,
+  petVitalsEnabled,
+  onPetClickReport,
   petInteraction,
   onPetAction,
   onPetHoverStart,
@@ -1608,10 +1633,22 @@ export function IslandShell({
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
   // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
-  const carouselFrames = useMemo(
-    () => rotationFramesForState(gifRotationConfig, petState, gifRotationStates, petCharacter),
-    [gifRotationConfig, gifRotationStates, petCharacter, petState],
-  );
+  // 桌宠自我状态只在 `petState === "idle"` 时介入：按 4 个指标给「状态 + 帧」加权抽 24 张，
+  // 动作 / 通知 / 音乐 / Agent 等状态的优先级完全不变（usePetGifRotation 也不改）。
+  const vitalsBucket = petVitals && petVitalsEnabled ? vitalsBucketKey(petVitals) : "";
+  const carouselFrames = useMemo(() => {
+    if (petState === "idle" && petVitals && petVitalsEnabled) {
+      const playlist = buildIdlePlaylist({
+        states: gifRotationStates,
+        weights: weightsForVitals(petVitals),
+        framesFor: (state) => rotationFramesForState(gifRotationConfig, state, gifRotationStates, petCharacter),
+      });
+      if (playlist.length > 0) return playlist;
+    }
+    return rotationFramesForState(gifRotationConfig, petState, gifRotationStates, petCharacter);
+    // vitalsBucket 是为了「数值小幅变化不重建播放列表」：只在跨分桶时重算。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gifRotationConfig, gifRotationStates, petCharacter, petState, petVitalsEnabled, vitalsBucket]);
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: 10_000,
     enabled:
@@ -2020,6 +2057,8 @@ export function IslandShell({
                     window.setTimeout(() => setPetSquash(false), 240);
                   }
                   playNextExpression();
+                  // 单击换表情也是「摸头」：以前只换图不计数，会严重低估互动量。
+                  onPetClickReport?.();
                 }, 340);
               }}
               onDoubleClick={(event) => {
@@ -2343,6 +2382,9 @@ function LayoutEditor({
   onClearAgentStatus,
   onInstallAgentHooks,
   onOpenSettingsWindow,
+  petVitals,
+  chatThinking,
+  onPetVitalsAction,
 }: {
   locale: LocaleCode;
   settings: IslandSettings;
@@ -2374,6 +2416,12 @@ function LayoutEditor({
   onInstallAgentHooks: () => void;
   /** 打开独立设置窗口：先收起浮层再开，避免两个窗口同时抢焦点（QA D5）。 */
   onOpenSettingsWindow: () => Promise<void>;
+  /** 自我状态快照（设置页状态卡用；只读）。 */
+  petVitals: PetVitalsSnapshot;
+  /** 模型正在思考（只读标记）。 */
+  chatThinking: boolean;
+  /** 状态卡的「摸摸头 / 喂零食」按钮。 */
+  onPetVitalsAction: (action: "pet" | "eating") => void;
 }) {
   const t = useTranslation();
   const savePathPanelRef = useRef<HTMLElement | null>(null);
@@ -2936,6 +2984,15 @@ function LayoutEditor({
         <p className="settings-section__hint">
           全部在本地完成，不截图、不联网。只读取前台窗口的进程名，用来决定说哪句陪你。
         </p>
+        <PetVitalsCard
+          enabled={settings.petVitalsEnabled !== false}
+          onToggleEnabled={(value) => onSettingsChange({ ...settings, petVitalsEnabled: value })}
+          vitals={petVitals}
+          focusActive={false}
+          thinking={chatThinking}
+          onPet={() => onPetVitalsAction("pet")}
+          onFeed={() => onPetVitalsAction("eating")}
+        />
         <ToggleControl
           label="偷偷观察你（写代码 / 写文档 / 开会 / 看视频时陪你说一句）"
           checked={settings.observeApps}
@@ -6394,6 +6451,16 @@ function IslandApp({
     [activeTodoId, todos],
   );
   const activeTodoTitle = activeTodo?.title ?? null;
+  // 桌宠自我状态：localStorage 持久化 + 60s 结算；只影响待机轮播权重（动作/通知不变）。
+  // focus 在「有待办在跑」时随时间上涨，所以这里传 activeTodo 是否为空。
+  const petVitalsController = usePetVitals({
+    enabled: settings.petVitalsEnabled !== false,
+    focusActive: activeTodo !== null,
+  });
+  const petVitalsEnabled = settings.petVitalsEnabled !== false;
+  // 模型忙（聊天进行中）→ 状态卡显示「正在思考…」，只是只读标记，不写进指标。
+  const chatThinking = petVitalsEnabled
+    && shouldSkipProactiveForChat(window.localStorage, Date.now(), 0);
   const collapsedTodoCount = settings.showIdleTodoCount && !collapsedTaskTitle
     ? todos.filter((todo) => !todo.completed).length
     : null;
@@ -8243,6 +8310,8 @@ function IslandApp({
         "todo",
         t.diary.completed(todo.title, formatTodoElapsed(elapsed, t.localeTag)),
       );
+      // 完成待办：情绪 +5、亲密 +1、专注 +5（自我状态埋点）。
+      petVitalsController.reportEvent("todoDone", { todoTitle: todo.title });
       return;
     }
 
@@ -8254,7 +8323,7 @@ function IslandApp({
       ),
     );
     recordDiaryEvent("todo", t.diary.reopened(todo.title));
-  }, [activeTodoId, recordDiaryEvent, t, todos]);
+  }, [activeTodoId, petVitalsController, recordDiaryEvent, t, todos]);
 
   const updateTodoTitle = useCallback((id: string, title: string) => {
     const nextTitle = title.trim();
@@ -9109,12 +9178,34 @@ function IslandApp({
     }
     let didCancel = false;
     let unlisten: (() => void) | null = null;
+    let blurTimer: number | null = null;
+    const win = getCurrentWindow();
 
-    void getCurrentWindow()
+    void win
       .onFocusChanged(({ payload: focused }) => {
-        if (!focused && mode === "expanded") {
-          collapseIsland();
+        // 最小化 / 还原也会给焦点事件：先等一小会儿，再确认「这次失焦是不是最小化」。
+        if (focused) {
+          if (blurTimer !== null) {
+            window.clearTimeout(blurTimer);
+            blurTimer = null;
+          }
+          return;
         }
+        if (blurTimer !== null) window.clearTimeout(blurTimer);
+        blurTimer = window.setTimeout(() => {
+          blurTimer = null;
+          void win
+            .isMinimized()
+            .catch(() => false)
+            .then((minimized) => {
+              if (didCancel) return;
+              const settleMs = MINIMIZE_BLUR_SETTLE_MS;
+              if (!shouldCollapseOnBlur({ focused: false, mode: modeRef.current, minimized, settleMs })) {
+                return;
+              }
+              collapseIsland();
+            });
+        }, MINIMIZE_BLUR_SETTLE_MS);
       })
       .then((nextUnlisten) => {
         if (didCancel) {
@@ -9129,9 +9220,10 @@ function IslandApp({
 
     return () => {
       didCancel = true;
+      if (blurTimer !== null) window.clearTimeout(blurTimer);
       unlisten?.();
     };
-  }, [collapseIsland, mode]);
+  }, [collapseIsland]);
 
   const agentVisualState = useMemo(
     () => getAgentVisualState(agentStatus),
@@ -9234,6 +9326,11 @@ function IslandApp({
       playPetChirp(action === "celebrate" || action === "spin" || action === "play" ? "happy" : "soft");
     }
     recordDiaryEvent("pet", t.diary.pet(t.diary.petActions[action]));
+    // 自我状态埋点：摸头/喂食/陪玩/照顾/睡觉各算一次（冷却与日上限由纯函数把关）。
+    const vitalsKind = vitalsEventForPetAction(action);
+    if (vitalsKind) {
+      petVitalsController.reportEvent(vitalsKind);
+    }
     setPetAction(action);
     const interaction = interactionFromAction(action);
     if (interaction) {
@@ -9447,6 +9544,9 @@ function IslandApp({
         agentVisualState={agentVisualState}
         agentStatusLabel={agentStatusLabel}
         petState={petState}
+        petVitals={petVitalsController.vitals}
+        petVitalsEnabled={petVitalsEnabled}
+        onPetClickReport={() => petVitalsController.reportEvent("pet")}
         petInteraction={petInteraction}
         onPetAction={triggerPetAction}
         onPetHoverStart={showPetHoverBubble}
@@ -9508,6 +9608,9 @@ function IslandApp({
             onClearAgentStatus={clearAgentStatus}
             onInstallAgentHooks={installAgentHooks}
             onOpenSettingsWindow={openStandaloneSettings}
+            petVitals={petVitalsController.vitals}
+            chatThinking={chatThinking}
+            onPetVitalsAction={(action) => triggerPetAction(action)}
           />
         )}
         {page === "music" && (
