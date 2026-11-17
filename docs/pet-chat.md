@@ -7,6 +7,26 @@
 
 聊天记录保存在浏览器 `localStorage`（`focusd-island-pet-chat-messages`），DSH 会话 id 保存在 `focusd-island-pet-chat-session`；点右上角垃圾桶会清空这两项。模型后端配置保存在 `maltese-local-chat-settings`，两种后端共用同一份聊天记录。每次请求还会带上当前桌宠形象（小白 / 小鸡毛 / 两只一起），所以切换形象后，新回复会使用对应的性格。
 
+## 聊天没反应？先看模型加载状态（排查第一步）
+
+本机 Strata 默认是 **`lazy_load`**（`serve/runconfig.py:38`）：**进程在跑 ≠ 模型已加载**，
+`GET /v1/models` 的 `status.value` 会长时间是 `unloaded`，此时发消息会很久没有任何事件。
+
+1. 查状态：`curl http://127.0.0.1:8080/v1/models`，看 `data[0].status.value`（`loaded` / `unloaded`）。
+2. 立刻加载：`curl -X POST http://127.0.0.1:8080/load -H "content-type: application/json" -d "{}"`
+   （实测冷加载约 26–32s，热加载约 8s）。
+3. 重启 Strata：`powershell -ExecutionPolicy Bypass -File F:\Strata\bin\start-qwen36.ps1`
+   （端口占用时它只进监控；先关掉 Strata 窗口或 `POST /stop` 再启动）。
+4. 空闲卸载：`serve/server.py:4866` 里 `idle_unload_s` 默认 **0 = 从不在空闲后卸载**；
+   只有预设里显式配了才会卸。
+
+我们自动做的（不需要用户操作）：
+- 打开聊天 / 发送前调用 `ensure_local_model`：发现 `unloaded` 就先 `POST /load`，
+  再**每 2s 轮询到 `loaded:true`，上限 240s**；加载期间气泡显示「正在加载本地模型…（已 Ns）」，
+  可点「停止生成」取消；
+- 聊天打开期间每 4 分钟一次心跳保活，防止预设里配了 `idle_unload_s` 时被卸载；
+- 每次 ensure / 加载结果写入 `%APPDATA%\com.maolouis.maltese\local-model.log`，排查时先看它。
+
 ## 头像
 
 小狗回复的每一行左边都带当前形象的头像，标题栏和空状态也用同一张；切换形象后立即跟着换。
@@ -270,3 +290,14 @@ UI 显示：`模型响应超时，已停止。首次加载会比较慢，稍后�
 2. 想立刻加载：`curl -X POST http://127.0.0.1:8080/load -H "content-type: application/json" -d "{}"`。
 3. 想彻底重启：`powershell -ExecutionPolicy Bypass -File F:\Strata\bin\start-qwen36.ps1`
    （端口占用时它只进监控；先 `curl -X POST http://127.0.0.1:8080/stop` 或关掉 Strata 窗口）。
+
+## 停止加载 / 错误文案统一（2026-11-17）
+
+- 「正在加载本地模型…」阶段点「停止生成」：前端调用 `local_model_load_cancel(token)`，
+  Rust `ensure_local_model` 每 2s 检查取消登记表，取消后**立即返回 `Err("已停止")`**，
+  不再 `POST /load` 轮询到 240s、也不会在后台偷偷出结果；下一次发送会自动清掉旧 token。
+- 三类失败统一成同一句可操作文案：`CHAT_MODEL_NOT_READY` / `CHAT_BACKEND_DOWN` /
+  「连不上」都显示「模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。」
+  + 「重试」按钮；用户主动停止映射为 `CHAT_STOPPED`（「已停止生成。想继续可以点「重试」或再说一句。」）。
+- 日志：`%APPDATA%\com.maolouis.maltese\local-model.log` 会记录 `ensure: call` / `loaded after N ms` /
+  `cancelled by user` / `load timeout`，排查先看它。

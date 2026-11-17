@@ -99,9 +99,10 @@ export function isLikelyQueued(input: StreamAbortInput): boolean {
 export type ChatErrorInfo = { code: string; message: string; raw: string };
 
 const ERROR_MAP: Array<{ test: RegExp; code: string; message: string }> = [
-  { test: /没有准备好|加载失败|模型没有|unloaded/i, code: "CHAT_MODEL_NOT_READY", message: "模型还没加载好：请确认本地模型服务已启动，或点「重试」；首次加载可能要 1–2 分钟。" },
+  { test: /没有准备好|加载失败|模型没有|unloaded/i, code: "CHAT_MODEL_NOT_READY", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
   { test: /排队|模型忙|一直忙|单槽位/i, code: "CHAT_BUSY", message: "模型还在处理上一条回答（单槽位排队），这次没等到；稍后重试或调浅思考。" },
-  { test: /连接不到|ECONNREFUSED|Connection refused|os error 10061/i, code: "CHAT_BACKEND_DOWN", message: "连不上本地模型服务：请确认模型已启动（聊天设置里有「启动模型」）。" },
+  { test: /^已停止/, code: "CHAT_STOPPED", message: "已停止生成。想继续可以点「重试」或再说一句。" },
+  { test: /连接不到|ECONNREFUSED|Connection refused|os error 10061/i, code: "CHAT_BACKEND_DOWN", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
   { test: /超时|timeout|timed out|太慢|没有任何输出|空窗|没有新内容|没有响应/i, code: "CHAT_TIMEOUT", message: "模型响应超时，已停止。首次加载会比较慢，稍后重试或调浅思考。" },
   { test: /5\d\d|服务返回错误|请求本地模型失败|读取本地模型流失败|stream|连接被重置|reset/i, code: "CHAT_BACKEND_ERROR", message: "模型服务这次返回错误（原因已记录到控制台），稍后重试或重启模型。" },
   { test: /400|template|chat template|Bad Request/i, code: "CHAT_BAD_REQUEST", message: "模型拒绝了这次请求（可能是对话模板不兼容），已尝试去掉状态上下文重试。" },

@@ -180,6 +180,10 @@ export function PetChat() {
   }, [chatConfig.backend, chatConfig.baseUrl, chatConfig.model]);
   /** 正在进行的流式请求：用于「停止生成」和防止旧请求回写。 */
   const activeRequestRef = useRef<{ requestId: string; cancelled: boolean } | null>(null);
+  /** 用户在「加载模型」阶段点了停止（此时还没有真正的流式请求）。 */
+  const cancelRef = useRef(false);
+  /** 本次模型预热的取消 token（Rust 侧每 2s 检查）。 */
+  const loadTokenRef = useRef<string | null>(null);
   /** 最近一次失败的提问：给「重试」按钮用。 */
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   /** 首字是否已经到达（分级超时用）。 */
@@ -600,24 +604,29 @@ export function PetChat() {
     setStreamingReasoning("");
     setFailedPrompt(null);
     markChatBusy(window.localStorage);
+    cancelRef.current = false;
     try {
       // 本地模型：发送前确认「端口在跑 + 模型已加载」。冷启动可能要 1–2 分钟，
       // 期间 busy 文案会显示加载中；加载失败/超时给中文原因，不让请求静默挂着。
       if (chatConfig.backend === "local") {
         setModelLoading(true);
+        const loadToken = createId();
+        loadTokenRef.current = loadToken;
         let ready = false;
         try {
           ready = await Promise.race([
             invoke<boolean>("ensure_local_model", {
               baseUrl: chatConfig.baseUrl,
               model: chatConfig.model,
+              cancelToken: loadToken,
             }).catch(() => false),
             new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 240_000)),
           ]);
         } finally {
           setModelLoading(false);
+          loadTokenRef.current = null;
         }
-        if (activeRequestRef.current?.cancelled) throw new Error("已停止生成。");
+        if (cancelRef.current || activeRequestRef.current?.cancelled) throw new Error("已停止生成。");
         if (!ready) {
           throw new Error("模型没能加载：请检查 Strata 是否在运行、显存是否够（首次加载约 1–4 分钟）。");
         }
@@ -785,11 +794,13 @@ export function PetChat() {
   ]);
   /** 「停止生成」：标记取消、通知 Rust 断开连接并立刻复位界面。 */
   const stopGeneration = useCallback(() => {
+    cancelRef.current = true;
     const active = activeRequestRef.current;
     if (active) {
       active.cancelled = true;
       void invoke("local_chat_cancel", { requestId: active.requestId }).catch(() => undefined);
     }
+    setModelLoading(false);
     setBusy(false);
     setWaitSeconds(0);
     setStreamingReply("");

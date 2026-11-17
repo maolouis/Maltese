@@ -115,3 +115,15 @@ test("错误映射：连不上/超时/模板拒绝都有中文原因与错误码
   assert.ok(unknown.message.includes("重试"));
   assert.ok(unknown.raw.includes("weird"));
 });
+
+test("错误文案统一：加载失败 / 连不上 / 已停止 都有中文可操作原因", () => {
+  const notReady = describeChatError("模型还没加载好（unloaded）");
+  assert.equal(notReady.code, "CHAT_MODEL_NOT_READY");
+  assert.ok(notReady.message.includes("模型没能加载"));
+  const down = describeChatError("连接不到本地模型服务（http://127.0.0.1:8080/v1）");
+  assert.equal(down.code, "CHAT_BACKEND_DOWN");
+  assert.equal(down.message, notReady.message, "三类文案要一致");
+  const stopped = describeChatError("已停止");
+  assert.equal(stopped.code, "CHAT_STOPPED");
+  assert.ok(stopped.message.startsWith("已停止生成"));
+});

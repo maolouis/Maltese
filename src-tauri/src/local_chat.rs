@@ -75,6 +75,12 @@ pub fn local_chat_cancel(request_id: String) {
     let _ = mark_cancelled(&request_id);
 }
 
+/// 取消一次「模型加载预热」（与流式取消分命名空间，互不干扰）。
+#[tauri::command]
+pub fn local_model_load_cancel(token: String) {
+    let _ = mark_cancelled(&format!("load:{token}"));
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalChatTurn {
@@ -498,6 +504,59 @@ fn extract_reasoning_delta(value: &Value) -> Option<String> {
     None
 }
 
+/// 本地模型加载/保活事件的轻量日志（便于排查「预热到底有没有发生」）。
+/// 写到 %APPDATA%\com.maolouis.maltese\local-model.log，最多保留 200KB。
+fn log_model_event(message: &str) {
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    if appdata.is_empty() {
+        return;
+    }
+    let dir = std::path::Path::new(&appdata).join("com.maolouis.maltese");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("local-model.log");
+    let line = format!("{} {}\r\n", chrono_like_now(), message);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+}
+
+/// 本地时间 `YYYY-MM-DD HH:MM:SS`（不引 chrono，手算）。
+fn chrono_like_now() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0);
+    // 东八区
+    let local = seconds + 8 * 3600;
+    let days = local / 86_400;
+    let rest = local % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year,
+        month,
+        day,
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60
+    )
+}
+
+/// Howard Hinnant 的 civil_from_days。
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
 /// `/v1/models` 里是否有 `status.value == "loaded"` 的模型。
 fn models_loaded(parsed: &Value) -> bool {
     parsed
@@ -517,7 +576,11 @@ fn models_loaded(parsed: &Value) -> bool {
 /// 确保本机模型（F:\Strata 里的 Strata 服务）已经在跑。
 /// 主动聊天、聊天发送前调用：服务没起来就顺手拉起，避免一路退化成模板台词。
 #[tauri::command]
-pub async fn ensure_local_model(base_url: String, model: Option<String>) -> Result<bool, String> {
+pub async fn ensure_local_model(
+    base_url: String,
+    model: Option<String>,
+    cancel_token: Option<String>,
+) -> Result<bool, String> {
     let endpoint = match Url::parse(&base_url) {
         Ok(url) => url,
         Err(_) => return Ok(false),
@@ -527,6 +590,25 @@ pub async fn ensure_local_model(base_url: String, model: Option<String>) -> Resu
     let port = endpoint.port_or_known_default().unwrap_or(0);
     if !(host == "127.0.0.1" || host == "localhost") || port != 8080 {
         return Ok(true);
+    }
+    log_model_event(&format!("ensure: call base_url={base_url} model={model:?}"));
+    let load_started = std::time::Instant::now();
+    let cancel_key = cancel_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|token| format!("load:{token}"));
+    let cancelled = || {
+        cancel_key
+            .as_deref()
+            .map(|key| is_cancelled(key))
+            .unwrap_or(false)
+    };
+    if cancelled() {
+        if let Some(key) = cancel_key.as_deref() {
+            let _ = take_cancelled(key);
+        }
+        return Err("已停止".to_string());
     }
     let health = format!("{}://{host}:{port}/v1/models", endpoint.scheme());
     let client = Client::builder()
