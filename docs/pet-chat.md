@@ -301,3 +301,40 @@ UI 显示：`模型响应超时，已停止。首次加载会比较慢，稍后�
   + 「重试」按钮；用户主动停止映射为 `CHAT_STOPPED`（「已停止生成。想继续可以点「重试」或再说一句。」）。
 - 日志：`%APPDATA%\com.maolouis.maltese\local-model.log` 会记录 `ensure: call` / `loaded after N ms` /
   `cancelled by user` / `load timeout`，排查先看它。
+
+## 字体与 emoji 回退链（2026-11-17）
+
+聊天主字体是像素字 **Fusion Pixel**，它没有彩色 emoji 字形。现在聊天容器/气泡/输入框/
+思考面板/状态条统一使用这条回退链（`src/PetChat.css` 末尾）：
+
+```
+"Maltese Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Nirmala UI",
+"Fusion Pixel", "Microsoft YaHei", "Segoe UI", sans-serif
+```
+
+- `Maltese Emoji` 是 `App.css` 里用 `unicode-range` 指向系统彩色 emoji 的 `@font-face`；
+- 颜文字里的卡纳达/组合符号（`ಥ`、`•̀`）靠 `Segoe UI Symbol` / `Nirmala UI` 兜底；
+- 中文正文仍由 Fusion Pixel 渲染，观感不变；
+- 如果仍有方块：确认系统里有 `Segoe UI Emoji`（Windows 自带），或用浏览器 devtools 看
+  该字符命中了哪个字体（Computed → Rendered Fonts）。
+
+## 表情包信使（sticker 标记）
+
+本机没有可用的生图路径（预研：`docs/research-chat-sticker.md`），聊天表情包走「模型输出标记 →
+前端从既有素材库取 GIF」：
+
+- **指令在 Rust 侧 persona 注入**（前端 system 消息会被 `build_messages` 过滤掉，模型看不到，
+  所以不能放前端）：
+  - `src-tauri/src/local_chat.rs`：`sticker_instruction()` + `build_messages(..., sticker)`；
+    命令 `local_chat` / `local_chat_stream` 新增 `sticker: Option<bool>`。
+  - `src-tauri/src/dsh_chat.rs`：`STICKER_INSTRUCTION` + `dsh_chat` / `chat` 的 `sticker` 参数。
+  - 只有正常聊天传 `sticker: true`；技能判断/工具调用/摘要传 `false`，避免污染动作决策。
+- **标记格式**：回复末尾单独一行 `<sticker:表情>`，最多一个；表情只能取：
+  `happy` `celebrate` `love` `pet` `play` `sleeping` `eating` `chin` `peek` `cry` `angry` `relax`。
+- **渲染**：`src/chatSticker.ts` 解析并从正文移除标记；`PetChat` 用 `stickerPoolOrder`
+  依次尝试「微博 stickers 池（happy/pet/eating/sleeping）→ 当前角色动作 → duo 回退 shared→xiaobai」，
+  找到 GIF 后 96×96 圆角内联显示，点击放大；取不到素材或图片 `onError` 时静默隐藏（绝不显示破图）。
+- **去重**：连续 3 条消息不重复同一 sticker（重复则这次不显示）。
+- **持久化**：消息记录新增可选 `sticker` 字段；旧记录没有该字段照常渲染。
+- **调试取证**：最近 10 次解析结果写到 `localStorage["maltese-chat-sticker-debug"]`
+  （只存 id、时间和模型原文末尾 80 字，便于确认标记来自模型）。

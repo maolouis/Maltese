@@ -10,6 +10,14 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
+/// 表情包信使：受控标记指令（12 个 id，与素材库动作对齐）。
+/// 只在正常聊天时注入；技能判断/工具调用传 sticker=false，避免污染动作决策。
+fn sticker_instruction() -> &'static str {
+    "如果你想说点什么但文字不够，可以在回复末尾单独一行输出 <sticker:表情>，表情只能取以下之一：\
+happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax；\
+最多一个，不确定就不要输出。标记行不要加标点，也不要解释。"
+}
+
 fn persona(character: &str) -> &'static str {
     match character {
         "xiaojimao" => "你是 Maltese 桌宠小鸡毛：一只金黄色的小金毛，活泼、贪吃、爱撒娇，像小太阳一样会黏着主人。\
@@ -106,8 +114,14 @@ fn build_messages(
     history: Option<Vec<LocalChatTurn>>,
     character: &str,
     images: Option<Vec<String>>,
+    sticker: bool,
 ) -> Vec<Value> {
-    let mut messages = vec![json!({ "role": "system", "content": persona(character) })];
+    let system = if sticker {
+        format!("{}\n\n{}", persona(character), sticker_instruction())
+    } else {
+        persona(character).to_string()
+    };
+    let mut messages = vec![json!({ "role": "system", "content": system })];
     if let Some(history) = history {
         let mut turns = history
             .into_iter()
@@ -196,6 +210,7 @@ pub async fn local_chat(
     history: Option<Vec<LocalChatTurn>>,
     character: String,
     images: Option<Vec<String>>,
+    sticker: Option<bool>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -215,7 +230,7 @@ pub async fn local_chat(
     // 思考吃光预算时要重试，所以这两份数据先克隆留底。
     let retry_history = history.clone();
     let retry_images = images.clone();
-    let messages = build_messages(&message, history, &character, images);
+    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false));
 
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -266,7 +281,7 @@ pub async fn local_chat(
         reasoning_effort: Some("none".to_string()),
         reasoning_budget_tokens: Some(0),
     };
-    let retry_messages = build_messages(&message, retry_history, &character, retry_images);
+    let retry_messages = build_messages(&message, retry_history, &character, retry_images, sticker.unwrap_or(false));
     let mut retry_request = client
         .post(endpoint)
         .json(&generation_payload(&model, retry_messages, &retry_settings, false));
@@ -300,6 +315,7 @@ pub async fn local_chat_stream(
     history: Option<Vec<LocalChatTurn>>,
     character: String,
     images: Option<Vec<String>>,
+    sticker: Option<bool>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -315,7 +331,7 @@ pub async fn local_chat_stream(
     }
     let endpoint = chat_endpoint(&base_url)?;
     let settings = settings.unwrap_or_default();
-    let messages = build_messages(&message, history, &character, images);
+    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false));
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CHAT_TIMEOUT)

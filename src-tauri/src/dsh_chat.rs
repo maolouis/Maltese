@@ -54,12 +54,18 @@ pub struct DshChatReply {
     session_id: Option<String>,
 }
 
+/// 表情包信使：受控标记指令（与 local_chat 保持一致）。
+/// 表情包信使：受控标记指令（与 local_chat 保持一致）。
+const STICKER_INSTRUCTION: &str = "如果你想说点什么但文字不够，可以在回复末尾单独一行输出 <sticker:表情>，表情只能取以下之一：happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax；最多一个，不确定就不要输出。标记行不要加标点，也不要解释。";
+
 #[tauri::command]
+
 pub async fn dsh_chat(
     app: AppHandle,
     message: String,
     session_id: Option<String>,
     character: String,
+    sticker: Option<bool>,
     request_id: Option<String>,
 ) -> Result<DshChatReply, String> {
     let message = message.trim().to_string();
@@ -70,7 +76,14 @@ pub async fn dsh_chat(
         return Err("一次最多说 4000 个字。".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        chat(&app, &message, session_id, &character, request_id.as_deref())
+        chat(
+            &app,
+            &message,
+            session_id,
+            &character,
+            sticker.unwrap_or(false),
+            request_id.as_deref(),
+        )
     })
         .await
         .map_err(|error| format!("聊天线程失败：{error}"))?
@@ -81,11 +94,17 @@ fn chat(
     message: &str,
     session_id: Option<String>,
     character: &str,
+    sticker: bool,
     request_id: Option<&str>,
 ) -> Result<DshChatReply, String> {
     let cli = dsh_cli()?;
     let patch = credential_patch(app)?;
-    let prompt = format!("{}{message}", persona(character));
+    let sticker_part = if sticker {
+        STICKER_INSTRUCTION
+    } else {
+        ""
+    };
+    let prompt = format!("{}{}{message}", persona(character), sticker_part);
     match run_once(&cli, &patch, &prompt, session_id.as_deref(), app, request_id) {
         Ok(reply) => Ok(reply),
         Err(error) if session_id.is_some() && error.to_ascii_lowercase().contains("session") => {

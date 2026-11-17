@@ -15,6 +15,8 @@ import {
   skillsPrompt,
 } from "./petSkills";
 import { usePetCharacter, PET_CHARACTER_LABELS } from "./petCharacters";
+import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
+import { petAssetUrl } from "./petAssetBase";
 import { petAvatarUrl } from "./petAvatars";
 import {
   loadLocalChatConfig,
@@ -37,6 +39,14 @@ import {
 import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
 import { PetStateBar } from "./PetStateBar";
 import {
+  dedupeSticker,
+  extractSticker,
+  stickerOfMessage,
+  stickerPoolOrder,
+  stripStickerMarkup,
+  type StickerId,
+} from "./chatSticker";
+import {
   detectThresholdCross,
   shouldShowNotice,
   STATE_NOTICE_AT_KEY,
@@ -57,6 +67,8 @@ type ChatMessage = {
   toolNote?: string;
   /** 模型的思考过程（折叠展示）。 */
   reasoning?: string;
+  /** 模型选的表情包（白名单 id；旧记录没有该字段也正常渲染）。 */
+  sticker?: StickerId;
 };
 
 type LocalChatStreamEvent = {
@@ -192,6 +204,8 @@ export function PetChat() {
   const [stateNotices, setStateNotices] = useState<string[]>([]);
   /** 正在加载本地模型（预热）：用来把 busy 文案从「思考」换成「加载模型…」。 */
   const [modelLoading, setModelLoading] = useState(false);
+  /** 点击放大的表情包预览（null 表示没有）。 */
+  const [stickerPreview, setStickerPreview] = useState<string | null>(null);
   const prevVitalsRef = useRef<VitalsSummary | null>(loadVitalsSummary());
   const [noticeAtInitial] = useState<number>(() => {
     try {
@@ -328,6 +342,7 @@ export function PetChat() {
           message,
           sessionId,
           character,
+          sticker: false,
         });
         if (reply.sessionId) {
           setSessionId(reply.sessionId);
@@ -354,6 +369,7 @@ export function PetChat() {
           message,
           history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
           character,
+          sticker: false,
           images: images && images.length > 0 ? images : null,
           settings: {
             maxTokens: options?.maxTokens ?? chatConfig.maxTokens,
@@ -380,6 +396,7 @@ export function PetChat() {
                 message,
                 history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
                 character,
+                sticker: false,
                 images: images && images.length > 0 ? images : null,
                 settings: {
                   maxTokens: options?.maxTokens ?? chatConfig.maxTokens,
@@ -402,6 +419,7 @@ export function PetChat() {
           message,
           history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
           character,
+          sticker: false,
           images: images && images.length > 0 ? images : null,
         });
       }
@@ -419,7 +437,22 @@ export function PetChat() {
       sessionId,
     ],
   );
-  // 带界面的流式回复：边生成边把字显示出来，并把最终文本返回给调用方。
+  /** 表情包 id → 素材 GIF 地址：微博 stickers 池（部分 id）→ 当前角色 → duo 回退 shared→xiaobai。
+   * 缺素材/异常返回 null（静默忽略，绝不显示破图）。 */
+  const stickerUrl = (id: StickerId | null | undefined): string | null => {
+    if (!id) return null;
+    try {
+      for (const pool of stickerPoolOrder(id, character)) {
+        const frames = PET_CHARACTER_ASSETS[pool.group]?.[pool.action] ?? [];
+        const first = frames[0];
+        if (first) return petAssetUrl(first);
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   // 带界面的流式回复：边生成边把字显示出来，并把最终文本返回给调用方。
   // 超时策略（实测修正）：用「空闲 watchdog」而不是固定首字 8s —— 本机首次 prefill 可到
   // 16–55s；只要还有事件就不算卡死；一旦开始输出，只看 20s 空窗与 120s 总时长。
@@ -455,7 +488,7 @@ export function PetChat() {
             lastActivityAt = Date.now();
             if (event.payload.kind === "delta") {
               firstDeltaRef.current = true;
-              setStreamingReply((current) => current + event.payload.text);
+              setStreamingReply((current) => stripStickerMarkup(current + event.payload.text));
             } else if (event.payload.kind === "reasoning") {
               setStreamingReasoning((current) => current + event.payload.text);
             } else if (event.payload.kind === "error") {
@@ -478,6 +511,8 @@ export function PetChat() {
             if (verdict.abort) failWith(verdict.reason);
           }, 1_000);
           const vitals = injectVitals ? buildChatVitalsContext() : null;
+          // 上下文只放状态（贴纸指令由 Rust 侧 persona 注入，模型才真的看得到）。
+          const systemContext = vitals ?? "";
           const payload = {
             requestId,
             baseUrl: chatConfig.baseUrl,
@@ -485,7 +520,11 @@ export function PetChat() {
             apiKey: chatConfig.apiKey.trim() || null,
             message,
             // 自我状态 + 近期互动作为 system 上下文注入（不进用户消息；无状态时整段省略）。
-            history: vitals ? [{ role: "system", content: vitals }, ...historyTurns] : historyTurns,
+            history: systemContext
+              ? [{ role: "system", content: systemContext }, ...historyTurns]
+              : historyTurns,
+            // 正常聊天允许模型输出表情包标记；技能判断传 false。
+            sticker: true,
             character,
             images: images.length > 0 ? images : null,
             settings: {
@@ -508,6 +547,7 @@ export function PetChat() {
                   message: payload.message,
                   history: payload.history,
                   character: payload.character,
+                  sticker: true,
                   images: payload.images,
                 }),
                 guard,
@@ -739,14 +779,39 @@ export function PetChat() {
         throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
       }
       const reasoningText = streamingReasoning.trim().slice(0, 4000);
+      // 表情包信使：抽受控标记 → 校验白名单 → 最近 3 条去重；非法标记会被移除且不显示。
+      const parsed = extractSticker(replyText ?? "");
+      const recentStickers = messages
+        .filter((item) => item.role === "assistant")
+        .slice(-3)
+        .map((item) => item.sticker);
+      const sticker = dedupeSticker(recentStickers, parsed.sticker);
+      // 调试证据：保留模型原文末尾，便于确认标记确实来自模型（不含整段聊天正文）。
+      try {
+        const previous = JSON.parse(window.localStorage.getItem("maltese-chat-sticker-debug") ?? "[]");
+        const entries = Array.isArray(previous) ? previous.slice(-9) : [];
+        entries.push({
+          at: Date.now(),
+          sticker: sticker ?? null,
+          rawTail: (replyText ?? "").slice(-80),
+        });
+        window.localStorage.setItem("maltese-chat-sticker-debug", JSON.stringify(entries));
+      } catch {
+        // 忽略
+      }
+      const finalText = parsed.text;
+      if (!shouldPersistReply(finalText, false)) {
+        throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
+      }
       persist([
         ...next,
         {
           id: createId(),
           role: "assistant",
-          text: replyText,
+          text: finalText,
           at: Date.now(),
           reasoning: reasoningText ? reasoningText : undefined,
+          sticker: sticker ?? undefined,
         },
       ]);
       setStreamingReply("");
@@ -953,6 +1018,28 @@ export function PetChat() {
                 <ChatReasoning text={message.reasoning} />
               ) : null}
               {message.text && <ChatText text={message.text} />}
+              {(() => {
+                const url = stickerUrl(stickerOfMessage(message));
+                return url ? (
+                  <button
+                    type="button"
+                    className="pet-chat__sticker"
+                    title="点一下放大"
+                    aria-label="表情包，点击放大"
+                    onClick={() => setStickerPreview(url)}
+                  >
+                    <img
+                      src={url}
+                      alt=""
+                      loading="lazy"
+                      onError={(event) => {
+                        const box = event.currentTarget.closest(".pet-chat__sticker");
+                        if (box instanceof HTMLElement) box.style.display = "none";
+                      }}
+                    />
+                  </button>
+                ) : null;
+              })()}
               {message.toolNote ? (
                 <small className="pet-chat__tool-note">{message.toolNote}</small>
               ) : null}
@@ -1128,6 +1215,15 @@ export function PetChat() {
           <Send size={16} strokeWidth={2} />
         </button>
       </div>
-    </section>
+      {stickerPreview && (
+        <button
+          type="button"
+          className="pet-chat__sticker-preview"
+          aria-label="关闭表情包预览"
+          onClick={() => setStickerPreview(null)}
+        >
+          <img src={stickerPreview} alt="" />
+        </button>
+      )}    </section>
   );
 }
