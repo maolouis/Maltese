@@ -16,8 +16,6 @@ export const PET_GIF_ROTATION_STATES_KEY = "maltese-pet-gif-rotation-states";
 export const PET_GIF_ROTATION_STATES_EVENT = "maltese-pet-gif-rotation-states-updated";
 /** 轮播范围默认值的一次性迁移标记：旧版默认只勾「待机」。 */
 const SCOPE_MIGRATION_KEY = "maltese-pet-gif-rotation-scope-v2";
-/** 旧版默认列表按 30 张抽样保存过，这里做一次「补全到完整素材池」的迁移。 */
-const FULL_POOL_MIGRATION_KEY = "maltese-pet-gif-rotation-full-pool-v1";
 
 export type PetGifRotationItem = {
   id: string;
@@ -156,47 +154,19 @@ export function loadPetGifRotationConfig(
   character: PetCharacterId = loadPetCharacter(),
 ): PetGifRotationConfig {
   const defaults = defaultPetGifRotationConfig(character);
-  let migrateFullPool = false;
-  try {
-    migrateFullPool = window.localStorage.getItem(FULL_POOL_MIGRATION_KEY) !== "1";
-  } catch {
-    migrateFullPool = false;
-  }
-  const itemKey = (item: PetGifRotationItem) => item.src ?? item.path ?? item.id;
   // 小白沿用旧版按状态保存的配置；其他形象第一次使用时直接用素材默认值。
   const saved =
     readConfig(petGifRotationKey(character)) ??
     (character === "xiaobai" ? readConfig(LEGACY_STORAGE_KEY) : null);
-  if (typeof saved === "object" && saved !== null) {
-    const table = saved as Record<string, unknown>;
-    for (const state of Object.keys(defaults)) {
-      const list = table[state];
-      if (!Array.isArray(list)) continue;
-      const items = dedupeRotationItems(
-        list.map(normalizeItem).filter((item): item is PetGifRotationItem => item !== null),
-      );
-      // 一次性补全：旧默认列表被 30 张抽样截断过。只要这个状态里没有用户自定义
-      // GIF、且已存项都来自内置素材池，就把缺的内置帧按原顺序补到末尾；
-      // 之后用户再增删都不受影响（迁移只做一次）。
-      if (migrateFullPool && items.length > 0) {
-        const full = defaults[state];
-        const poolKeys = new Set(full.map(itemKey));
-        if (items.every((item) => !item.custom && poolKeys.has(itemKey(item)))) {
-          const savedKeys = new Set(items.map(itemKey));
-          defaults[state] = [...items, ...full.filter((item) => !savedKeys.has(itemKey(item)))];
-          continue;
-        }
-      }
-      // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
-      defaults[state] = items;
-    }
-  }
-  if (migrateFullPool) {
-    try {
-      window.localStorage.setItem(FULL_POOL_MIGRATION_KEY, "1");
-    } catch {
-      // localStorage 不可用时下次再试。
-    }
+  if (typeof saved !== "object" || saved === null) return defaults;
+  const table = saved as Record<string, unknown>;
+  for (const state of Object.keys(defaults)) {
+    const list = table[state];
+    if (!Array.isArray(list)) continue;
+    // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
+    defaults[state] = dedupeRotationItems(
+      list.map(normalizeItem).filter((item): item is PetGifRotationItem => item !== null),
+    );
   }
   return defaults;
 }
