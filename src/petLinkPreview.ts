@@ -1,11 +1,13 @@
 // 「试一下联动」：临时拉一只随从演示一次完整联动，3 秒后复原。
 //
-// 关键约束：**不改用户持久配置**。
-// - 不写 localStorage、不改 React settings 状态；
+// 关键约束：**不改用户持久配置（设置键）**。
+// - 不写用户设置、不改 React settings 状态；唯一写入的是台词去重历史
+//   `maltese-pet-link-history`（只存 `场景:组号` 的 hash，D6 已按此修正文案）；
 // - 只把临时配置传给 Rust 的一次性同步命令 `sync_desktop_extras`（窗口显示用），
 //   结束后再用真实配置同步一次，把临时窗口收回去；
 // - 用 `force: true` 广播一次联动（跳过概率/冷却），保证一次必中；
 // - 单例锁避免连点叠加；无论成功失败都走 finally 复原。
+// - D1：剧本永远按「有随从」造（临时随从没有身份也要说话），见 `petLinkPreviewPlan.ts`。
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
@@ -17,13 +19,16 @@ import {
   PET_LINK_SETTINGS_KEY,
 } from "./petLinkBus";
 import {
-  buildLinkPlan,
   loadPetLinkHistory,
-  PET_LINK_SOLO_SECOND_MS,
   rememberPairHash,
   savePetLinkHistory,
   type SceneBanks,
 } from "./petLinkScript";
+import {
+  buildPreviewPlan,
+  PET_LINK_PREVIEW_LABELS,
+  previewLinesByLabel,
+} from "./petLinkPreviewPlan";
 
 type PreviewSettings = {
   petCount: number;
@@ -100,20 +105,9 @@ export async function previewPetLinkage(options?: {
   const mainCharacter = options?.mainCharacter ?? loadPetCharacter();
   const bank = options?.scenes?.pet;
   const recent = loadPetLinkHistory();
-  // 预览按当前配置播完整剧本：有随从就让随从说一句、主狗说另一句；
-  // 没有随从（petCount=1）就让主狗自说两句（A/B 剧本），保证一次看到「成对台词」。
-  const companionLabels = ["companion-1"];
-  const hasCompanion = settings.petCount > 1;
-  const plan = bank
-    ? buildLinkPlan({
-        action: "pet",
-        labels: hasCompanion ? companionLabels : [],
-        bank,
-        mainCharacter,
-        recent,
-        force: true,
-      })
-    : null;
+  // D1：预览一定会临时拉起 companion-1，所以剧本永远按「有随从」造：
+  // 那只临时随从按 resolveCompanionRole 拿到身份后说一句，主狗说另一句。
+  const plan = buildPreviewPlan({ bank, mainCharacter, recent });
   try {
     // 1) 临时把随从数量提到 2（只作用于本次原生同步，不落盘）。
     await invoke("sync_desktop_extras", {
@@ -125,18 +119,11 @@ export async function previewPetLinkage(options?: {
       .outerPosition()
       .then((pos) => ({ x: pos.x, y: pos.y }))
       .catch(() => undefined);
-    const lines = plan
-      ? plan.lines
-          .filter((line) => line.who !== "main")
-          .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
-            acc[line.who] = { line: line.line, speaker: line.speaker };
-            return acc;
-          }, {})
-      : undefined;
+    const lines = previewLinesByLabel(plan);
     // 3) 强制发一次完整联动：跳过概率/冷却，剧本台词一起下发。
     getPetLinkBus("main").emitAction("pet", {
       force: true,
-      labels: hasCompanion ? companionLabels : [],
+      labels: [...PET_LINK_PREVIEW_LABELS],
       origin,
       toBongo: settings.bongoEnabled,
       sceneId: plan?.sceneId ?? "pet",
@@ -153,16 +140,6 @@ export async function previewPetLinkage(options?: {
           line: plan.mainLine,
           delayMs: plan.mainDelayMs,
         }).catch(() => undefined);
-      }
-      if (!hasCompanion) {
-        const pair = bank?.pairs[plan.pairIndex];
-        if (pair?.main) {
-          void emit("maltese-pet-link-say", {
-            title: mainSaysTitle(mainCharacter),
-            line: pair.main,
-            delayMs: PET_LINK_SOLO_SECOND_MS,
-          }).catch(() => undefined);
-        }
       }
     }
     await new Promise((resolve) => window.setTimeout(resolve, PET_LINK_PREVIEW_MS));

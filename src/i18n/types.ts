@@ -360,6 +360,8 @@ export type Translations = {
     companionLines: string[];
     previewButton: string;
     previewHint: string;
+    /** 随从气泡的可访问名（D7：UIA/读屏用，`台词：<文本>`）。 */
+    bubbleAria: (line: string) => string;
     /** 双狗互动剧本（小鸡毛先说、小白回应，一问一答成对）。 */
     scenes: {
       pet: DuoScene;

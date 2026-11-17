@@ -77,6 +77,12 @@ import {
   PET_LINK_SOLO_SECOND_MS,
   type SceneId,
 } from "./petLinkScript";
+// D5：S5 久坐用独立活动 streak（不再依赖主动聊天的 proactiveStreakRef）。
+import {
+  createSedentaryStreak,
+  noteSedentaryActivity,
+  shouldFireStandup,
+} from "./petLinkSedentary";
 import { resolvePetGif } from "./petAssets";
 import {
   rotationFramesForState,
@@ -9331,6 +9337,9 @@ function IslandApp({
   }, [fireDuoScene, flipLinkHop, triggerPetAction]);
   // S5 久坐 / S6 夜间 / S7 回归：60s 检查一次，触发时播对应的双狗剧本。
   const duoStandupAtRef = useRef(0);
+  // D5：久坐用独立的「同类活动 streak」——自己采样前台活动，不读主动聊天的 ref
+  //（那个 ref 在静默时段 / 每小时上限 / 主动等级 0 时不会被刷新，会误判「坐了 40 分钟」）。
+  const duoStreakRef = useRef(createSedentaryStreak());
   const duoNightKeyRef = useRef("");
   const duoAwayRef = useRef(false);
   useEffect(() => {
@@ -9347,6 +9356,15 @@ function IslandApp({
         // 前台活动拿不到就只跑夜间检查。
       }
       if (cancelled) return;
+      // D5：自己采一次前台活动类型喂给独立 streak（与主动聊天是否开启无关）。
+      let activityKind = "";
+      try {
+        const activity = await invoke<{ kind?: string }>("get_active_activity");
+        activityKind = activity?.kind ?? "";
+      } catch {
+        // 拿不到就让 streak 停在上一段，不推进也不误触发。
+      }
+      if (cancelled) return;
       const now = Date.now();
       // S7：离开（≥10 分钟无输入）后回到电脑，播一次「欢迎回来」。
       const away = idleSeconds >= 600;
@@ -9355,11 +9373,15 @@ function IslandApp({
       }
       duoAwayRef.current = away;
       // S5：同一类活动连续 ≥40 分钟且人还在，隔 45 分钟才提醒一次。
-      const streakMinutes = Math.max(
-        0,
-        Math.round((now - proactiveStreakRef.current.since) / 60_000),
-      );
-      if (streakMinutes >= 40 && idleSeconds < 120 && now - duoStandupAtRef.current >= 45 * 60_000) {
+      duoStreakRef.current = noteSedentaryActivity(duoStreakRef.current, activityKind, now);
+      if (
+        shouldFireStandup({
+          streak: duoStreakRef.current,
+          now,
+          idleSeconds,
+          lastStandupAt: duoStandupAtRef.current,
+        })
+      ) {
         duoStandupAtRef.current = now;
         fireDuoScene("standup", "pet");
       }

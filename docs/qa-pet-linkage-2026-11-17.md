@@ -115,6 +115,24 @@ COMPANION_BUBBLE: 530ms rect=128,1262,104,24（随从窗口 80,1260,200,180 → 
 
 ---
 
+## 3.1 缺陷处置结果（研发回填 · 2026-11-17，基于 `2ceb0f6` 之后的工作区）
+
+全部 7 条**已在本地修完并带单测**（未 push、未改版本号 2.0.2）；回归单测 `tests/pet-link-fixes.test.mjs`（15 条全绿），
+全量 `node --test tests/*.test.mjs` = **149 pass / 0 fail**，`tsc --noEmit` exit 0，`cargo check` 见 §3.2。
+
+| # | 级别 | 处置 | 证据（文件:行 + 关键代码） |
+| --- | --- | --- | --- |
+| D1 | P1 | **已修**：预览恒按「有随从」造剧本，临时随从必说话 + 主狗说另一句 | `src/petLinkPreviewPlan.ts:16` `PET_LINK_PREVIEW_LABELS = ["companion-1"]`；`:18-33` `buildPreviewPlan()` 恒传该 label（`force: true`）；`src/petLinkPreview.ts:110` `const plan = buildPreviewPlan({ bank, mainCharacter, recent })`、`:126` `labels: [...PET_LINK_PREVIEW_LABELS]`（原来的 `hasCompanion = settings.petCount > 1` 分支已删） |
+| D2 | P2 | **已修**：`transition` 是真实 style 属性，小鸡毛 260ms / 小白 1200ms | `src/petLinkCompanionStyle.ts:19` `companionShiftTransition()`；`src/CompanionPet.tsx:295` `` transition: `${companionShiftTransition(eventSpeaker)}, scale 110ms ease` ``（不再有 `\n transition:` 被 `//` 吞掉）；`src/DesktopExtras.css` 被摸扁改 `scale:`，不与 transform 过渡打架 |
+| D3 | P2 | **已修**：两只随从彼此不同角色/台词（主狗非 duo 时） | `src/petLinkScript.ts:128` `resolveCompanionRoles(labels, mainCharacter)`（先偏好后互斥）；`:210` `buildLinkPlan` 改用它；`CompanionPet` 以消息里的 `speaker` 为准（`src/CompanionPet.tsx:178` `setEventSpeaker(speaker)`） |
+| D4 | P2 | **已修（方案 ①）**：每场景扩到 6 组、zh/en 各 42 组，去重窗口仍 5 | `src/i18n/locales/zh-CN.ts` / `en.ts` 的 `petLink.scenes`（7 场景 × 6 组）；常量 `src/petLinkScript.ts:35` `PET_LINK_MIN_PAIRS_PER_SCENE = 窗口 + 1`；单测模拟 30 次抽取窗口内重复 **0 次**（修复前 27/30） |
+| D5 | P2 | **已修**：S5 久坐用独立活动 streak，与主动聊天解耦；`since=0` 不再误触发 | `src/petLinkSedentary.ts:26/36/51/73`（`createSedentaryStreak` / `noteSedentaryActivity` / `sedentaryStreakMinutes` / `shouldFireStandup`）；`src/App.tsx:9342` `duoStreakRef`、`:9376` 喂 60s 检查自采的 `get_active_activity`、`:9378` 判定 |
+| D6 | P3 | **已修（文案）**：收窄为「不改设置，仅记一条台词去重历史」 | i18n `petLink.previewHint`（zh `不改你的设置（只在本地记一条台词去重历史）` / en `settings stay unchanged (only a local line-dedupe entry is recorded)`）；`src/petLinkPreview.ts:5` 头注释同步；`src/SettingsWindow.tsx` 同段提示；`docs/pet-linkage-usage.md` §3 |
+| D7 | P3 | **已修**：随从气泡带 `aria-label`（`台词：<文本>`），UIA/读屏可读 | `src/CompanionPet.tsx:276` `aria-label={t.petLink.bubbleAria(bubble)}`；i18n `bubbleAria`（zh `台词：${line}` / en `Line: ${line}`，`src/i18n/locales/zh-CN.ts:671`） |
+
+> 「观察（不编号）」三条未在本轮改动范围：dev 日志缺 `import.meta.env.DEV` 门禁、60s 检查粒度、
+> 设置页两处「实例联动」显示条件不一致——留作下一轮。
+
 ## 4. 交付建议
 
 **不建议在本轮"全部验证通过"的口径下交付**；可以带缺陷进下一版，但需要先修/明确接受：

@@ -39,8 +39,9 @@ body,
   filter: drop-shadow(0 8px 12px rgba(5, 7, 12, 0.24));
 }
 
+/* 被摸扁一下：用独立的 scale 属性，别和联动位移的 transform 过渡抢同一个属性（D2）。 */
 .companion-pet--squash img {
-  transform: scaleX(1.08) scaleY(0.86);
+  scale: 1.08 0.86;
 }
 
 .cursor-pet {

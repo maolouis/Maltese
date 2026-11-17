@@ -663,13 +663,18 @@ const en: Translations = {
     hint: "When the main dog is petted, fed or happy, companion dogs react too and Bongo taps along. Needs more than one dog or Bongo enabled.",
     companionLines: ["Me too!", "Pat me~", "Yummy!", "So happy!", "Wait for me!", "Hehe~"],
     previewButton: "Try linkage",
-    previewHint: "Need a second dog (or Bongo). Click \"Try linkage\" to bring one in temporarily for a 3s demo (action, shift, bubble); your settings stay unchanged.",
+    // D6: previews append one line-dedupe entry; user settings are untouched.
+    previewHint: "Need a second dog (or Bongo). Click \"Try linkage\" to bring one in temporarily for a 3s demo (both dogs say a line, plus action, shift and bubble); your settings stay unchanged (only a local line-dedupe entry is recorded).",
+    bubbleAria: (line) => `Line: ${line}`,
     scenes: {
       pet: {
         pairs: [
           { active: "Snowy! The human petted me first!", shy: "…Mm. I'll wait my turn.", main: "…Good work today." },
           { active: "Head pats! Half for you!", shy: "…Then I'll come a little closer.", main: "I'll nap over there." },
           { active: "The human's hand is so warm!", shy: "Don't crowd… I'm here too.", main: "Nice to have company." },
+          { active: "I'm getting pets first!", shy: "…Slow down, don't bump into me.", main: "Hands are so soft." },
+          { active: "The pets are so gentle today!", shy: "…Mm. It feels nice, right.", main: "Pats are nice." },
+          { active: "Line up! I'm second!", shy: "…I'm third.", main: "One more pat, then off." },
         ],
       },
       eating: {
@@ -677,6 +682,9 @@ const en: Translations = {
           { active: "I'll eat half and save half for you!", shy: "You go first. I'm not in a hurry.", main: "Eat slowly, don't choke." },
           { active: "Yummy! Snowy, try some!", shy: "…Keep it. I'll just sniff.", main: "You go first. I'm not in a hurry." },
           { active: "Got it! You take a bite too!", shy: "Slow down, don't choke.", main: "You eat. I'll watch." },
+          { active: "There's one more bite at the bottom!", shy: "…That one's yours.", main: "As long as you're full." },
+          { active: "I eat the fastest!", shy: "…Don't take mine.", main: "Half a bowl left." },
+          { active: "Let's lick the bowl after!", shy: "…You go first.", main: "No rush." },
         ],
       },
       cheerful: {
@@ -684,6 +692,9 @@ const en: Translations = {
           { active: "Yay! Jump together!", shy: "…Just once.", main: "Today… seems nice." },
           { active: "So great! Spin spin!", shy: "Mm. Let's just stay like this.", main: "Mm. Let's just stay like this." },
           { active: "Then I'll spin with you!", shy: "…Thank you.", main: "…Thank you." },
+          { active: "When you're happy, shout it out!", shy: "…Quieter, please.", main: "Feeling good." },
+          { active: "The human's smile looks nice today!", shy: "…I saw it.", main: "Tomorrow will be fine too." },
+          { active: "Jump even higher!", shy: "…Don't fall.", main: "One more jump, then done." },
         ],
       },
       bongo: {
@@ -691,6 +702,9 @@ const en: Translations = {
           { active: "Dong! I'll drum too!", shy: "…A little quieter.", main: "Dong." },
           { active: "O-okay, softer dong…", shy: "You'll wake the human.", main: "Dong." },
           { active: "Listen! Rhythm!", shy: "…I heard it.", main: "Dong." },
+          { active: "One more time!", shy: "…Is that enough?", main: "Dong, dong." },
+          { active: "I drum better than you!", shy: "…Childish.", main: "Dong." },
+          { active: "Let's play together!", shy: "…Just this once.", main: "Dong." },
         ],
       },
       standup: {
@@ -698,6 +712,9 @@ const en: Translations = {
           { active: "Get up and move! I'll lead!", shy: "The human has sat for so long…", main: "Stretch a little." },
           { active: "Come on, let's walk!", shy: "…I'll walk with you to the window.", main: "Sitting too long hurts your back." },
           { active: "Then I'll be your alarm!", shy: "Your back will ache.", main: "Move a bit, then continue." },
+          { active: "Stand up! Just once!", shy: "…Some water would help too.", main: "Stretch a bit." },
+          { active: "Human! Look outside!", shy: "…There's a bird.", main: "Take five minutes." },
+          { active: "I'll count to three, then we go!", shy: "…One.", main: "One, two, three, go." },
         ],
       },
       night: {
@@ -705,6 +722,9 @@ const en: Translations = {
           { active: "We'll play again tomorrow!", shy: "Dim the light… good night.", main: "Good night." },
           { active: "Dream of bones tonight!", shy: "…Dreaming of you is enough.", main: "Good night, see you tomorrow." },
           { active: "See you tomorrow, Snowy!", shy: "Good night.", main: "Time to sleep." },
+          { active: "Good night good night good night!", shy: "…Saying it once is enough.", main: "Sleep early." },
+          { active: "I'll turn off the light for you!", shy: "…Don't touch it.", main: "The light's still on." },
+          { active: "Let's run in our dreams together!", shy: "…Mm, together.", main: "Sleep well." },
         ],
       },
       welcome: {
@@ -712,6 +732,9 @@ const en: Translations = {
           { active: "You're back!!", shy: "…Welcome back.", main: "You're back." },
           { active: "I kept watching the window!", shy: "I was wondering if you'd come back.", main: "Welcome back." },
           { active: "Waited so long!", shy: "Actually… I was waiting too.", main: "Good work today." },
+          { active: "You were gone so long!", shy: "…You're back, that's what matters.", main: "Sit down and rest." },
+          { active: "I'm jumping on you first!", shy: "…Don't knock anyone over.", main: "Missed you." },
+          { active: "Take me along next time!", shy: "…Mm, take me.", main: "I'll take you next time." },
         ],
       },
     },

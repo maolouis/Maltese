@@ -21,7 +21,7 @@ export type DuoPair = {
 export type SceneId = "pet" | "eating" | "cheerful" | "bongo" | "standup" | "night" | "welcome";
 
 export type SceneBank = {
-  /** ≥3 组备选，每组是一问一答。 */
+  /** ≥「去重窗口 + 1」组备选（D4：窗口 5 时至少 6 组），每组是一问一答。 */
   pairs: DuoPair[];
 };
 
@@ -31,6 +31,8 @@ export const PET_LINK_HISTORY_KEY = "maltese-pet-link-history";
 export const PET_LINK_HISTORY_LIMIT = 20;
 /** 最近多少条不许重复。 */
 export const PET_LINK_NO_REPEAT_WINDOW = 5;
+/** 每个场景至少要准备多少组台词：去重窗口 + 1，否则「最近 N 条不重复」数学上做不到（D4）。 */
+export const PET_LINK_MIN_PAIRS_PER_SCENE = PET_LINK_NO_REPEAT_WINDOW + 1;
 /** 先说的先显示，两只狗错峰 ≥120ms。 */
 export const PET_LINK_DUO_STAGGER_MS = 120;
 /** 主狗没有随从时第二句（自我回应）的间隔。 */
@@ -111,17 +113,42 @@ export type CompanionRole = {
   character: DuoSpeaker;
 };
 
+const OTHER_SPEAKER: Record<DuoSpeaker, DuoSpeaker> = {
+  xiaobai: "xiaojimao",
+  xiaojimao: "xiaobai",
+};
+
 /**
- * 随从窗口的角色身份：companion-奇数 → 小白，companion-偶数 → 小鸡毛；
+ * 一次联动里所有随从窗口的角色身份（纯函数）：
+ * - companion-奇数 → 小白、even → 小鸡毛（偏好）；
+ * - 只有一个随从时避开主狗角色，保证「主狗 + 随从」不是同一只；
+ * - 有两只随从时**随从之间必须不同角色**（D3）：前一只占了偏好角色，后一只换另一只，
+ *   此时主狗会自动闭嘴（buildLinkPlan 里 covered 覆盖两句），不会再出现「两只随从同句」。
+ */
+export function resolveCompanionRoles(labels: string[], mainCharacter: string): CompanionRole[] {
+  const roles: CompanionRole[] = [];
+  const taken = new Set<DuoSpeaker>();
+  const mainFixed = mainCharacter === "xiaobai" || mainCharacter === "xiaojimao";
+  // 主狗角色排他只在「单个随从」时成立：两个随从必须彼此不同，只能有一个与主狗重合。
+  const avoidMain = mainFixed && labels.length < 2;
+  const blocked = (speaker: DuoSpeaker) => taken.has(speaker) || (avoidMain && speaker === mainCharacter);
+  for (const label of labels) {
+    const match = /companion-(\d+)/.exec(label);
+    const index = match ? Number(match[1]) : roles.length + 1;
+    const preferred: DuoSpeaker = index % 2 === 1 ? "xiaobai" : "xiaojimao";
+    const speaker = !blocked(preferred) ? preferred : !blocked(OTHER_SPEAKER[preferred]) ? OTHER_SPEAKER[preferred] : preferred;
+    taken.add(speaker);
+    roles.push({ speaker, character: speaker });
+  }
+  return roles;
+}
+
+/**
+ * 单个随从窗口的角色身份：companion-奇数 → 小白，companion-偶数 → 小鸡毛；
  * 与主狗形象重复时交换，保证「主狗 + 随从」不是同一只。
  */
 export function resolveCompanionRole(label: string, mainCharacter: string): CompanionRole {
-  const match = /companion-(\d+)/.exec(label);
-  const index = match ? Number(match[1]) : 1;
-  let speaker: DuoSpeaker = index % 2 === 1 ? "xiaobai" : "xiaojimao";
-  if (mainCharacter === "xiaobai" && speaker === "xiaobai") speaker = "xiaojimao";
-  else if (mainCharacter === "xiaojimao" && speaker === "xiaojimao") speaker = "xiaobai";
-  return { speaker, character: speaker };
+  return resolveCompanionRoles([label], mainCharacter)[0] ?? { speaker: "xiaobai", character: "xiaobai" };
 }
 
 /** 主狗在成对台词里说哪一句：主狗是小鸡毛就说主动句，是小白就说回应句（duo 当小鸡毛）。 */
@@ -179,8 +206,10 @@ export function buildLinkPlan(options: {
   const hash = pairHash(sceneId, pairIndex);
 
   // 随从按角色拿台词：奇数窗口=小白（回应句）、偶数窗口=小鸡毛（主动句）。
-  const targets = labels.slice(0, 2).map((label) => {
-    const role = resolveCompanionRole(label, mainCharacter);
+  // 两个随从时由 resolveCompanionRoles 保证彼此角色不同（D3）。
+  const companionRoles = resolveCompanionRoles(labels.slice(0, 2), mainCharacter);
+  const targets = labels.slice(0, 2).map((label, index) => {
+    const role = companionRoles[index] ?? resolveCompanionRole(label, mainCharacter);
     const line = role.speaker === "xiaojimao" ? pair.active : pair.shy;
     return { label, speaker: role.speaker, line };
   });

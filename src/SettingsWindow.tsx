@@ -419,8 +419,8 @@ export default function SettingsWindow() {
           />
         )}
         <p className="sw-hint sw-hint--block">
-          还没看到效果？「试一下联动」会临时拉一只随从并触发一次完整联动（动作 + 位移 + 气泡），
-          3 秒后自动复原，不会改动你的小狗数量 / Bongo 设置。
+          还没看到效果？「试一下联动」会临时拉一只随从、让两只狗各说一句台词（动作 + 位移 + 气泡），
+          3 秒后自动复原；不会改动你的小狗数量 / Bongo 设置（只在本地记一条台词去重历史）。
         </p>
         <button
           type="button"

@@ -9,7 +9,8 @@ import {
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
 import { usePetCharacter } from "./petCharacters";
-import { resolveCompanionRole } from "./petLinkScript";
+import { resolveCompanionRole, resolveCompanionRoles } from "./petLinkScript";
+import { companionShiftHoldMs, companionShiftTransition } from "./petLinkCompanionStyle";
 import { useTranslation } from "./i18n";
 import {
   acceptLinkMessage,
@@ -20,6 +21,7 @@ import {
   PET_LINK_BUBBLE_MS,
   PET_LINK_SHIFT_MAX_PX,
   PET_LINK_SHIFT_MIN_PX,
+  readCompanionLabels,
   readPetLinkageEnabled,
 } from "./petLinkBus";
 import "./DesktopExtras.css";
@@ -60,7 +62,19 @@ export default function CompanionPet() {
   const [look, setLook] = useState<PetLook>(readLook);
   const mainCharacter = usePetCharacter();
   // 随从窗口没有角色身份：按 companion-* 奇偶分配小白/小鸡毛（与主狗重复则交换）。
-  const role = useMemo(() => resolveCompanionRole(label, mainCharacter), [label, mainCharacter]);
+  // D3：两只随从时还要彼此不同角色，所以按「本次联动里所有随从」一起算，而不是只看自己。
+  const role = useMemo(() => {
+    try {
+      const labels = readCompanionLabels();
+      const index = labels.indexOf(label);
+      if (index >= 0) return resolveCompanionRoles(labels, mainCharacter)[index];
+    } catch {
+      // 设置读不到就退回单窗口规则。
+    }
+    return resolveCompanionRole(label, mainCharacter);
+  }, [label, mainCharacter]);
+  /** 最近一次联动里「这只狗」实际拿到的角色（台词/动作以主窗口下发为准）。 */
+  const [eventSpeaker, setEventSpeaker] = useState(role.speaker);
   const character = role.character;
   const gifRotationConfig = usePetGifRotationConfig(character);
   const gifRotationStates = usePetGifRotationStates();
@@ -154,11 +168,14 @@ export default function CompanionPet() {
       });
       if (!result.accept || message.kind !== "action") return;
       const target = message.targets.find((item) => item.label === label);
-      // 动作人设：小鸡毛蹦过来（朝主狗 + 向另一只狗靠近 + 大脉冲），
+      // 动作人设以主窗口下发的 speaker 为准（D3：两只随从时本地奇偶规则可能和剧本不一致），
+      // 拿不到才退回本地角色。小鸡毛蹦过来（朝主狗 + 向另一只狗靠近 + 大脉冲），
       // 小白退半步再缓慢回靠（反向位移 + 小幅点头）。
-      const active = role.speaker === "xiaojimao";
+      const speaker = target?.speaker ?? role.speaker;
+      const active = speaker === "xiaojimao";
       const storyLine = target?.line?.trim();
       window.setTimeout(() => {
+        setEventSpeaker(speaker);
         setReactionState(
           active ? linkStateForAction(message.action) : message.action === "pet" ? "chin" : linkStateForAction(message.action),
         );
@@ -175,7 +192,7 @@ export default function CompanionPet() {
         shiftTimer.current = window.setTimeout(() => {
           shiftTimer.current = null;
           setShift(null);
-        }, active ? 520 : 1200);
+        }, companionShiftHoldMs(speaker));
         if (reactionTimer.current !== null) window.clearTimeout(reactionTimer.current);
         reactionTimer.current = window.setTimeout(() => {
           reactionTimer.current = null;
@@ -251,7 +268,13 @@ export default function CompanionPet() {
       }}
     >
       {bubble && (
-        <div className="companion-pet__bubble" role="status" aria-live="polite">
+        <div
+          className="companion-pet__bubble"
+          role="status"
+          aria-live="polite"
+          // D7：UIA/读屏原本读不到气泡内容（子文本节点没有聚合出可访问名），给一句明确的 aria-label。
+          aria-label={t.petLink.bubbleAria(bubble)}
+        >
           {bubble}
         </div>
       )}
@@ -265,7 +288,11 @@ export default function CompanionPet() {
           opacity: look.opacity,
           // 联动位移：朝主狗方向挪一下再回位（CSS transition 负责平滑）。
           transform: shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined,
-          // 小鸡毛「蹦过去」快（260ms）；小白「退半步再缓慢回靠」（1200ms）。\n          transition: role.speaker === "xiaojimao"\n            ? "transform 260ms cubic-bezier(0.22, 1.2, 0.36, 1)"\n            : "transform 1200ms cubic-bezier(0.33, 0.7, 0.4, 1)",
+          // 小鸡毛「蹦过去」快（260ms）、小白「退半步再缓慢回靠」（1200ms）。
+          // D2：这行以前和上一行挤在一个 `//` 注释里被吞掉，位移才瞬跳；现在由纯函数产出，
+          // 并有 `tests/pet-link-companion-style.test.mjs` 断言 260ms / 1200ms。
+          // 末尾附带的 scale 过渡给「被摸扁一下」用，与位移的 transform 互不影响。
+          transition: `${companionShiftTransition(eventSpeaker)}, scale 110ms ease`,
         }}
       />
     </div>
