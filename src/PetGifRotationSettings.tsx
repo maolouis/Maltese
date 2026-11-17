@@ -567,7 +567,11 @@ export function PetGifRotationSettings() {
       {expanded && (
         <>
           <div className="pet-gif-settings__toolbar">
-            <span>{t.petGifs.count(items.length)}</span>
+            {/* 这里的数字是「素材库库存」（本角色 + 同框，去重后），不是当前已选列表
+                的长度：用户核对的是素材总数；展开按钮上的 N 仍是已选列表张数。 */}
+            <span title={`已选 ${items.length} 张，素材库共 ${availableItems.length} 张`}>
+              {t.petGifs.count(availableItems.length)}
+            </span>
             <span className="pet-gif-settings__toolbar-hint">{t.petGifs.reorderHint}</span>
             <button
               type="button"
