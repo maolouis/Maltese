@@ -224,3 +224,87 @@
 | `work/qa-video-page-top.png` | 视频面板顶部（参数/账号/按钮） |
 | `work/qa-island-expanded.png`、`qa-after-plugin-tab.png` | 岛屿展开态截图 |
 | `work/qa-two-windows-main.png`、`qa-two-windows-settings.png` | D5 现场：点「设置」后同时存在的桌宠岛窗口与独立设置窗口 |
+
+---
+
+## 8. 研发处置（2026-11-17，dev 修复轮）
+
+> 角色：研发；范围：只改本清单涉及的代码/文档，**未改本报告 §3 的复现与判定口径、未改
+> `docs/bug-acceptance-2026-11-17.md` 的验收条款**；版本仍 2.0.2，未 push、未打 tag。
+> 验证命令与输出见 §8.3。
+
+### 8.1 处置汇总
+
+| 编号 | 级别 | 处置 | 证据（文件:行 / commit） |
+| --- | --- | --- | --- |
+| D1 | P3 文档 | **已修复**：排障表 3 条提示改为与 `errorMessageForCode` 逐字一致 | `docs/video-plugin-usage.md` 排障表（原 248/250/252 行）；对照 `src/plugins/video/types.ts:283-298`；commit `17b3541` |
+| D2 | P3 文档 | **已修复**：「诊断日志」说明改为独立 `<details>` 折叠块，并补一行通道概览说明 | `docs/video-plugin-usage.md`「通道与诊断」表；对照 `src/plugins/video/VideoChannelCard.tsx:57-66`；commit `17b3541` |
+| D3 | P3 UI/i18n | **已修复**：新增 `accountStatusLabel()`，下拉框与右侧状态徽标统一显示中文（草稿/等待登录/已就绪/已暂停），不再出现 Rust 枚举值 | `src/plugins/video/VideoAutomationPlugin.tsx:28-41,276,280`；同步 `docs/video-plugin-usage.md:47,157`；commit `17b3541` |
+| D4 | P3 拖拽排序 | **已确认为真实缺陷并修复**（代码级 + 单测；未做真人拖拽，见 §8.2） | `src/utils/gifRotationOrder.ts`、`src/PetGifRotationSettings.tsx:120-126,325-334`、`src/PetGifRotationSettings.css:299-330`、`tests/gif-rotation-order.test.mjs`；commit `17b3541` |
+| D5 | P2 体验 | **已按方案 A 修复**（岛内设置页就地改轮播 GIF，一个窗口）；含 1 处入口语义变化待产品确认，见 §8.4 | `src/App.tsx`（页签 2164-2177、LayoutEditor 2385-2418 与 2829-2836、`openStandaloneSettings` 7723-7742）、`src/App.css`（文末「岛内设置页」段）、`docs/pet-characters.md`；commit `17b3541` |
+
+观察项未在本批处理：O1（`展开（N 张）/收起` 文案硬编码中文）保留原样——本批不夹带 i18n 重构；O2（右键删除无二次确认）为原设计，未改；O3（失焦自动收起）未改，D5 修好后从岛内入口不再触发该路径。
+
+### 8.2 D4 的复现与修复说明
+
+- **复现（代码级，与报告推断一致）**：`onDrop` 把落点下标直接传给 `reorder(from, to)`；`reorder` 先
+  `splice(from,1)` 再 `splice(to,0,moved)`。向下拖（`from < to`）时移除后目标左移一位，实际插到目标
+  **之后**，而 `is-drop-target::before` 的插入线永远画在目标格**左侧** → 视觉与结果相反。
+- **修复方式**：语义统一为「占用落点格子的位置」——向上拖插到目标之前、向下拖插到目标之后；
+  插入线跟着方向走（新增 `is-drop-target--after`，线画在目标格右侧）。下标换算抽成纯函数
+  `movePetGifItem()`，便于单测。
+- **验证**：新增 `tests/gif-rotation-order.test.mjs` 4 条用例（原地/越界返回同一数组、向上/向下/相邻
+  拖动结果），`node --test` 58 → 62 全通过。**未做真人鼠标拖拽**：真实拖拽会写用户
+  `localStorage["maltese-pet-gif-rotation:<角色>"]`，按任务约束不动用户数据；如需交互复核，
+  建议在隔离 profile 下拖一次（从第 1 格拖到第 3 格，松手后应为「第 2 格、第 3 格(原第1格)…」且
+  插入线在目标格右侧）。
+
+### 8.3 验证输出
+
+| 命令 | 结果 |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc --noEmit` | exit 0 |
+| `cd src-tauri; cargo check` | exit 0（仅既有 warning） |
+| `node --test tests/*.test.mjs` | `tests 62 / pass 62 / fail 0`（原 58 + 新增 4） |
+| `node_modules\.bin\vite.cmd build --target esnext --minify false` | exit 0（`index-b2bM0vrh.js` 2,271.68 kB、`index-Cb80sea5.css` 285.77 kB） |
+| `node_modules\.bin\tauri.cmd build --ci --config src-tauri/tauri.release.conf.json --no-bundle` | exit 0（新 exe 实机自测，见 §8.5） |
+
+### 8.4 D5 实现细节与待确认项
+
+- **入口（方案 A）**：展开浮层顶部「设置」页签不再 `invoke("open_settings_window")`，改为切到岛内
+  设置页（`LayoutEditor`）；该页「桌宠形态」小节之后内嵌**同一个** `PetGifRotationSettings` 组件
+  （没有复制逻辑，`maltese-gif-settings-expanded` 折叠状态在两边共享）。格子 `auto-fill` 自适应列数，
+  并限定岛内方格高 300px / 轮播范围预览 160px，浮层内不出现横向滚动条。
+- **独立设置窗口保留**：`src/SettingsWindow.tsx:426` 的那份没动；入口改为岛内设置页右上
+  「独立设置窗口」按钮、快捷入口页「设置」、托盘「配置桌宠」。从岛内/快捷入口打开时统一先收起
+  浮层、再延迟 180ms 弹窗，避免两个窗口同时出现和抢焦点。
+- **岛内设置页配色**：该页沿用旧深色玻璃面板的白字/控件配色，而浮层现在是白色云朵面板，原本是
+  白字白底不可读（此前只在兜底路径出现，未被发现）。本次给 `.island__expanded .editor-panel`
+  补了深色卡片底（`src/App.css` 文末），所有旧控件恢复可读。
+- **⚠ 待产品确认（B1-01 入口语义）**：`docs/bug-acceptance-2026-11-17.md` B1-01 写的是「双击小狗 →
+  顶部导航「设置」→ 出现独立窗口」。按 D5 的用户反馈，本次顶部「设置」改为**岛内设置页**，
+  独立窗口入口、能力与前景行为（复用同一窗口、可重复打开）保持不变，只是从「页签直接弹窗」
+  改成「页签 → 岛内设置页 → 右上『独立设置窗口』」。这是修复 D5 所需的产品取舍，**没有改验收
+  文档**；若产品要求 B1-01 保持原样，可只把 `src/App.tsx:2169-2177` 的页签行为改回
+  「先收起浮层再 `openStandaloneSettings()`」，其余改动不受影响。
+
+### 8.5 实机自测（devfix identifier，未碰用户 profile）
+
+- **构建**：`node_modules\.bin\tauri.cmd build --ci --config <临时 devfix 配置> --no-bundle`，临时把 identifier
+  改成 `com.maolouis.maltese.devfix`，走全新 profile；跑完原 exe（SHA-256 `FE5DC5…D32075`）已还原并重启实例。
+- **环境限制**：本机安全软件会拒绝「未安装路径上的新 exe」创建 AppData 下的 WebView2 profile
+  （`Failed to setup app: 拒绝访问 (os error 5)`），所以新 exe 只能放进 `E:\Maltese2`（安装目录）才跑得起来；
+  这不是产品缺陷。
+- **已验证（UIA + 窗口矩形，截图在 `work/devfix*.png`）**：
+  1. 展开浮层点顶部「设置」页签后：主窗口仍是同一个窗口（实测由展开态切到 `1204,1010,619,430` 的岛内设置页），
+     **独立「桌宠设置」窗口不存在**（`standalone_settings_window=False`），本进程可见窗口数 **1** →
+     不再出现「点一下闪出两个窗口」；
+  2. 岛内设置页里能滚到「表情轮播」小节，按钮为 `展开（30 张）`；展开后 `pet-gif-settings__grid` 实测
+     **6 列 / 宽 348px**，所有格子右边缘都在网格内（`TILES_OUTSIDE_GRID_RIGHT=0`）→ 浮层内无横向滚动条；
+  3. 折叠按钮正常：点「收起」后格子元素数 30 → 0。
+- **未完成（需人工复核，不作「通过」结论）**：
+  - 拖拽排序 / 右键删除的**真实鼠标**交互：方格墙在页面下方，滚动后的合成鼠标拖动没有触发 HTML5 DnD、
+    右键落点也不稳定；这两项目前只有代码级 + 单测证据（见 §8.2）。
+  - 快捷入口页「设置」→「先收起浮层再开独立窗口」的整条 UI 流程：本轮脚本的合成点击先触发了悬停云朵，
+    没能稳定打开快捷入口页；代码路径见 §8.4，建议人工点一次确认（预期：岛收回小狗槽后再出现设置窗口，
+    不会两个大窗口同屏）。
