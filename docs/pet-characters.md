@@ -252,3 +252,6 @@ pointer 事件探针 + 用 `Input.dispatchMouseEvent` 走真实指针路径后�
 > 多实例联动（情绪传染 / Bongo 呼应）见 [multi-instance-linkage-design.md](multi-instance-linkage-design.md)：
 > 主狗被摸头/喂食/开心时，陪玩狗会跟着动、Bongo 会敲鼓呼应；开关在「设置 → 桌宠」的
 > 「实例联动」（岛内设置页与独立设置窗口都有，默认开，需小狗数量 ≥2 或打开 Bongo）。
+
+> 「实例联动」增强版：设置页「实例联动」区块有「试一下联动」按钮，会临时拉一只随从演示一次
+> （动作 + 朝主狗方向位移 + 缩放脉冲 + 台词气泡），3 秒后自动复原，不改你的设置。

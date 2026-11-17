@@ -6404,3 +6404,37 @@ html.maltese-page-opening .island__collapsed {
   box-sizing: border-box;
   max-width: 100%;
 }
+
+/* 岛内设置页里的行内小按钮（例如「试一下联动」）。 */
+.settings-inline-action {
+  margin: 4px 0 10px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(58 228 137 / 45%);
+  background: rgb(58 228 137 / 14%);
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.settings-inline-action:hover:not(:disabled) {
+  background: rgb(58 228 137 / 24%);
+}
+
+.settings-inline-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Bongo 敲击 → 主狗轻跳（摇尾巴由 happy 动作负责）。 */
+.maltese-pet--link-hop img {
+  animation: maltese-pet-link-hop 300ms cubic-bezier(0.25, 1.4, 0.4, 1);
+}
+
+@keyframes maltese-pet-link-hop {
+  0% { translate: 0 0; scale: 1; }
+  35% { translate: 0 -6px; scale: 1.04; }
+  70% { translate: 0 -2px; scale: 1.01; }
+  100% { translate: 0 0; scale: 1; }
+}

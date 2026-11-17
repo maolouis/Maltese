@@ -44,7 +44,7 @@ test("概率命中时随机 1–2 只，不会超过单次上限", () => {
   assert.ok(two.length <= PET_LINK_MAX_INSTANCES);
 });
 
-test("错峰延迟都在 0–300ms 且第一只不延迟", () => {
+test("错峰延迟都在 0–120ms 且第一只不延迟", () => {
   const governor = createLinkGovernor({
     probability: 1,
     random: sequenceRandom([0, 0, 0.5, 0.6, 0.7, 0.9, 0.99]),
@@ -57,7 +57,7 @@ test("错峰延迟都在 0–300ms 且第一只不延迟", () => {
   }
 });
 
-test("同动作 1.5s 冷却：连续两次只发一次", () => {
+test("同动作 0.8s 冷却：连续两次只发一次", () => {
   const governor = createLinkGovernor({ probability: 1, random: () => 0.1 });
   assert.ok(governor.planTargets(LABELS, "pet", 1_000).length > 0);
   assert.equal(governor.planTargets(LABELS, "pet", 1_000 + PET_LINK_ACTION_COOLDOWN_MS - 1).length, 0);
@@ -124,7 +124,7 @@ test("旧 seq 与非目标实例都不响应", () => {
   );
 });
 
-test("接收端同动作 1.5s 冷却与加延迟透传", () => {
+test("接收端同动作 0.8s 冷却与加延迟透传", () => {
   const state = createLinkReceiverState();
   const first = acceptLinkMessage(actionMessage({ seq: 1 }), state, { self: "companion-2", now: 1_000 });
   assert.equal(first.accept, true);
@@ -144,7 +144,7 @@ test("接收端同动作 1.5s 冷却与加延迟透传", () => {
   );
 });
 
-test("小气泡每实例 8s 冷却，动作本身仍可播", () => {
+test("每次联动都带气泡（气泡冷却与动作冷却一致）", () => {
   const state = createLinkReceiverState();
   const first = acceptLinkMessage(actionMessage({ seq: 1, bubble: true }), state, {
     self: "companion-2",
@@ -157,12 +157,8 @@ test("小气泡每实例 8s 冷却，动作本身仍可播", () => {
     now: 1_000 + PET_LINK_ACTION_COOLDOWN_MS,
   });
   assert.equal(second.accept, true);
-  assert.equal(second.bubble, false, "8s 内不重复冒泡");
-  const third = acceptLinkMessage(actionMessage({ seq: 3, bubble: true }), state, {
-    self: "companion-2",
-    now: 1_000 + PET_LINK_BUBBLE_COOLDOWN_MS,
-  });
-  assert.equal(third.bubble, true);
+  // 增强版：气泡冷却压到与动作冷却一致（800ms），每次被接受的动作都带一句台词。
+  assert.equal(second.bubble, true, "冷却与动作冷却一致，每次联动都可冒泡");
 });
 
 // ---------------------------------------------------------------------------
@@ -239,3 +235,90 @@ test("开关与陪玩狗数量都从设置里读（默认开、默认 1 只）",
 });
 
 console.log("pet link bus tests passed");
+// ---------------------------------------------------------------------------
+// 增强版：一眼看得见（首只必中 / force 预览 / Bongo 必定收到 / origin）
+// ---------------------------------------------------------------------------
+
+test("增强版：首只必触发，第二只保留 0.5 概率且最多 2 只", () => {
+  // random：第一次是概率判定（默认 1.0，必过），第二次是「第二只」判定（0.1 < 0.5 → 要 2 只）
+  const twoGovernor = createLinkGovernor({ random: sequenceRandom([0.1, 0.1, 0.5, 0.6, 0.7, 0.8]) });
+  const two = twoGovernor.planTargets(["companion-1", "companion-2", "companion-3"], "pet", 1_000);
+  assert.equal(two.length, 2);
+  // 第二次概率判定之后 0.9 ≥ 0.5 → 只要 1 只（第二只按概率）
+  const oneGovernor = createLinkGovernor({ random: sequenceRandom([0.1, 0.9, 0.5, 0.6, 0.7]) });
+  const one = oneGovernor.planTargets(["companion-1", "companion-2"], "pet", 1_000);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].label, "companion-1", "命中第一只时错峰为 0");
+});
+
+test("force：跳过概率与冷却，预览一次必中且只发第一只", () => {
+  const governor = createLinkGovernor({ probability: 0, random: () => 0.99 });
+  // 正常概率 0 → 不发
+  assert.deepEqual(governor.planTargets(["companion-1"], "pet", 1_000), []);
+  // force 绕过概率/冷却
+  const forced = governor.planTargets(["companion-1"], "pet", 1_000, { force: true });
+  assert.equal(forced.length, 1);
+  assert.equal(forced[0].delayMs, 0);
+  // 连点也不受冷却影响
+  assert.equal(governor.planTargets(["companion-1"], "pet", 1_000, { force: true }).length, 1);
+});
+
+test("主狗 happy/celebrate 带 toBongo：Bongo 不在 targets 里也必定收到一次敲击", () => {
+  const state = createLinkReceiverState();
+  const message = actionMessage({
+    seq: 1,
+    action: "celebrate",
+    targets: [{ label: "companion-1", delayMs: 0 }],
+    toBongo: true,
+  });
+  const bongo = acceptLinkMessage(message, state, { self: "bongo-pet", now: 1_000 });
+  assert.equal(bongo.accept, true);
+  assert.equal(bongo.bubble, false, "Bongo 只敲击不冒泡");
+  // 没有 toBongo 标记时不响应
+  const state2 = createLinkReceiverState();
+  const withoutFlag = acceptLinkMessage(actionMessage({ seq: 1, action: "happy" }), state2, {
+    self: "bongo-pet",
+    now: 1_000,
+  });
+  assert.equal(withoutFlag.accept, false);
+});
+
+test("消息带 origin 与必带 bubble，陪玩狗据此算位移方向", () => {
+  const channel = fakeChannel();
+  const bus = createPetLinkBus({
+    source: "main",
+    channel,
+    enabled: () => true,
+    companionLabels: () => ["companion-1"],
+    now: () => 1_000,
+    random: () => 0.99,
+  });
+  const targets = bus.emitAction("celebrate", {
+    origin: { x: 1800, y: 1200 },
+    toBongo: true,
+  });
+  assert.equal(targets.length, 1);
+  const message = channel.posted[0];
+  assert.equal(message.kind, "action");
+  assert.equal(message.bubble, true, "增强版每次联动都带气泡");
+  assert.equal(message.toBongo, true);
+  assert.deepEqual(message.origin, { x: 1800, y: 1200 });
+});
+
+test("没有陪玩狗但 toBongo 时仍然发出消息（否则 Bongo 永远收不到）", () => {
+  const channel = fakeChannel();
+  const bus = createPetLinkBus({
+    source: "main",
+    channel,
+    enabled: () => true,
+    companionLabels: () => [],
+    now: () => 1_000,
+    random: () => 0.99,
+  });
+  assert.deepEqual(bus.emitAction("celebrate", { toBongo: true }), []);
+  assert.equal(channel.posted.length, 1, "没有随从也要把 celebrate 发给 Bongo");
+  assert.equal(channel.posted[0].toBongo, true);
+  // 没有随从也没有 toBongo：不发
+  assert.equal(bus.emitAction("pet").length, 0);
+  assert.equal(channel.posted.length, 1);
+});

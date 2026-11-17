@@ -182,3 +182,46 @@
 - 人工 30 秒看效果：设置里把「小狗数量」调到 ≥2（或打开 Bongo）→ 摸头/喂食主狗
   → 1–2 只陪玩狗跟着动一下（偶尔冒小气泡）；主狗开心时 Bongo 会敲一下；
   Bongo 按空格时主狗摇尾巴。关掉「实例联动」后上述现象消失。
+
+---
+
+## 9. 增强版实现（2026-11-17，让联动「一眼看得见」）
+
+用户反馈「联动效果不明显」。除了「默认没有第二只狗」这个首要原因，还做了可见性增强：
+
+### 9.1 参数现值（增强前 → 增强后）
+
+| 参数 | 增强前 | 增强后 | 位置 |
+| --- | --- | --- | --- |
+| 首只触发概率 | 0.6 | **1.0（必触发）** | `src/petLinkBus.ts` `PET_LINK_PROBABILITY` |
+| 第二只 | 0.5 | 0.5（保留，单次最多 2 只） | `PET_LINK_SECOND_PROBABILITY` |
+| 错峰 | 0–300ms | **0–120ms** | `PET_LINK_STAGGER_MAX_MS` |
+| 同动作冷却 | 1500ms | **800ms** | `PET_LINK_ACTION_COOLDOWN_MS` |
+| 气泡 | 1/3 概率、8s 冷却 | **每次都带、1.2s、冷却同 800ms** | `shouldAttachBubble` / `PET_LINK_BUBBLE_COOLDOWN_MS` / `PET_LINK_BUBBLE_MS` |
+| 陪玩狗位移 | 无 | **朝主狗方向 8–16px 再回位** | `PET_LINK_SHIFT_MIN_PX` / `PET_LINK_SHIFT_MAX_PX` |
+| 缩放脉冲 | 无 | **1.0 → 1.08 → 1.0，260ms** | `PET_LINK_PULSE_MS` / `.companion-pet--reacting img` |
+| 主狗对 Bongo 敲击 | 只换帧 | **摇尾巴（happy）+ 轻跳 300ms** | `PET_LINK_MAIN_HOP_MS` / `.maltese-pet--link-hop` |
+| Bongo 路线 | 只发给陪玩狗，Bongo 收不到 | **happy/celebrate 带 `toBongo`，无随从也发** | `petLinkBus` 消息字段 `toBongo` |
+| Bongo 节流 | 800ms | **250ms（敲一次必响应）** | `PET_LINK_BONGO_THROTTLE_MS` |
+
+仍保留：限速 ≤4 次/秒、单次最多 2 只、回声抑制（source/seq）、开关关闭零事件。
+
+### 9.2 「试一下联动」
+
+`src/petLinkPreview.ts` 的 `previewPetLinkage()`：
+
+1. 读 localStorage 里的真实设置（只读）；
+2. 用**一次性** `sync_desktop_extras` 把 `petCount` 临时提到 ≥2（只在 Rust 侧显示随从窗口，不写回配置）；
+3. 500ms 后 `emitAction("pet", { force: true, labels: ["companion-1"], origin, toBongo })` → 一次必中的完整联动；
+4. 3 秒后（`finally` 里，抛错也执行）用真实 `petCount/bongoEnabled` 再同步一次，把临时随从收回去。
+
+全程不写 localStorage、不改 React settings，因此用户持久配置不会被改动。设置页两处入口：
+岛内「实例联动」区块按钮（`src/App.tsx`）与独立设置窗口按钮（`src/SettingsWindow.tsx`）。
+
+### 9.3 验收判据（可测）
+
+- `petCount≥2` 或 Bongo 开时，摸头 → 500ms 内至少 1 只随从开始动作，位移 ≥8px、出现台词气泡；
+- 连续 5 次操作 ≥4 次可见（受 800ms 冷却/每秒 4 次限制）；
+- 关掉「实例联动」→ 0 次联动（单测覆盖 `enabled=false` 不发事件）；
+- 联动期间主窗口 rAF 间隔 <25ms（联动只做 CSS transform/animation，不触发布局计算）。
+- 单测：`tests/pet-link-bus.test.mjs` 17 条（含首只必中/第二只概率、force 预览、toBongo 路由、origin/bubble 下发）。

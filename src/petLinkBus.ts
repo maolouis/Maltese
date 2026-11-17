@@ -34,8 +34,12 @@ export type PetLinkMessage =
       at: number;
       /** 本次命中的陪玩狗（空数组表示没有实例参与）。 */
       targets: PetLinkTarget[];
-      /** 是否附带一句小气泡（发送端按 ~1/3 决定）。 */
+      /** 是否附带一句小气泡（增强版：每次联动都带，1.2s）。 */
       bubble: boolean;
+      /** 主狗在屏幕上的位置，陪玩狗据此决定「朝主狗方向」的位移方向。 */
+      origin?: { x: number; y: number };
+      /** 这次动作要不要同时通知 Bongo（happy/celebrate 必敲）。 */
+      toBongo?: boolean;
     }
   | {
       kind: "bongo-hit";
@@ -44,18 +48,37 @@ export type PetLinkMessage =
       at: number;
     };
 
-// ---- 防线参数（与设计文档 §5 一致，单测锁定这些数值） ----
-export const PET_LINK_PROBABILITY = 0.6;
+// ---- 防线参数（增强版：一眼看得见；仍保留节流/上限/回声抑制） ----
+/** 首只陪玩狗必定触发（0.6 → 1.0）。 */
+export const PET_LINK_PROBABILITY = 1;
+/** 第二只仍按概率（0.5），单次最多 2 只。 */
+export const PET_LINK_SECOND_PROBABILITY = 0.5;
 export const PET_LINK_MAX_INSTANCES = 2;
-export const PET_LINK_STAGGER_MAX_MS = 300;
-export const PET_LINK_ACTION_COOLDOWN_MS = 1500;
+/** 错峰 0–300ms → 0–120ms。 */
+export const PET_LINK_STAGGER_MAX_MS = 120;
+/** 同动作冷却 1.5s → 0.8s。 */
+export const PET_LINK_ACTION_COOLDOWN_MS = 800;
 export const PET_LINK_RATE_WINDOW_MS = 1000;
 export const PET_LINK_RATE_LIMIT = 4;
-export const PET_LINK_BUBBLE_COOLDOWN_MS = 8000;
+/** 每次联动必带气泡；气泡冷却压到与动作冷却一致（800ms）。 */
+export const PET_LINK_BUBBLE_COOLDOWN_MS = 800;
 /** 陪玩狗动作持续时间（A1：2.6s±0.3s 后回 idle）。 */
 export const PET_LINK_ACTION_MS = 2600;
-/** 主狗动作被打断后的恢复时间（Bongo→主狗 A5：1.2s）。 */
+/** 气泡停留（增强版 1.2s）。 */
+export const PET_LINK_BUBBLE_MS = 1200;
+/** 位移反馈：朝主狗方向 8–16px 再回位。 */
+export const PET_LINK_SHIFT_MIN_PX = 8;
+export const PET_LINK_SHIFT_MAX_PX = 16;
+/** 缩放脉冲 1.0 → 1.08 → 1.0，260ms。 */
+export const PET_LINK_PULSE_MS = 260;
+export const PET_LINK_PULSE_SCALE = 1.08;
+/** 主狗对 Bongo 敲击的摇尾巴/轻跳时长（300ms 内必响应）。 */
+export const PET_LINK_MAIN_HOP_MS = 300;
 export const PET_LINK_MAIN_REACTION_MS = 1200;
+/** Bongo 连续敲击的最小间隔（毫秒），保证「敲一次→主狗一次」。 */
+export const PET_LINK_BONGO_THROTTLE_MS = 250;
+/** 预览按钮：临时窗口存在时间。 */
+export const PET_LINK_PREVIEW_MS = 3000;
 
 export const PET_LINK_CHANNEL_NAME = "maltese-pet-link";
 export const PET_LINK_TAURI_EVENT = "maltese-pet-link";
@@ -75,9 +98,9 @@ export function linkStateForAction(action: PetLinkAction): string {
   return action;
 }
 
-/** 该动作要不要顺带冒一句小气泡（Bongo 呼应不冒泡）。 */
-export function shouldAttachBubble(action: PetLinkAction): boolean {
-  return action !== "celebrate";
+/** 每次联动都附带一句短台词气泡（增强版：不再按 1/3 概率抽）。 */
+export function shouldAttachBubble(_action: PetLinkAction): boolean {
+  return true;
 }
 
 function safeStorage(): Storage | null {
@@ -137,8 +160,9 @@ export type LinkGovernorOptions = {
 export type LinkGovernor = {
   /** 未被限速/冷却时可以发送（会记账）。 */
   canSend: (action: string, now: number) => boolean;
-  /** 掷概率 + 选实例 + 分配错峰延迟；返回空数组表示这次不联动。 */
-  planTargets: (labels: string[], action: string, now: number) => PetLinkTarget[];
+  /** 掷概率 + 选实例 + 分配错峰延迟；返回空数组表示这次不联动。
+   * `force: true` 时跳过概率/冷却/限速（「试一下联动」按钮用，保证一次必中）。 */
+  planTargets: (labels: string[], action: string, now: number, options?: { force?: boolean }) => PetLinkTarget[];
   /** 测试/重连用：清空记账。 */
   reset: () => void;
 };
@@ -165,13 +189,22 @@ export function createLinkGovernor(options: LinkGovernorOptions = {}): LinkGover
     return true;
   };
 
-  const planTargets = (labels: string[], action: string, now: number): PetLinkTarget[] => {
+  const planTargets = (
+    labels: string[],
+    action: string,
+    now: number,
+    options?: { force?: boolean },
+  ): PetLinkTarget[] => {
     if (labels.length === 0) return [];
-    if (!canSend(action, now)) return [];
-    if (random() >= probability) return [];
+    const force = options?.force === true;
+    if (!force) {
+      if (!canSend(action, now)) return [];
+      if (random() >= probability) return [];
+    }
     const cap = Math.min(labels.length, Math.max(0, maxInstances));
     if (cap <= 0) return [];
-    const wanted = cap >= 2 && random() < 0.5 ? 2 : 1;
+    // 增强版：首只必定触发；第二只仍按 0.5 概率（单次最多 2 只）。
+    const wanted = !force && cap >= 2 && random() < PET_LINK_SECOND_PROBABILITY ? 2 : 1;
     const pool = [...labels];
     // Fisher–Yates：让「哪两只狗」随机，而不是永远 companion-1/2。
     for (let index = pool.length - 1; index > 0; index -= 1) {
@@ -180,7 +213,7 @@ export function createLinkGovernor(options: LinkGovernorOptions = {}): LinkGover
     }
     return pool.slice(0, wanted).map((label, index) => ({
       label,
-      // 0–300ms 错峰：第一个 0，其余随机（避免所有狗同一帧一起动）。
+      // 0–120ms 错峰：第一个 0，其余随机（避免所有狗同一帧一起动）。
       delayMs: index === 0 ? 0 : Math.floor(random() * (staggerMaxMs + 1)),
     }));
   };
@@ -245,11 +278,19 @@ export function acceptLinkMessage(
 
   const actionCooldownMs = options.actionCooldownMs ?? PET_LINK_ACTION_COOLDOWN_MS;
   const bubbleCooldownMs = options.bubbleCooldownMs ?? PET_LINK_BUBBLE_COOLDOWN_MS;
+  // Bongo 走独立路由：主狗 happy/celebrate 带 toBongo 标记时，即使 targets 里没有
+  // bongo-pet（它不在陪玩狗网格里），也必定收到一次敲击。
+  const isBongo = options.self === "bongo-pet" && message.toBongo === true;
   const target = message.targets.find((item) => item.label === options.self);
-  if (!target) return REJECT;
+  if (!target && !isBongo) return REJECT;
   const last = state.lastActionAt.get(message.action);
   if (last !== undefined && options.now - last < actionCooldownMs) return REJECT;
   state.lastActionAt.set(message.action, options.now);
+  if (isBongo) {
+    // Bongo 只做敲击反馈，不冒泡、不错峰。
+    return { accept: true, bubble: false, delayMs: 0 };
+  }
+  if (!target) return REJECT;
 
   let bubble = false;
   if (message.bubble) {
@@ -335,9 +376,21 @@ export function createTauriLinkChannel(): LinkChannel {
   };
 }
 
+export type PetLinkEmitOptions = {
+  /** 跳过概率/冷却/限速（「试一下联动」按钮用）。 */
+  force?: boolean;
+  /** 覆盖目标窗口（预览时临时只发给 companion-1）。 */
+  labels?: string[];
+  /** 主狗屏幕位置，供陪玩狗算位移方向。 */
+  origin?: { x: number; y: number };
+  /** 是否同时通知 Bongo（happy/celebrate 必敲）。 */
+  toBongo?: boolean;
+  now?: number;
+};
+
 export type PetLinkBus = {
   /** 主狗动作：返回本次真正命中的目标（便于 dev 日志/验收），未联动返回空数组。 */
-  emitAction: (action: PetLinkAction, now?: number) => PetLinkTarget[];
+  emitAction: (action: PetLinkAction, options?: PetLinkEmitOptions) => PetLinkTarget[];
   /** Bongo 敲击：广播给主狗（主狗只播 happy，不转发）。 */
   emitBongoHit: () => void;
   subscribe: (handler: (message: PetLinkMessage) => void) => () => void;
@@ -374,13 +427,16 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
   };
 
   return {
-    emitAction: (action, currentTime) => {
+    emitAction: (action, emitOptions) => {
       try {
         if (!enabled()) return [];
-        const labels = companionLabels();
-        const at = currentTime ?? now();
-        const targets = governor.planTargets(labels, action, at);
-        if (targets.length === 0) return [];
+        const labels = emitOptions?.labels ?? companionLabels();
+        const at = emitOptions?.now ?? now();
+        const targets = governor.planTargets(labels, action, at, { force: emitOptions?.force });
+        const toBongo = emitOptions?.toBongo === true;
+        // 没有陪玩狗时也要把消息发出去（Bongo 可能在场），否则「主狗 celebrate →
+        // Bongo 必敲」在 petCount=1 时永远收不到。
+        if (targets.length === 0 && !toBongo) return [];
         seq += 1;
         post({
           kind: "action",
@@ -389,7 +445,10 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
           seq,
           at,
           targets,
-          bubble: shouldAttachBubble(action) && random() < 1 / 3,
+          // 增强版：每次联动都带一句短台词。
+          bubble: shouldAttachBubble(action),
+          origin: emitOptions?.origin,
+          toBongo,
         });
         return targets;
       } catch {

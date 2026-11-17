@@ -66,6 +66,7 @@ import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
+import { previewPetLinkage } from "./petLinkPreview";
 import { resolvePetGif } from "./petAssets";
 import {
   rotationFramesForState,
@@ -153,6 +154,8 @@ import { DiaryTimeline, type DiaryEvent } from "./DiaryTimeline";
 import {
   getPetLinkBus,
   linkActionForPetAction,
+  PET_LINK_BONGO_THROTTLE_MS,
+  PET_LINK_MAIN_HOP_MS,
   PET_LINK_MAIN_REACTION_MS,
 } from "./petLinkBus";
 import "./PetBubble.css";
@@ -1526,6 +1529,24 @@ export function IslandShell({
   const gifRotationConfig = usePetGifRotationConfig(petCharacter);
   const gifRotationStates = usePetGifRotationStates();
   const [petSquash, setPetSquash] = useState(false);
+  /** Bongo 敲击时主狗的轻跳反馈（摇尾巴由 happy 动作负责）。 */
+  const [linkHop, setLinkHop] = useState(false);
+  useEffect(() => {
+    let timer: number | null = null;
+    const onHop = () => {
+      setLinkHop(true);
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        setLinkHop(false);
+      }, PET_LINK_MAIN_HOP_MS);
+    };
+    window.addEventListener("maltese-pet-link-hop", onHop);
+    return () => {
+      window.removeEventListener("maltese-pet-link-hop", onHop);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, []);
   // 参考 LineDogPet：只有整个系统闲置一段时间才睡觉，用户一动键鼠立刻醒。
   const [systemIdleSeconds, setSystemIdleSeconds] = useState(0);
   const [wakeUntil, setWakeUntil] = useState(0);
@@ -1903,7 +1924,7 @@ export function IslandShell({
             </div>
           )}
           <span
-            className={`maltese-pet maltese-pet--large${petSquash ? " maltese-pet--squash" : ""}${isTucked && tuckEdge === "top" ? " maltese-pet--flip" : ""}${petInteraction?.kind === "single-hop" ? " maltese-pet--interaction-hop" : ""}`}
+            className={`maltese-pet maltese-pet--large${petSquash ? " maltese-pet--squash" : ""}${isTucked && tuckEdge === "top" ? " maltese-pet--flip" : ""}${petInteraction?.kind === "single-hop" ? " maltese-pet--interaction-hop" : ""}${linkHop ? " maltese-pet--link-hop" : ""}`}
             role="button"
             tabIndex={0}
             aria-label={collapsedLabel}
@@ -2781,13 +2802,20 @@ function LayoutEditor({
           checked={settings.bongoEnabled}
           onChange={(bongoEnabled) => onSettingsChange({ ...settings, bongoEnabled })}
         />
-        {(settings.petCount > 1 || settings.bongoEnabled) && (
-          <ToggleControl
-            label="实例联动（陪玩狗跟着主狗动、Bongo 敲鼓呼应）"
-            checked={settings.petLinkage}
-            onChange={(petLinkage) => onSettingsChange({ ...settings, petLinkage })}
-          />
-        )}
+        <ToggleControl
+          label="实例联动（陪玩狗跟着主狗动、Bongo 敲鼓呼应）"
+          checked={settings.petLinkage}
+          onChange={(petLinkage) => onSettingsChange({ ...settings, petLinkage })}
+        />
+        <p className="settings-section__hint">{t.petLink.previewHint}</p>
+        <button
+          type="button"
+          className="settings-inline-action"
+          disabled={!settings.petLinkage}
+          onClick={() => void previewPetLinkage()}
+        >
+          {t.petLink.previewButton}
+        </button>
         {settings.bongoEnabled && (
           <>
             <SliderControl
@@ -9092,6 +9120,32 @@ function IslandApp({
   const linkSuppressedRef = useRef(false);
   // 联动上下文：只有「收起态 + 没缩边 + 没睡觉 + 不在拖动」时才联动（设计文档 §5）。
   const linkContextRef = useRef({ mode, isTucked, sleeping: false });
+  /** 主狗在屏幕上的位置（陪玩狗据此朝主狗方向挪）。1s 刷新一次，发射时直接读缓存。 */
+  const mainOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  /** Bongo 敲击时主狗的「摇尾巴 + 轻跳」反馈：主狗 DOM 在 IslandShell 里，
+      这里用 window 自定义事件通知它跳一下（同窗口，无 IPC 开销）。 */
+  const flipLinkHop = useCallback(() => {
+    window.dispatchEvent(new Event("maltese-pet-link-hop"));
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const read = () => {
+      void getCurrentWindow()
+        .outerPosition()
+        .then((pos) => {
+          if (!cancelled) mainOriginRef.current = { x: pos.x, y: pos.y };
+        })
+        .catch(() => undefined);
+    };
+    read();
+    const timer = window.setInterval(read, 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  /** 「试一下联动」在 src/petLinkPreview.ts 里（设置页两处共用，不依赖 React 状态）。 */
   const triggerPetAction = useCallback((action: PetAction) => {
     hidePetOverlay();
     if (soundOnRef.current) {
@@ -9127,7 +9181,11 @@ function IslandApp({
       && !linkContext.isTucked
       && !linkContext.sleeping
     ) {
-      getPetLinkBus("main").emitAction(linkAction);
+      // happy/celebrate 同时通知 Bongo（即使没有陪玩狗也要发，否则 Bongo 收不到）。
+      getPetLinkBus("main").emitAction(linkAction, {
+        origin: mainOriginRef.current,
+        toBongo: action === "happy" || action === "celebrate",
+      });
     }
   }, [recordDiaryEvent, startPetInteraction, t, tuckIsland]);
   useEffect(() => {
@@ -9160,17 +9218,20 @@ function IslandApp({
     return bus.subscribe((message) => {
       if (message.kind !== "bongo-hit") return;
       const now = Date.now();
-      if (now - lastHitAt < 800) return;
+      // 300ms 内必响应：只挡「同一帧内连续触发」的抖动。
+      if (now - lastHitAt < PET_LINK_BONGO_THROTTLE_MS) return;
       const linkContext = linkContextRef.current;
       if (linkContext.mode !== "collapsed" || linkContext.isTucked || linkContext.sleeping) return;
       lastHitAt = now;
       linkSuppressedRef.current = true;
+      // 摇尾巴（happy 动作）+ 轻跳（CSS）一起给，别只换帧。
+      flipLinkHop();
       triggerPetAction("happy");
       window.setTimeout(() => {
         linkSuppressedRef.current = false;
       }, PET_LINK_MAIN_REACTION_MS);
     });
-  }, [triggerPetAction]);
+  }, [flipLinkHop, triggerPetAction]);
   const petState = useMemo<PetState>(() => {
     if (petAction) {
       return petAction;

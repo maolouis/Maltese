@@ -18,6 +18,7 @@ import { PET_CHARACTERS, savePetCharacter, usePetCharacter, type PetCharacterId 
 import { TuckGifControl } from "./TuckGifControl";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
+import { previewPetLinkage } from "./petLinkPreview";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -415,6 +416,20 @@ export default function SettingsWindow() {
             onChange={(value) => update("petLinkage", value)}
           />
         )}
+        <p className="sw-hint sw-hint--block">
+          还没看到效果？「试一下联动」会临时拉一只随从并触发一次完整联动（动作 + 位移 + 气泡），
+          3 秒后自动复原，不会改动你的小狗数量 / Bongo 设置。
+        </p>
+        <button
+          type="button"
+          className="sw-secondary"
+          disabled={!settings.petLinkage}
+          onClick={() => {
+            void previewPetLinkage();
+          }}
+        >
+          试一下联动
+        </button>
         {settings.bongoEnabled && (
           <>
             <Slider label="Bongo 大小" value={settings.bongoSize} min={220} max={700} step={10} suffix="px" onChange={(value) => update("bongoSize", value)} />

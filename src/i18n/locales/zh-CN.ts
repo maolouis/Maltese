@@ -665,6 +665,8 @@ const zhCN: Translations = {
     label: "实例联动",
     hint: "主狗被摸头/喂食/开心时，陪玩狗会跟着动一下；Bongo 会敲鼓呼应。需要小狗数量 ≥2 或打开 Bongo。",
     companionLines: ["我也要！", "摸摸我～", "好吃！", "我也开心！", "等等我！", "嘿嘿～"],
+    previewButton: "试一下联动",
+    previewHint: "还没看到效果？需要第二只小狗（或打开 Bongo）才会联动。不确定就先点「试一下联动」：临时拉一只随从演示一次（动作 + 位移 + 气泡），3 秒后复原，不会改你的设置。",
   },
   messagePreview: {
     label: "显示消息预览",

@@ -353,6 +353,8 @@ export type Translations = {
     label: string;
     hint: string;
     companionLines: string[];
+    previewButton: string;
+    previewHint: string;
   };
 
   updateNotice: {

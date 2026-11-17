@@ -662,6 +662,8 @@ const en: Translations = {
     label: "Pet linkage",
     hint: "When the main dog is petted, fed or happy, companion dogs react too and Bongo taps along. Needs more than one dog or Bongo enabled.",
     companionLines: ["Me too!", "Pat me~", "Yummy!", "So happy!", "Wait for me!", "Hehe~"],
+    previewButton: "Try linkage",
+    previewHint: "Need a second dog (or Bongo). Click \"Try linkage\" to bring one in temporarily for a 3s demo (action, shift, bubble); your settings stay unchanged.",
   },
   messagePreview: {
     label: "Show message preview",

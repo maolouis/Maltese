@@ -16,6 +16,9 @@ import {
   getPetLinkBus,
   linkStateForAction,
   PET_LINK_ACTION_MS,
+  PET_LINK_BUBBLE_MS,
+  PET_LINK_SHIFT_MAX_PX,
+  PET_LINK_SHIFT_MIN_PX,
   readPetLinkageEnabled,
 } from "./petLinkBus";
 import "./DesktopExtras.css";
@@ -26,8 +29,6 @@ type PetLook = {
 };
 
 const SETTINGS_KEY = "focusd-island-settings";
-/** 陪玩狗小气泡停留时长（设计文档 L1：约 1/3 概率冒一句）。 */
-const BUBBLE_MS = 2400;
 
 function readLook(): PetLook {
   try {
@@ -77,9 +78,13 @@ export default function CompanionPet() {
     enabled: Boolean(reactionState),
   });
   const [bubble, setBubble] = useState("");
+  /** 联动位移：朝主狗方向挪 8–16px 后回位。 */
+  const [shift, setShift] = useState<{ x: number; y: number } | null>(null);
   const [squash, setSquash] = useState(false);
   const pressRef = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
+  const selfPosRef = useRef<{ x: number; y: number } | null>(null);
   const reactionTimer = useRef<number | null>(null);
+  const shiftTimer = useRef<number | null>(null);
   const bubbleTimer = useRef<number | null>(null);
   const receiverRef = useRef(createLinkReceiverState());
   const lines = t.petLink.companionLines;
@@ -99,7 +104,42 @@ export default function CompanionPet() {
     };
   }, []);
 
-  // 联动接收：只播动作、不转发（回声环由 paw link bus 的 source/seq 拦住）。
+  // 联动接收：只播动作、不转发（回声环由 petLinkBus 的 source/seq 拦住）。
+  // 先记住自己的屏幕位置，用于「朝主狗方向」的位移；2s 刷新一次。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const read = () => {
+      void getCurrentWindow()
+        .outerPosition()
+        .then((pos) => {
+          if (!cancelled) selfPosRef.current = { x: pos.x, y: pos.y };
+        })
+        .catch(() => undefined);
+    };
+    read();
+    const timer = window.setInterval(read, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  /** 主狗相对自己的方向 → 8–16px 位移（无位置信息时朝上，保证看得见）。 */
+  const shiftToward = (origin?: { x: number; y: number }): { x: number; y: number } => {
+    const self = selfPosRef.current;
+    if (!origin) return { x: 0, y: -PET_LINK_SHIFT_MIN_PX };
+    const dx = origin.x - (self?.x ?? 0);
+    const dy = origin.y - (self?.y ?? 0);
+    const length = Math.hypot(dx, dy);
+    if (!Number.isFinite(length) || length < 1) return { x: 0, y: -PET_LINK_SHIFT_MIN_PX };
+    const distance = Math.max(PET_LINK_SHIFT_MIN_PX, Math.min(PET_LINK_SHIFT_MAX_PX, 12));
+    return {
+      x: Math.round((dx / length) * distance),
+      y: Math.round((dy / length) * distance),
+    };
+  };
+
   useEffect(() => {
     const bus = getPetLinkBus(label);
     return bus.subscribe((message) => {
@@ -111,6 +151,13 @@ export default function CompanionPet() {
       if (!result.accept || message.kind !== "action") return;
       window.setTimeout(() => {
         setReactionState(linkStateForAction(message.action));
+        // 位移反馈：朝主狗方向挪 8–16px，CSS transition 回位。
+        setShift(shiftToward(message.origin));
+        if (shiftTimer.current !== null) window.clearTimeout(shiftTimer.current);
+        shiftTimer.current = window.setTimeout(() => {
+          shiftTimer.current = null;
+          setShift(null);
+        }, PET_LINK_ACTION_MS);
         if (reactionTimer.current !== null) window.clearTimeout(reactionTimer.current);
         reactionTimer.current = window.setTimeout(() => {
           reactionTimer.current = null;
@@ -122,7 +169,7 @@ export default function CompanionPet() {
           bubbleTimer.current = window.setTimeout(() => {
             bubbleTimer.current = null;
             setBubble("");
-          }, BUBBLE_MS);
+          }, PET_LINK_BUBBLE_MS);
         }
       }, result.delayMs);
     });
@@ -147,7 +194,7 @@ export default function CompanionPet() {
 
   return (
     <div
-      className={`companion-pet${squash ? " companion-pet--squash" : ""}${reactionState ? " companion-pet--reacting" : ""}`}
+      className={`companion-pet${squash ? " companion-pet--squash" : ""}${reactionState ? " companion-pet--reacting" : ""}${shift ? " companion-pet--shifted" : ""}`}
       role="button"
       tabIndex={0}
       aria-label="陪玩小狗"
@@ -192,6 +239,9 @@ export default function CompanionPet() {
           width: `${112 * look.scale}px`,
           height: `${112 * look.scale}px`,
           opacity: look.opacity,
+          // 联动位移：朝主狗方向挪一下再回位（CSS transition 负责平滑）。
+          transform: shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined,
+          transition: "transform 260ms cubic-bezier(0.22, 1.2, 0.36, 1)",
         }}
       />
     </div>
