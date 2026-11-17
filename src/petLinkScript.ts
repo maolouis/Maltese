@@ -18,7 +18,7 @@ export type DuoPair = {
   main: string;
 };
 
-export type SceneId = "pet" | "eating" | "cheerful" | "bongo";
+export type SceneId = "pet" | "eating" | "cheerful" | "bongo" | "standup" | "night" | "welcome";
 
 export type SceneBank = {
   /** ≥3 组备选，每组是一问一答。 */
@@ -142,6 +142,8 @@ export type LinkPlan = {
   pairIndex: number;
   hash: string;
   lines: PlannedLine[];
+  /** 主狗说哪一句的角色（duo 时随机取一人）。 */
+  mainSpeaker: DuoSpeaker;
   /** 主狗那句（可能没有）。 */
   mainLine: string | null;
   mainDelayMs: number;
@@ -162,11 +164,12 @@ export function buildLinkPlan(options: {
   recent: string[];
   random?: () => number;
   force?: boolean;
+  sceneId?: SceneId;
 }): LinkPlan | null {
   const { labels, bank, mainCharacter, recent, force } = options;
   const random = options.random ?? Math.random;
   if (!bank || bank.pairs.length === 0) return null;
-  const sceneId = sceneIdForAction(options.action);
+  const sceneId = options.sceneId ?? sceneIdForAction(options.action);
   const pairIndex = force
     ? 0
     : pickPairIndex(bank.pairs.length, recent, sceneId, random);
@@ -174,7 +177,6 @@ export function buildLinkPlan(options: {
   const pair = bank.pairs[pairIndex];
   if (!pair) return null;
   const hash = pairHash(sceneId, pairIndex);
-  const mainSpeaker = mainSpeakerFor(mainCharacter);
 
   // 随从按角色拿台词：奇数窗口=小白（回应句）、偶数窗口=小鸡毛（主动句）。
   const targets = labels.slice(0, 2).map((label) => {
@@ -183,19 +185,32 @@ export function buildLinkPlan(options: {
     return { label, speaker: role.speaker, line };
   });
 
+  // 主狗说哪一句：优先说「随从没覆盖」的那句；两只随从都覆盖时主狗不说。
+  // duo（主狗同框）没有固定身份，按台词 speaker 随机取一人，不再一律当小鸡毛。
+  const covered = new Set(targets.map((target) => target.speaker));
+  let mainSpeaker: DuoSpeaker;
+  if (targets.length === 0) {
+    // 没有随从：主狗按自己的形象说（duo 随机取一人），保证自说语气符合人设。
+    mainSpeaker = mainCharacter === "duo"
+      ? (random() < 0.5 ? "xiaobai" : "xiaojimao")
+      : mainSpeakerFor(mainCharacter);
+  } else if (!covered.has("xiaojimao")) {
+    mainSpeaker = "xiaojimao";
+  } else if (!covered.has("xiaobai")) {
+    mainSpeaker = "xiaobai";
+  } else {
+    mainSpeaker = mainSpeakerFor(mainCharacter);
+  }
+
   const lines: PlannedLine[] = [];
   let mainLine: string | null = null;
   let mainDelayMs = 0;
 
   if (targets.length > 0) {
     // 主狗说「随从没覆盖」的那一句；两个随从都覆盖了就不说。
-    const covered = new Set(targets.map((target) => target.speaker));
-    if (!covered.has("xiaojimao")) {
-      mainLine = pair.active;
-      mainDelayMs = 0;
-    } else if (!covered.has("xiaobai")) {
-      mainLine = pair.shy;
-      mainDelayMs = PET_LINK_DUO_STAGGER_MS;
+    if (!covered.has(mainSpeaker)) {
+      mainLine = mainSpeaker === "xiaojimao" ? pair.active : pair.shy;
+      mainDelayMs = mainSpeaker === "xiaojimao" ? 0 : PET_LINK_DUO_STAGGER_MS;
     }
     for (const target of targets) {
       lines.push({
@@ -212,5 +227,5 @@ export function buildLinkPlan(options: {
     mainDelayMs = 0;
   }
 
-  return { sceneId, pairIndex, hash, lines, mainLine, mainDelayMs };
+  return { sceneId, pairIndex, hash, lines, mainSpeaker, mainLine, mainDelayMs };
 }

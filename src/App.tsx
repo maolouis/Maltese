@@ -74,6 +74,7 @@ import {
   savePetLinkHistory,
   sceneIdForAction,
   PET_LINK_SOLO_SECOND_MS,
+  type SceneId,
 } from "./petLinkScript";
 import { resolvePetGif } from "./petAssets";
 import {
@@ -163,6 +164,7 @@ import {
   getPetLinkBus,
   linkActionForPetAction,
   readCompanionLabels,
+  type PetLinkAction,
   PET_LINK_BONGO_THROTTLE_MS,
   PET_LINK_MAIN_HOP_MS,
   PET_LINK_MAIN_REACTION_MS,
@@ -9161,6 +9163,62 @@ function IslandApp({
     };
   }, []);
   /** 「试一下联动」在 src/petLinkPreview.ts 里（设置页两处共用，不依赖 React 状态）。 */
+  // 双狗剧本：一次联动产出一对台词（小鸡毛先说、小白 120ms 后应），
+  // 主狗说随从没覆盖的那句；没有随从时主狗自说两句（A/B 剧本）。
+  const fireDuoScene = useCallback((
+    sceneId: SceneId,
+    action: PetLinkAction,
+    options?: { toBongo?: boolean; labels?: string[]; force?: boolean; silent?: boolean },
+  ) => {
+    if (!isTauri()) return;
+    const bank = t.petLink.scenes[sceneId];
+    const labels = options?.labels ?? readCompanionLabels();
+    const recent = loadPetLinkHistory();
+    const plan = buildLinkPlan({
+      action,
+      labels,
+      bank,
+      mainCharacter: proactiveCharacter,
+      recent,
+      force: options?.force,
+      sceneId,
+    });
+    if (!plan) return;
+    const lines = plan.lines
+      .filter((line) => line.who !== "main")
+      .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
+        acc[line.who] = { line: line.line, speaker: line.speaker };
+        return acc;
+      }, {});
+    getPetLinkBus("main").emitAction(action, {
+      origin: mainOriginRef.current,
+      toBongo: options?.toBongo === true,
+      sceneId: plan.sceneId,
+      lines,
+      mainLine: plan.mainLine ?? undefined,
+      mainDelayMs: plan.mainDelayMs,
+    });
+    savePetLinkHistory(window.localStorage, rememberPairHash(recent, plan.hash));
+    const speakers = [
+      ...plan.lines.map((line) => `${line.who}:${line.speaker}`),
+      plan.mainLine ? `main:${plan.mainSpeaker}` : null,
+    ].filter(Boolean).join(",");
+    console.debug(
+      `[pet-link] scene=${plan.sceneId} speakers=${speakers || "none"} targets=${plan.lines.length} main=${plan.mainLine ? "yes" : "no"}`,
+    );
+    if (plan.mainLine && !options?.silent) {
+      window.setTimeout(() => {
+        showCloudBubble(mainSaysLabel(proactiveCharacter), plan.mainLine ?? "");
+      }, plan.mainDelayMs);
+    }
+    // 没有随从：主狗再补一句自我回应（气泡错峰 1.2s）。
+    if (labels.length === 0 && !options?.silent) {
+      const second = bank?.pairs[plan.pairIndex]?.main;
+      if (second) {
+        window.setTimeout(() => showCloudBubble(mainSaysLabel(proactiveCharacter), second), PET_LINK_SOLO_SECOND_MS);
+      }
+    }
+  }, [proactiveCharacter, showCloudBubble, t]);
   const triggerPetAction = useCallback((action: PetAction) => {
     hidePetOverlay();
     if (soundOnRef.current) {
@@ -9196,51 +9254,12 @@ function IslandApp({
       && !linkContext.isTucked
       && !linkContext.sleeping
     ) {
-      // 双狗剧本：一次联动产出一对台词（小鸡毛先说、小白 120ms 后应）。
-      const sceneId = sceneIdForAction(linkAction);
-      const bank = t.petLink.scenes[sceneId];
-      const labels = readCompanionLabels();
-      const recent = loadPetLinkHistory();
-      const plan = buildLinkPlan({
-        action: linkAction,
-        labels,
-        bank,
-        mainCharacter: proactiveCharacter,
-        recent,
-      });
       // happy/celebrate 同时通知 Bongo（即使没有陪玩狗也要发，否则 Bongo 收不到）。
-      const lines = plan ? plan.lines
-        .filter((line) => line.who !== "main")
-        .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
-          acc[line.who] = { line: line.line, speaker: line.speaker };
-          return acc;
-        }, {}) : undefined;
-      getPetLinkBus("main").emitAction(linkAction, {
-        origin: mainOriginRef.current,
+      fireDuoScene(sceneIdForAction(linkAction), linkAction, {
         toBongo: action === "happy" || action === "celebrate",
-        sceneId: plan?.sceneId ?? sceneId,
-        lines,
-        mainLine: plan?.mainLine ?? undefined,
-        mainDelayMs: plan?.mainDelayMs ?? 0,
       });
-      if (plan) {
-        savePetLinkHistory(window.localStorage, rememberPairHash(recent, plan.hash));
-        // 主狗说自己的那句；没有随从时再补一句自我回应（A/B 剧本）。
-        if (plan.mainLine) {
-          window.setTimeout(() => {
-            showCloudBubble(mainSaysLabel(proactiveCharacter), plan.mainLine ?? "");
-          }, plan.mainDelayMs);
-        }
-        if (labels.length === 0) {
-          const pair = plan.sceneId && bank ? bank.pairs[plan.pairIndex] : undefined;
-          const second = pair?.main ?? t.petLink.scenes.pet.pairs[0]?.main;
-          if (second) {
-            window.setTimeout(() => showCloudBubble(mainSaysLabel(proactiveCharacter), second), PET_LINK_SOLO_SECOND_MS);
-          }
-        }
-      }
     }
-  }, [proactiveCharacter, recordDiaryEvent, showCloudBubble, startPetInteraction, t, tuckIsland]);
+  }, [fireDuoScene, recordDiaryEvent, startPetInteraction, t, tuckIsland]);
   useEffect(() => {
     if (!isTauri()) {
       return;
@@ -9304,39 +9323,58 @@ function IslandApp({
         linkSuppressedRef.current = false;
       }, PET_LINK_MAIN_REACTION_MS);
       // S4 双狗桥段：Bongo 敲击后小鸡毛 hop 回应、小白 peek 并说一句。
-      const bongoBank = t.petLink.scenes.bongo;
-      const bongoLabels = readCompanionLabels();
-      const bongoRecent = loadPetLinkHistory();
-      const bongoPlan = buildLinkPlan({
-        action: "happy",
-        labels: bongoLabels,
-        bank: bongoBank,
-        mainCharacter: proactiveCharacter,
-        recent: bongoRecent,
-      });
-      if (bongoPlan) {
-        const lines = bongoPlan.lines
-          .filter((line) => line.who !== "main")
-          .reduce<Record<string, { line: string; speaker: "xiaobai" | "xiaojimao" }>>((acc, line) => {
-            acc[line.who] = { line: line.line, speaker: line.speaker };
-            return acc;
-          }, {});
-        getPetLinkBus("main").emitAction("happy", {
-          origin: mainOriginRef.current,
-          sceneId: "bongo",
-          lines,
-          mainLine: bongoPlan.mainLine ?? undefined,
-          mainDelayMs: bongoPlan.mainDelayMs,
-        });
-        savePetLinkHistory(window.localStorage, rememberPairHash(bongoRecent, bongoPlan.hash));
-        if (bongoPlan.mainLine) {
-          window.setTimeout(() => {
-            showCloudBubble(mainSaysLabel(proactiveCharacter), bongoPlan.mainLine ?? "");
-          }, bongoPlan.mainDelayMs);
-        }
-      }
+      fireDuoScene("bongo", "happy");
     });
-  }, [flipLinkHop, proactiveCharacter, showCloudBubble, t, triggerPetAction]);
+  }, [fireDuoScene, flipLinkHop, triggerPetAction]);
+  // S5 久坐 / S6 夜间 / S7 回归：60s 检查一次，触发时播对应的双狗剧本。
+  const duoStandupAtRef = useRef(0);
+  const duoNightKeyRef = useRef("");
+  const duoAwayRef = useRef(false);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const check = async () => {
+      if (cancelled) return;
+      const ctx = linkContextRef.current;
+      if (!settings.petLinkage || ctx.mode !== "collapsed" || ctx.isTucked || ctx.sleeping) return;
+      let idleSeconds = 0;
+      try {
+        idleSeconds = await invoke<number>("get_system_idle_seconds");
+      } catch {
+        // 前台活动拿不到就只跑夜间检查。
+      }
+      if (cancelled) return;
+      const now = Date.now();
+      // S7：离开（≥10 分钟无输入）后回到电脑，播一次「欢迎回来」。
+      const away = idleSeconds >= 600;
+      if (duoAwayRef.current && idleSeconds < 60) {
+        fireDuoScene("welcome", "happy");
+      }
+      duoAwayRef.current = away;
+      // S5：同一类活动连续 ≥40 分钟且人还在，隔 45 分钟才提醒一次。
+      const streakMinutes = Math.max(
+        0,
+        Math.round((now - proactiveStreakRef.current.since) / 60_000),
+      );
+      if (streakMinutes >= 40 && idleSeconds < 120 && now - duoStandupAtRef.current >= 45 * 60_000) {
+        duoStandupAtRef.current = now;
+        fireDuoScene("standup", "pet");
+      }
+      // S6：23:00–05:00 只播一次「晚安」。
+      const hour = new Date().getHours();
+      const nightKey = new Date().toDateString();
+      if ((hour >= 23 || hour < 5) && settings.nightCompanion && duoNightKeyRef.current !== nightKey) {
+        duoNightKeyRef.current = nightKey;
+        fireDuoScene("night", "happy");
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [fireDuoScene, settings.nightCompanion, settings.petLinkage]);
   const petState = useMemo<PetState>(() => {
     if (petAction) {
       return petAction;

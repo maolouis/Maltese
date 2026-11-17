@@ -143,3 +143,67 @@ test("空台词库/空名单都不会崩", () => {
   assert.equal(buildLinkPlan({ action: "pet", labels: ["companion-1"], bank: { pairs: [] }, mainCharacter: "xiaobai", recent: [] }), null);
   assert.equal(pickPairIndex(0, [], "pet"), null);
 });
+// —— 第二轮补齐：duo 台词归属 / S5–S7 场景 ——
+
+test("duo 主狗：按台词 speaker 决定谁说话，不与随从撞角色", () => {
+  // 主狗 duo + 随从 companion-1（默认小白）→ 主狗说小鸡毛那句
+  const one = buildLinkPlan({
+    action: "pet",
+    labels: ["companion-1"],
+    bank: bank(),
+    mainCharacter: "duo",
+    recent: [],
+    random: () => 0,
+  });
+  assert.ok(one);
+  assert.equal(one.mainSpeaker, "xiaojimao");
+  assert.equal(one.mainLine, "毛一");
+  assert.notEqual(one.lines[0]?.speaker, one.mainSpeaker, "两只狗不能说同一角色");
+  // 两只随从时主狗不再抢话
+  const two = buildLinkPlan({
+    action: "pet",
+    labels: ["companion-1", "companion-2"],
+    bank: bank(),
+    mainCharacter: "duo",
+    recent: [],
+    random: () => 0,
+  });
+  assert.ok(two);
+  assert.equal(two.mainLine, null);
+  assert.equal(new Set(two.lines.map((line) => line.speaker)).size, 2);
+});
+
+test("S5–S7 场景：显式 sceneId 覆盖（久坐/夜间/回归）", () => {
+  const standupBank = { pairs: [{ active: "走啦走啦！", shy: "……我陪着走到窗边。", main: "活动一下。" }] };
+  for (const sceneId of ["standup", "night", "welcome"]) {
+    const plan = buildLinkPlan({
+      action: "pet",
+      labels: ["companion-1"],
+      bank: standupBank,
+      mainCharacter: "xiaobai",
+      recent: [],
+      sceneId,
+    });
+    assert.ok(plan, `${sceneId} 应产出剧本`);
+    assert.equal(plan.sceneId, sceneId);
+    assert.equal(plan.hash.startsWith(`${sceneId}:`), true);
+    assert.ok(plan.mainLine, `${sceneId} 主狗应有台词`);
+    assert.equal(plan.lines.length, 1);
+  }
+});
+
+test("联动关闭时零事件（总线层）", async () => {
+  const { createPetLinkBus } = await import("../src/petLinkBus.ts");
+  const posted = [];
+  const bus = createPetLinkBus({
+    source: "main",
+    channel: { post: (message) => posted.push(message), subscribe: () => () => undefined },
+    enabled: () => false,
+    companionLabels: () => ["companion-1"],
+    now: () => 1_000,
+    random: () => 0,
+  });
+  bus.emitAction("pet", { sceneId: "pet", labels: ["companion-1"] });
+  bus.emitBongoHit();
+  assert.equal(posted.length, 0);
+});

@@ -693,6 +693,27 @@ const en: Translations = {
           { active: "Listen! Rhythm!", shy: "…I heard it.", main: "Dong." },
         ],
       },
+      standup: {
+        pairs: [
+          { active: "Get up and move! I'll lead!", shy: "The human has sat for so long…", main: "Stretch a little." },
+          { active: "Come on, let's walk!", shy: "…I'll walk with you to the window.", main: "Sitting too long hurts your back." },
+          { active: "Then I'll be your alarm!", shy: "Your back will ache.", main: "Move a bit, then continue." },
+        ],
+      },
+      night: {
+        pairs: [
+          { active: "We'll play again tomorrow!", shy: "Dim the light… good night.", main: "Good night." },
+          { active: "Dream of bones tonight!", shy: "…Dreaming of you is enough.", main: "Good night, see you tomorrow." },
+          { active: "See you tomorrow, Snowy!", shy: "Good night.", main: "Time to sleep." },
+        ],
+      },
+      welcome: {
+        pairs: [
+          { active: "You're back!!", shy: "…Welcome back.", main: "You're back." },
+          { active: "I kept watching the window!", shy: "I was wondering if you'd come back.", main: "Welcome back." },
+          { active: "Waited so long!", shy: "Actually… I was waiting too.", main: "Good work today." },
+        ],
+      },
     },
   },
   messagePreview: {

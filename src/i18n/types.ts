@@ -366,6 +366,9 @@ export type Translations = {
       eating: DuoScene;
       cheerful: DuoScene;
       bongo: DuoScene;
+      standup: DuoScene;
+      night: DuoScene;
+      welcome: DuoScene;
     };
   };
 
