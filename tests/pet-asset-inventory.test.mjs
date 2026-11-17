@@ -98,3 +98,19 @@ test("设置页库存口径：分组计数与总数一致（直接按清单结�
   const total = Object.values(groups).reduce((sum, count) => sum + count, 0);
   assert.equal(total, 789);
 });
+test("源码里不再引用已删除的根级兜底 GIF（rest.gif 除外）", () => {
+  const srcDir = path.resolve("src");
+  const stale = [];
+  const files = fs.readdirSync(srcDir).filter((name) => /\.(ts|tsx)$/.test(name) && !name.endsWith(".generated.ts"));
+  for (const name of files) {
+    const text = fs.readFileSync(path.join(srcDir, name), "utf8");
+    // 例子：/assets/pets/idle.gif、/assets/pets/happy/1.gif —— 去重后除 rest.gif 外都已删除
+    for (const match of text.matchAll(/"\/assets\/pets\/([a-z]+)(\/[^"]*)?\.gif"/g)) {
+      const [, state, suffix] = match;
+      if (suffix && ["chars", "stickers", "legacy"].includes(state)) continue; // 清单池由生成脚本管
+      if (state === "rest") continue;
+      stale.push(`${name}: ${match[0]}`);
+    }
+  }
+  assert.deepEqual(stale, [], `以下代码引用了已删除的根级素材：\n${stale.join("\n")}`);
+});

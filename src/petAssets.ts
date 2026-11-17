@@ -1,8 +1,11 @@
-import { petAssetUrl } from "./petAssetBase";
+// 桌宠 GIF 的「最后兜底」解析：某个状态没有任何角色素材时，从清单里取一张能加载的图。
+//
+// 2026-11-17 去重后，旧版根级兜底素材（`assets/pets/<state>.gif` 与 `assets/pets/<state>/<n>.gif`）
+// 除 `rest.gif` 外已全部删除（它们与 chars 内容完全相同），所以这里**不再维护根级路径表**，
+// 统一走生成的素材清单（chars/xiaobai），保证任何状态都能拿到磁盘上真实存在的文件。
 
-// 线条小狗 GIF 素材清单与随机选取逻辑。
-// 素材来源：LineDogPet（小白角色），已复制到 assets/pets/<state>/<n>.gif。
-// 每个状态的第 0 项是既有的根级 GIF（作为默认/兜底），其余为随机变体。
+import { petAssetUrl } from "./petAssetBase";
+import { characterFramePaths } from "./petCharacters";
 
 export type PetVisualState =
   | "idle"
@@ -25,60 +28,22 @@ export type PetVisualState =
   | "chase"
   | "peek";
 
-const variants = (state: string, count: number): string[] => {
-  const list = [`/assets/pets/${state}.gif`];
-  for (let i = 1; i <= count; i += 1) {
-    list.push(`/assets/pets/${state}/${i}.gif`);
-  }
-  return list;
-};
+/** 旧兜底里唯一保留的孤儿图：趴睡（`resting` 用）。 */
+const REST_GIF = "/assets/pets/rest.gif";
 
-// 只有子目录变体、没有根级同名 GIF 的状态（来自 LineDogPet 的额外动作）。
-const subVariants = (state: string, count: number): string[] => {
-  const list: string[] = [];
-  for (let i = 1; i <= count; i += 1) {
-    list.push(`/assets/pets/${state}/${i}.gif`);
-  }
-  return list;
-};
-
-export const PET_GIF_VARIANTS: Record<PetVisualState, string[]> = {
-  // 收起态固定显示睡觉小狗（来自用户提供的动图转制）
-  idle: variants("idle", 8),
-  resting: ["/assets/pets/rest.gif"],
-  listening: variants("listening", 8),
-  working: variants("working", 6),
-  attention: variants("attention", 6),
-  pet: variants("pet", 2),
-  // 历史原因根级文件名为 eat.gif，而状态名是 eating。
-  eating: ["/assets/pets/eat.gif", ...variants("eating", 4).slice(1)],
-  pickup: variants("pickup", 4),
-  scared: variants("scared", 4),
-  sleeping: variants("sleeping", 6),
-  celebrate: variants("celebrate", 4),
-  happy: variants("happy", 6),
-  relax: variants("relax", 4),
-  chin: subVariants("chin", 2),
-  spin: subVariants("spin", 3),
-  play: subVariants("play", 4),
-  hide: subVariants("hide", 2),
-  chase: subVariants("chase", 3),
-  peek: subVariants("peek", 8),
-};
-
-// 状态名兼容：历史上 eating 的 GIF 文件名为 eat.gif。
-const FALLBACK_FILE: Record<string, string> = {
-  eating: "/assets/pets/eat.gif",
-};
+/** 某状态下候选的原始路径（清单驱动，至少有一张）。 */
+export function petGifCandidates(state: string): string[] {
+  if (state === "resting") return [REST_GIF];
+  const frames = characterFramePaths("xiaobai", state);
+  if (frames.length > 0) return frames;
+  // 清单里也没有这个状态：退回小白待机，保证不出现破图。
+  return characterFramePaths("xiaobai", "idle");
+}
 
 export function resolvePetGif(state: string, exclude?: string): string {
-  const list = PET_GIF_VARIANTS[state as PetVisualState];
-  if (!list || list.length === 0) {
-    return petAssetUrl(FALLBACK_FILE[state] ?? `/assets/pets/${state}.gif`);
-  }
-  if (list.length === 1) {
-    return petAssetUrl(list[0]);
-  }
+  const list = petGifCandidates(state).map(petAssetUrl);
+  if (list.length === 0) return petAssetUrl(REST_GIF);
+  if (list.length === 1) return list[0];
   let picked = list[Math.floor(Math.random() * list.length)];
   // 尽量避免连续两次同一张图。
   let guard = 0;
@@ -86,5 +51,5 @@ export function resolvePetGif(state: string, exclude?: string): string {
     picked = list[Math.floor(Math.random() * list.length)];
     guard += 1;
   }
-  return petAssetUrl(picked);
+  return picked;
 }

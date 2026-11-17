@@ -37,6 +37,10 @@ node scripts/build-pet-manifest.mjs
   共 **383 张**（stickers 287 + 旧兜底 96），`assets/pets` 从 **1172 → 789 个 GIF、88.1 MB → 57.5 MB（-30.6 MB）**；
   `chars` 内部 25 个「内容相同但文件/路径不同」的条目**一律不动**（那是路径语义，不在清理范围）。
   待删清单（路径 + sha256 + 对应保留路径）在 `work/asset-dedupe-plan.txt`（`work/` 不进版本库）。
+- **根级兜底表已删（2026-11-17）**：`src/petAssets.ts` 原先维护一套 `/assets/pets/<state>.gif` 根级路径表作为
+  「最后兜底」，那些文件与 chars 内容重复、已被清理；现在 `resolvePetGif` 改为从生成的素材清单取图
+  （`characterFramePaths("xiaobai", state)`），只有 `rest.gif`（趴睡）继续以根级路径保留。
+  `tests/pet-asset-inventory.test.mjs` 有一条断言守着「源码不再引用已删除的根级 GIF」。
 - `stickers` 的 9 张与 `legacy` 的 `rest.gif` 都并入了**单角色**（小白 / 小鸡毛）的素材池（`petCharacters.extraPoolFrames`），
   duo 只播同框池；微博表情包小动作按语义对齐：`sleep→sleeping`、`eat→eating`、`work→working`、`nervous→scared`、
   `hop→celebrate`、`paper→attention`、`walk→chase`。
