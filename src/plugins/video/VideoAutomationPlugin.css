@@ -490,3 +490,164 @@
 .island__expanded .video-automation__comment {
   border-top: 1px dashed rgba(255, 255, 255, 0.14);
 }
+
+/* ---------- 最终对比度覆盖 ---------- */
+:is(.plugin-window, .video-page, .plugins-page) .video-automation {
+  color: #13251b;
+  background: #f8fbf8;
+  border-color: #9abda4;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation .assistant-panel__label,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__provider,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__params label {
+  color: #173d2a;
+  font-weight: 700;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__phase {
+  color: #102f20;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__phase.is-running {
+  color: #075f35;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__steps,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__login,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__muted {
+  color: #304d3d;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__summary,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__browser {
+  background: #edf7ef;
+  border: 1px solid #b4d1ba;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__primary {
+  background: #287a49;
+  color: #ffffff;
+  box-shadow: 0 2px 0 #17552f;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__primary:hover {
+  background: #1d633a;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__primary.is-stop {
+  background: #a9572f;
+  color: #ffffff;
+  box-shadow: 0 2px 0 #70351e;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__secondary,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__link {
+  border-color: #568568;
+  color: #173d2a;
+  background: #ffffff;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__secondary:hover:not(:disabled) {
+  background: #dcefe0;
+  border-color: #287a49;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__provider select,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__row select,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__params input,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form input,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment textarea {
+  border-color: #568568;
+  color: #12251b;
+  background: #ffffff;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__provider select:focus-visible,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__row select:focus-visible,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__params input:focus-visible,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form input:focus-visible,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment textarea:focus-visible,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation button:focus-visible {
+  outline: 3px solid #1f8a50;
+  outline-offset: 2px;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__advanced,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment {
+  border-top-color: #9abda4;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__advanced > summary,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment > summary,
+:is(.plugin-window, .video-page, .plugins-page) .video-automation__account > summary {
+  color: #143c29;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* 岛内设置页原先字号过小且透明度过高，改成可读的深色卡片。 */
+.island__expanded .video-automation {
+  background: #1b2a21;
+  border-color: #638d70;
+}
+
+.island__expanded .video-automation .assistant-panel__label,
+.island__expanded .video-automation__phase,
+.island__expanded .video-automation__advanced > summary,
+.island__expanded .video-automation__comment > summary,
+.island__expanded .video-automation__account > summary {
+  color: #effff1;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.island__expanded .video-automation__phase {
+  font-size: 14px;
+}
+
+.island__expanded .video-automation__steps,
+.island__expanded .video-automation__muted,
+.island__expanded .video-automation__login,
+.island__expanded .video-automation__provider,
+.island__expanded .video-automation__params label {
+  color: #d6eadb;
+  font-size: 12px;
+}
+
+.island__expanded .video-automation__provider select,
+.island__expanded .video-automation__row select,
+.island__expanded .video-automation__params input,
+.island__expanded .video-automation__account-form input,
+.island__expanded .video-automation__comment textarea {
+  border-color: #7fa98a;
+  background: #243a2c;
+  color: #f2fff4;
+  font-size: 12px;
+}
+
+.island__expanded .video-automation__secondary,
+.island__expanded .video-automation__danger {
+  border-color: #7fa98a;
+  background: #315e3f;
+  color: #f2fff4;
+  font-size: 12px;
+}
+
+.island__expanded .video-automation__secondary:hover:not(:disabled) {
+  background: #3c7950;
+}
+
+.island__expanded .video-automation__primary {
+  background: #3f9b60;
+  color: #ffffff;
+  font-size: 12px;
+}
+
+.island__expanded .video-automation__summary,
+.island__expanded .video-automation__browser {
+  background: #243a2c;
+  border: 1px solid #638d70;
+}

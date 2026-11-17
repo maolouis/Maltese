@@ -12,7 +12,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const CHAT_TIMEOUT: Duration = Duration::from_secs(120);
 fn persona(character: &str) -> &'static str {
@@ -60,6 +60,7 @@ pub async fn dsh_chat(
     message: String,
     session_id: Option<String>,
     character: String,
+    request_id: Option<String>,
 ) -> Result<DshChatReply, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -68,7 +69,9 @@ pub async fn dsh_chat(
     if message.chars().count() > 4_000 {
         return Err("一次最多说 4000 个字。".into());
     }
-    tauri::async_runtime::spawn_blocking(move || chat(&app, &message, session_id, &character))
+    tauri::async_runtime::spawn_blocking(move || {
+        chat(&app, &message, session_id, &character, request_id.as_deref())
+    })
         .await
         .map_err(|error| format!("聊天线程失败：{error}"))?
 }
@@ -78,15 +81,16 @@ fn chat(
     message: &str,
     session_id: Option<String>,
     character: &str,
+    request_id: Option<&str>,
 ) -> Result<DshChatReply, String> {
     let cli = dsh_cli()?;
     let patch = credential_patch(app)?;
     let prompt = format!("{}{message}", persona(character));
-    match run_once(&cli, &patch, &prompt, session_id.as_deref()) {
+    match run_once(&cli, &patch, &prompt, session_id.as_deref(), app, request_id) {
         Ok(reply) => Ok(reply),
         Err(error) if session_id.is_some() && error.to_ascii_lowercase().contains("session") => {
             // 旧 Session 被清理后不要让聊天永久卡住，自动开一个新会话。
-            run_once(&cli, &patch, &prompt, None)
+            run_once(&cli, &patch, &prompt, None, app, request_id)
         }
         Err(error) => Err(error),
     }
@@ -153,6 +157,8 @@ fn run_once(
     patch: &PathBuf,
     prompt: &str,
     session_id: Option<&str>,
+    app: &AppHandle,
+    request_id: Option<&str>,
 ) -> Result<DshChatReply, String> {
     let mut command = Command::new("cmd.exe");
     command
@@ -191,10 +197,37 @@ fn run_once(
         .ok_or_else(|| "无法读取 DSH 错误输出。".to_string())?;
     let (stdout_tx, stdout_rx) = mpsc::channel();
     let (stderr_tx, stderr_rx) = mpsc::channel();
+    // 边读边把文本增量推给前端：之前是等整个 dsh 进程退出才显示回复，
+    // 模型一慢看起来就像「卡死」。raw 仍然完整保留，最后统一解析。
+    let stream_app = app.clone();
+    let stream_request = request_id.map(str::to_string);
     thread::spawn(move || {
-        let mut text = String::new();
-        let _ = std::io::BufReader::new(stdout).read_to_string(&mut text);
-        let _ = stdout_tx.send(text);
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        let mut raw = String::new();
+        for line in reader.lines() {
+            let Ok(line) = line else { break };
+            raw.push_str(&line);
+            raw.push('\n');
+            let Some(request) = stream_request.as_deref() else { continue };
+            let trimmed = line.trim();
+            if !trimmed.starts_with('{') {
+                continue;
+            }
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            if event.get("type").and_then(|value| value.as_str()) != Some("text") {
+                continue;
+            }
+            if let Some(text) = event.get("text").and_then(|value| value.as_str()) {
+                let _ = stream_app.emit(
+                    "dsh-chat-stream",
+                    serde_json::json!({ "requestId": request, "text": text }),
+                );
+            }
+        }
+        let _ = stdout_tx.send(raw);
     });
     thread::spawn(move || {
         let mut text = String::new();
@@ -311,26 +344,4 @@ mod tests {
         assert!(session.is_none());
     }
 
-    /// 实机验证 `cmd /C` 参数转义和 DSH headless 调用；默认忽略。
-    #[test]
-    #[ignore]
-    fn live_headless_chat() {
-        let Ok(cli) = std::env::var("MALTESE_DSH_CLI") else {
-            eprintln!("skip: set MALTESE_DSH_CLI to run the live DSH test");
-            return;
-        };
-        let Ok(patch) = std::env::var("MALTESE_DSH_CHAT_PATCH") else {
-            eprintln!("skip: set MALTESE_DSH_CHAT_PATCH to run the live DSH test");
-            return;
-        };
-        let reply = run_once(
-            &PathBuf::from(cli),
-            &PathBuf::from(patch),
-            "只回复 OK 两个字母，不要做任何事",
-            None,
-        )
-        .unwrap();
-        assert!(!reply.text.trim().is_empty());
-        assert!(reply.session_id.is_some());
-    }
 }

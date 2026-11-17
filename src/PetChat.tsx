@@ -442,9 +442,17 @@ export function PetChat() {
       // 关键是这一步必须“短”：只给紧凑的技能清单、关思考、限 96 token，
       // 判断完再走正常的流式回复。之前把完整聊天历史 + 长提示词都塞进去，
       // 每句话都要等两轮完整生成才开始出字，看起来就是「回话很慢」。
-      if (agentEnabled && sendImages.length === 0) {
-        // 本地模型和 DSH 都能「动手」。决策走独立短会话（sessionId 置空），
-        // 只给紧凑技能清单、限 128 token，避免拖慢正常聊天。
+      // 「动手」流程：只有像指令的话才先做技能判断，闲聊直接回复。
+      // 之前每条消息都先跑一轮完整模型判断，DSH 又是「进程结束才出字」，
+      // 相当于每次聊天都要白等一轮，看起来就是卡死。
+      const SKILL_HINT =
+        /开始|暂停|计时|待办|记一下|日记|播放|音乐|下一首|上一首|打开|启动|换成|换形象|查一下|查资料|搜索|搜一下|联网|几点|剪贴板/;
+      const withTimeout = <T,>(promise: Promise<T>, ms: number): Promise<T | null> =>
+        Promise.race([
+          promise.catch(() => null),
+          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), ms)),
+        ]);
+      if (agentEnabled && sendImages.length === 0 && SKILL_HINT.test(text)) {
         const askAgent = async (prompt: string, maxTokens: number, temperature: number) => {
           if (chatConfig.backend === "local") {
             return askModel(prompt, [], null, { maxTokens, temperature });
@@ -453,33 +461,29 @@ export function PetChat() {
             message: prompt,
             sessionId: null,
             character,
+            requestId: null,
           });
           return reply.text;
         };
-        let decision = "";
-        try {
-          decision = await askAgent(
-            `${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`,
-            128,
-            0.1,
-          );
-        } catch {
-          decision = "";
-        }
+        // 技能判断最多等 20 秒，超时/失败都退回普通聊天，绝不挡住回复。
+        const decision =
+          (await withTimeout(
+            askAgent(`${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`, 128, 0.1),
+            20_000,
+          )) ?? "";
         const call = parseSkillCall(decision);
         if (call) {
           const result = await runSkill(call.action, call.args);
           const toolNote = result.ok ? result.message : `没做成：${result.message}`;
-          let summary = "";
-          try {
-            summary = await askAgent(
-              `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用简洁中文回答主人；如果结果里有搜索资料，就根据资料直接回答，不要输出 JSON。`,
-              400,
-              0.7,
-            );
-          } catch {
-            summary = "";
-          }
+          const summary =
+            (await withTimeout(
+              askAgent(
+                `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用简洁中文回答主人；如果结果里有搜索资料，就根据资料直接回答，不要输出 JSON。`,
+                400,
+                0.7,
+              ),
+              25_000,
+            )) ?? "";
           replyText = (summary || result.message).trim();
           persist([
             ...next,
@@ -495,21 +499,37 @@ export function PetChat() {
           setBusy(false);
           return;
         }
-        // 不需要动手：丢掉这次判断结果，继续走正常流式回复。
       }
       if (chatConfig.backend === "local") {
         replyText = await streamLocalReply(text, messages, sendImages);
       } else {
-        const reply = await invoke<DshChatReply>("dsh_chat", {
-          message: text,
-          sessionId,
-          character,
-        });
-        if (reply.sessionId) {
-          setSessionId(reply.sessionId);
-          window.localStorage.setItem(SESSION_KEY, reply.sessionId);
+        // DSH 也走流式：Rust 边读 dsh 输出边推 dsh-chat-stream，
+        // 不用等整个进程结束才看到字。
+        const requestId = `dsh-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        let streamed = "";
+        const unlisten = await listen<{ requestId: string; text: string }>(
+          "dsh-chat-stream",
+          (event) => {
+            if (event.payload.requestId !== requestId) return;
+            streamed += event.payload.text;
+            setStreamingReply(streamed);
+          },
+        );
+        try {
+          const reply = await invoke<DshChatReply>("dsh_chat", {
+            message: text,
+            sessionId,
+            character,
+            requestId,
+          });
+          if (reply.sessionId) {
+            setSessionId(reply.sessionId);
+            window.localStorage.setItem(SESSION_KEY, reply.sessionId);
+          }
+          replyText = reply.text;
+        } finally {
+          unlisten();
         }
-        replyText = reply.text;
       }
       const reasoningText = streamingReasoning.trim().slice(0, 4000);
       persist([
