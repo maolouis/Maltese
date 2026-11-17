@@ -128,8 +128,21 @@ function normalizeItem(value: unknown): PetGifRotationItem | null {
   };
 }
 
-function readConfig(key: string): unknown {
-  try {
+/** 读取时按素材路径去重：历史 bug 曾把同一批 GIF 重复追加（29 张变 713 张），
+ *  只在保存时去重会让旧配置里的重复项继续撑大「共 N 张」和实际轮播。 */
+function dedupeRotationItems(items: PetGifRotationItem[]): PetGifRotationItem[] {
+  const seen = new Set<string>();
+  const next: PetGifRotationItem[] = [];
+  for (const item of items) {
+    const key = item.src ?? item.path ?? item.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(item);
+  }
+  return next;
+}
+
+function readConfig(key: string): unknown {  try {
     const raw = window.localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as unknown) : null;
   } catch {
@@ -151,9 +164,9 @@ export function loadPetGifRotationConfig(
     const list = table[state];
     if (!Array.isArray(list)) continue;
     // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
-    defaults[state] = list
-      .map(normalizeItem)
-      .filter((item): item is PetGifRotationItem => item !== null);
+    defaults[state] = dedupeRotationItems(
+      list.map(normalizeItem).filter((item): item is PetGifRotationItem => item !== null),
+    );
   }
   return defaults;
 }

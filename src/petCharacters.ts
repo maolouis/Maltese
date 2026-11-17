@@ -2,8 +2,8 @@
 //
 // 素材来自 LineDogPet 的 pets/xiaobai、pets/xiaojimao、pets/shared：
 //   - xiaobai / xiaojimao 是两只可选小狗，各自有一套动作 GIF；
-//   - shared 是「两只小狗同框」的共享池，不是独立角色。默认角色的某个动作
-//     有同框素材时会按比例插进轮播里；选「一起出现」时只播同框素材。
+//   - shared 是「两只小狗同框」的共享池，不是独立角色。同框 GIF 全量并入小白和
+//     小鸡毛各自的池子（设置页数量 = 本角色 + 同框）；选「一起出现」时只播同框素材。
 //
 // 动作缺素材时按 LineDogPet 的回退链找视觉相近的动作，最后兜底小白 idle，
 // 保证任何形象在任何状态下都有画面。
@@ -107,9 +107,6 @@ const FIXED_SHARED_FILES: Record<string, { character: string; fileName: string }
   chase: { character: "xiaojimao", fileName: "狂奔.gif" },
 };
 
-/** 默认角色轮播里同框素材的露面比例：每 3 张本角色图插 1 张同框图。 */
-const SHARED_EVERY = 3;
-
 function decodeName(src: string): string {
   const tail = src.slice(src.lastIndexOf("/") + 1);
   try {
@@ -152,20 +149,9 @@ function fallbackIdle(): string[] {
   return collectFrames("xiaobai", "idle");
 }
 
-function interleaveShared(own: string[], shared: string[]): string[] {
-  if (shared.length === 0) return own;
-  const out: string[] = [];
-  let sharedIndex = 0;
-  own.forEach((frame, index) => {
-    out.push(frame);
-    if ((index + 1) % SHARED_EVERY === 0) {
-      out.push(shared[sharedIndex % shared.length]);
-      sharedIndex += 1;
-    }
-  });
-  // 结尾补一张同框图，避免素材少时整轮都没轮到。
-  if (sharedIndex === 0) out.push(shared[0]);
-  return [...new Set(out)];
+/** 同框（两条狗）素材全量并入每个单角色池：小白和小鸡毛都能看到、都能选。 */
+function mergeShared(own: string[], shared: string[]): string[] {
+  return [...new Set([...own, ...shared])];
 }
 
 /**
@@ -204,14 +190,13 @@ function computeFrames(
       : fallbackIdle();
   }
   const shared = sharedFrames(action);
-  const merged = interleaveShared(own, shared);
+  const merged = mergeShared(own, shared);
   if (merged.length > 0) return merged;
   const xiaobai = collectFrames("xiaobai", action);
   return xiaobai.length > 0 ? xiaobai : fallbackIdle();
 }
 
-/** 均匀抽样整个素材池，保证一次运行里各个动作的图都能轮到几张。 */
-function sampleFrames(frames: string[]): string[] {
+/** 均匀抽样整个素材池，保证一次运行里各个动作的图都能轮到几张。 */function sampleFrames(frames: string[]): string[] {
   if (frames.length <= MAX_FRAMES_PER_STATE) return frames;
   const stride = frames.length / MAX_FRAMES_PER_STATE;
   const offset = Math.floor(Math.random() * frames.length);
