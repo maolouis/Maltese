@@ -6336,3 +6336,75 @@ html.maltese-page-opening .island__collapsed {
   color: #0f766e;
   background: rgba(45, 212, 191, 0.24);
 }
+
+/* —— 岛内「设置」页（LayoutEditor）——
+   浮层本身是白色云朵面板，但这一页的配色和控件一直按深色玻璃面板设计；
+   以前它只在「设置窗口打不开」的兜底路径里出现，从 QA D5 起顶部「设置」页签
+   直接切到这里，所以给内容区补一块深色卡片底，恢复原有白字/玻璃控件的可读性。 */
+.island__expanded .editor-panel {
+  background: linear-gradient(150deg, rgba(24, 28, 36, 0.94), rgba(14, 17, 22, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  /* 覆盖浮层统一的深色文字：这一页的控件是给深色面板设计的白字。 */
+  color: rgba(248, 246, 240, 0.88);
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+/* 头部右侧：独立设置窗口入口 + 复位按钮 */
+.editor-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-panel__action {
+  height: 28px;
+  padding: 0 12px;
+  color: rgba(248, 246, 240, 0.82);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.editor-panel__action:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.editor-panel__action:focus-visible {
+  outline: 2px solid rgba(143, 216, 255, 0.88);
+  outline-offset: 2px;
+}
+
+/* 岛内设置页里的「表情轮播」：复用独立设置窗口的同一个组件（浅色卡片），
+   嵌进来后限一下高度，避免把整页拉得过长。 */
+.island__expanded .settings-section--pet-gifs {
+  min-width: 0;
+}
+
+.island__expanded .settings-section--pet-gifs .pet-gif-settings {
+  border-radius: 14px;
+  padding: 4px 14px 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.island__expanded .settings-section--pet-gifs .pet-gif-settings__grid {
+  max-height: 300px;
+}
+
+.island__expanded .settings-section--pet-gifs .pet-gif-settings__scope-grid {
+  max-height: 160px;
+}
+
+/* 浮层比独立窗口窄：所有子元素都按容器宽度收缩，不出现横向滚动条。 */
+.island__expanded .settings-section--pet-gifs .pet-gif-settings,
+.island__expanded .settings-section--pet-gifs .pet-gif-settings * {
+  box-sizing: border-box;
+  max-width: 100%;
+}

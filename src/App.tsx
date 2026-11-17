@@ -72,6 +72,7 @@ import {
   usePetGifRotationStates,
 } from "./petGifRotation";
 import { usePetGifRotation } from "./usePetGifRotation";
+import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { PET_CHARACTERS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
 import { TuckGifControl } from "./TuckGifControl";
 import { useTuckGifSource } from "./tuckGif";
@@ -2162,13 +2163,17 @@ export function IslandShell({
                 }}
               >{t.island.plugins}</button>
               <button
-                className="island-tab"
+                className={`island-tab ${page === "layout" ? "dot-button--active" : ""}`}
                 type="button"
                 title={t.island.layoutEditor}
                 aria-label={t.island.layoutEditor}
+                aria-pressed={page === "layout"}
                 onClick={(event) => {
                   event.stopPropagation();
-                  void invoke("open_settings_window").catch(() => onPageChange("layout"));
+                  // D5：以前这里直接 open_settings_window，浮层展开时又弹一个独立窗口，
+                  // 两个窗口抢焦点、浮层失焦自动收起，观感是「点一下闪出两个窗口」。
+                  // 现在切到岛内「设置」页（布局编辑），改轮播 GIF 也能就地完成。
+                  onPageChange("layout");
                 }}
               >设置</button>
             </nav>
@@ -2269,6 +2274,7 @@ function LayoutEditor({
   onLaunchAtStartupChange,
   onClearAgentStatus,
   onInstallAgentHooks,
+  onOpenSettingsWindow,
 }: {
   locale: LocaleCode;
   settings: IslandSettings;
@@ -2298,6 +2304,8 @@ function LayoutEditor({
   onLaunchAtStartupChange: (enabled: boolean) => void;
   onClearAgentStatus: (provider: AgentProvider) => void;
   onInstallAgentHooks: () => void;
+  /** 打开独立设置窗口：先收起浮层再开，避免两个窗口同时抢焦点（QA D5）。 */
+  onOpenSettingsWindow: () => Promise<void>;
 }) {
   const t = useTranslation();
   const savePathPanelRef = useRef<HTMLElement | null>(null);
@@ -2305,6 +2313,7 @@ function LayoutEditor({
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetNameDraft, setPresetNameDraft] = useState("");
   const [projectLinkFailed, setProjectLinkFailed] = useState(false);
+  const [openSettingsError, setOpenSettingsError] = useState("");
 
   const openProjectLink = async (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isTauri()) {
@@ -2376,16 +2385,34 @@ function LayoutEditor({
     <div className="editor-panel">
       <div className="editor-panel__header">
         <span>{t.settings.title}</span>
-        <button
-          className="reset-button"
-          type="button"
-          title={t.settings.reset}
-          aria-label={t.settings.reset}
-          onClick={onReset}
-        >
-          <RefreshCcw size={15} strokeWidth={2.2} />
-        </button>
+        <div className="editor-panel__header-actions">
+          <button
+            className="editor-panel__action"
+            type="button"
+            title="打开独立设置窗口（会先收起浮层，避免同时出现两个窗口）"
+            onClick={() => {
+              setOpenSettingsError("");
+              void onOpenSettingsWindow().catch(() => {
+                setOpenSettingsError("独立设置窗口打开失败，可以在托盘菜单「配置桌宠」里重试。");
+              });
+            }}
+          >
+            独立设置窗口
+          </button>
+          <button
+            className="reset-button"
+            type="button"
+            title={t.settings.reset}
+            aria-label={t.settings.reset}
+            onClick={onReset}
+          >
+            <RefreshCcw size={15} strokeWidth={2.2} />
+          </button>
+        </div>
       </div>
+      {openSettingsError && (
+        <p className="project-link-error" role="alert">{openSettingsError}</p>
+      )}
 
       <section className="settings-section settings-section--language">
         <div className="settings-section__header">
@@ -2800,6 +2827,12 @@ function LayoutEditor({
             onChange={(cursorPetSize) => onSettingsChange({ ...settings, cursorPetSize })}
           />
         )}
+      </section>
+
+      {/* 表情轮播就直接放在岛内设置页里（和独立设置窗口共用同一个组件）：
+          用户「展开浮层 → 设置 → 改轮播 GIF」全程只有一个窗口（QA D5）。 */}
+      <section className="settings-section settings-section--pet-gifs">
+        <PetGifRotationSettings />
       </section>
 
       <section className="settings-section settings-section--messages">
@@ -5147,7 +5180,7 @@ function playPetChirp(kind: "soft" | "happy" = "soft") {
   }
 }
 
-export function AssistantPanel() {
+export function AssistantPanel({ onOpenSettingsWindow }: { onOpenSettingsWindow?: () => Promise<void> }) {
   const t = useTranslation();
   const panelRef = useRef<HTMLElement | null>(null);
   const appSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -5772,7 +5805,10 @@ export function AssistantPanel() {
             type="button"
             className="assistant-panel__settings"
             onClick={() => {
-              void invoke("open_settings_window").catch(() => setNotice("设置窗口打开失败，请从托盘菜单「配置桌宠」再试一次"));
+              // QA D5：独立设置窗口会抢焦点，先收起浮层再开（App 传入的回调里做），
+              // 不再让「展开的岛 + 设置窗口」同时出现。
+              const open = onOpenSettingsWindow ?? (() => invoke("open_settings_window"));
+              void open().catch(() => setNotice("设置窗口打开失败，请从托盘菜单「配置桌宠」再试一次"));
             }}
           >
             设置
@@ -7684,6 +7720,26 @@ function IslandApp({
     setIslandMode("collapsed");
   }, [setIslandMode]);
 
+  // QA D5：独立设置窗口打开时会抢焦点，浮层还展开着的话用户会看到「点一下闪出
+  // 两个窗口」，接着浮层失焦自动收起。这里统一先收起浮层，等岛让出屏幕再开窗口。
+  const openStandaloneSettings = useCallback(async () => {
+    const restoreExpanded = mode === "expanded";
+    setIslandMode("collapsed");
+    // 收起的动画/原生改尺寸是异步的，给一帧多一点时间再弹窗，避免两窗口重叠。
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 180);
+    });
+    try {
+      await invoke("open_settings_window");
+    } catch (error) {
+      console.error("Failed to open settings window", error);
+      if (restoreExpanded) {
+        setIslandMode("expanded");
+      }
+      throw error;
+    }
+  }, [mode, setIslandMode]);
+
   // 启动时就把保存的「显示/隐藏」组合键注册上（以前只在快捷面板挂载时才注册，
   // 用户改过键的话要等打开面板才生效）。
   useEffect(() => {
@@ -9149,6 +9205,7 @@ function IslandApp({
             onLaunchAtStartupChange={updateLaunchAtStartup}
             onClearAgentStatus={clearAgentStatus}
             onInstallAgentHooks={installAgentHooks}
+            onOpenSettingsWindow={openStandaloneSettings}
           />
         )}
         {page === "music" && (
@@ -9181,7 +9238,7 @@ function IslandApp({
             onClear={() => void clearClipboardHistoryItems()}
           />
         )}
-        {page === "assistant" && <AssistantPanel />}
+        {page === "assistant" && <AssistantPanel onOpenSettingsWindow={openStandaloneSettings} />}
         {page === "video" && <VideoPage />}
         {page === "chat" && <PetChat />}
         {page === "onboarding" && <OnboardingPanel onFinish={finishOnboarding} />}

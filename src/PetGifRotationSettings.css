@@ -296,7 +296,8 @@
   box-shadow: none;
 }
 
-/* 落点格子：描边高亮 + 左侧插入线，表示「松手后插到这里」。 */
+/* 落点格子：描边高亮 + 插入线，表示「松手后插到这里」。
+   向上拖时插到目标格之前（线在左侧），向下拖时插到目标格之后（线在右侧）。 */
 .pet-gif-tile.is-drop-target {
   border-color: #2dd4bf;
   background: #f2fbf8;
@@ -312,6 +313,12 @@
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: #2dd4bf;
+}
+
+.pet-gif-tile.is-drop-target--after::before {
+  left: auto;
+  right: 0;
+  border-radius: 3px 0 0 3px;
 }
 
 .pet-gif-tile__preview {

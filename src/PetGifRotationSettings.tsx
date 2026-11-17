@@ -12,6 +12,7 @@ import {
   usePetGifRotationStates,
   type PetGifRotationItem,
 } from "./petGifRotation";
+import { movePetGifItem } from "./utils/gifRotationOrder";
 import { characterAllFrames, characterFramesForState, PET_CHARACTER_LABELS, usePetCharacter } from "./petCharacters";
 import "./PetGifRotationSettings.css";
 
@@ -116,15 +117,12 @@ export function PetGifRotationSettings() {
     savePetGifRotationStates(next);
   };
 
-  // 拖动排序：把 from 处的格子取出，插到 to 处（to 为落点格子的当前位置）。
+  // 拖动排序：把 from 处的格子取出，放到 to 处（to 为落点格子的当前位置）。
   // 复用 saveItems → savePetGifRotationConfig 写回配置，主窗口会通过 storage 事件同步。
+  // 具体下标换算在 movePetGifItem 里，向上/向下拖的结果与插入线方向一致。
   const reorder = (from: number, to: number) => {
-    if (from === to) return;
-    if (from < 0 || to < 0 || from >= items.length || to >= items.length) return;
-    const next = [...items];
-    const [moved] = next.splice(from, 1);
-    if (!moved) return;
-    next.splice(to, 0, moved);
+    const next = movePetGifItem(items, from, to);
+    if (next === items) return;
     saveItems(next);
   };
 
@@ -326,11 +324,13 @@ export function PetGifRotationSettings() {
             {items.map((item, index) => {
               const dragging = dragIndex === index;
               const dropTarget = dropIndex === index && dragIndex !== null && dragIndex !== index;
+              // 向下拖时松手是「插到目标格之后」，插入线要画在右边才和结果一致。
+              const dropAfter = dropTarget && dragIndex !== null && index > dragIndex;
               return (
                 <figure
                   key={item.id}
                   role="listitem"
-                  className={`pet-gif-tile${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}`}
+                  className={`pet-gif-tile${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}${dropAfter ? " is-drop-target--after" : ""}`}
                   draggable
                   tabIndex={0}
                   aria-label={`${t.petGifs.order(index + 1)} · ${item.name}`}

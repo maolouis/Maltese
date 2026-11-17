@@ -10,7 +10,7 @@ import "../../App.css";
 import { useVideoPluginState } from "./useVideoPluginState";
 import { VideoChannelCard } from "./VideoChannelCard";
 import { VideoDigestList } from "./VideoDigestList";
-import { errorMessageForCode, type Platform } from "./types";
+import { errorMessageForCode, type AgentAccountStatus, type Platform } from "./types";
 import { formatDigestMessage } from "../../videoDelivery";
 
 type Props = {
@@ -23,6 +23,19 @@ function codeOf(error: unknown): string | null {
     return typeof code === "string" ? code : null;
   }
   return null;
+}
+
+// 账号状态在界面上一律显示中文：下拉框和右侧状态徽标共用同一份文案，
+// 避免中文界面里冒出 draft / awaitingLogin / ready 这些 Rust 枚举值（QA D3）。
+const ACCOUNT_STATUS_LABEL: Record<AgentAccountStatus, string> = {
+  draft: "草稿",
+  awaitingLogin: "等待登录",
+  ready: "已就绪",
+  paused: "已暂停",
+};
+
+export function accountStatusLabel(status: string): string {
+  return ACCOUNT_STATUS_LABEL[status as AgentAccountStatus] ?? status;
 }
 
 function phaseText(running: boolean, phase: string, waiting: boolean): string {
@@ -260,12 +273,12 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           >
             <option value="">临时观看，不绑定账号</option>
             {video.accounts.filter((item) => item.platform === provider).map((item) => (
-              <option key={item.id} value={item.id}>{item.displayName} · {item.status}</option>
+              <option key={item.id} value={item.id}>{item.displayName} · {accountStatusLabel(item.status)}</option>
             ))}
           </select>
           {selectedAccount && (
             <span className="video-automation__account-status">
-              {selectedAccount.status === "ready" ? "已就绪" : selectedAccount.status === "awaitingLogin" ? "等待登录" : "请完成登录"}
+              {accountStatusLabel(selectedAccount.status)}
             </span>
           )}
           <button type="button" onClick={() => void openLogin()}>打开账号登录窗</button>

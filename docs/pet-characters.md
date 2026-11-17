@@ -70,24 +70,36 @@ node scripts/build-pet-manifest.mjs
 
 ## 表情轮播设置：方格展示 + 拖拽排序 + 右键删除
 
+「表情轮播」现在有**两处入口，共用同一个组件**（`src/PetGifRotationSettings.tsx`）：
+
+- 岛内展开浮层 → 顶部「设置」页签 → 岛内设置页的「表情轮播」小节；
+- 独立「桌宠设置」窗口（托盘 / 快捷入口页「设置」/ 岛内设置页右上「独立设置窗口」）。
+
+岛内入口是为了解决「改轮播 GIF 必须弹第二个窗口」的反馈（QA D5）：点「设置」页签不再弹独立
+设置窗口，就地展开岛内设置页，改 GIF、拖拽排序、右键删除全程只有主窗口一个窗口。
+独立窗口里的那份保留不变；从岛内/快捷入口打独立窗口时会先收起浮层再弹窗，避免两个窗口同时出现。
+
 设置页「表情轮播」的 GIF 列表从「每行一张的长条 + ↑↓ 按钮」改成**缩略图方格墙**：
 `grid-template-columns: repeat(auto-fill, minmax(96px, 1fr))` 自适应列数，
 每格是 GIF 缩略图 + 左上角序号角标 + 底部文件名；「上移/下移」按钮和对应 i18n 文案已移除，
 `order()` 现在只用于序号角标和无障碍标签。
 
 - **拖动排序**：格子是 HTML5 `draggable`。`onDragStart` 记下源下标（同时写 `dataTransfer` 的 `text/plain`），
-  `onDragOver` 高亮悬停的目标格（`is-drop-target`：青色描边 + 左侧 3px 插入线），
-  被拖起的那格加 `is-dragging`（半透明 + 虚线）；松手 `onDrop` 把源格子 `splice` 出来后插到目标下标，
+  `onDragOver` 高亮悬停的目标格（`is-drop-target`：青色描边 + 3px 插入线），
+  被拖起的那格加 `is-dragging`（半透明 + 虚线）；松手 `onDrop` 用 `movePetGifItem(items, from, to)`
+  （`src/utils/gifRotationOrder.ts`）把源格子 `splice` 出来后放到目标下标，
   再走组件原有的 `saveItems()` → `savePetGifRotationConfig({ ...config, [state]: next }, character)`
   写回 `localStorage`（键 `maltese-pet-gif-rotation:<角色>`）并派发 `maltese-pet-gif-rotation-updated`。
   主窗口 / 陪玩狗 / 跟随狗照旧通过 storage 事件和自定义事件同步，**没有新增存储**。
+  插入线方向随拖动方向变化：向上拖（源下标 > 目标下标）线在目标格**左侧**、插到目标格之前；
+  向下拖线在目标格**右侧**、插到目标格之后，视觉提示和松手结果一致（QA D4 修复）。
 - **右键删除**：格子 `onContextMenu` 阻止默认菜单后直接删除（无确认弹窗）。自定义 GIF 仍先调
   `remove_pet_gif` 删掉应用数据目录里的文件，再 `saveItems` 过滤掉该项；删除成功后显示 2.4 秒的
   「已删除 N 张 GIF」状态提示（`role="status"` / `aria-live="polite"`）。为了让触屏和触控板用户也能找到入口，
   格子悬停或聚焦时右上角会浮出一个小删除按钮，走同一个 `remove()`，不会再弹二次确认。
 - **保留的能力**：表情状态下拉、全选、添加 GIF（≤8 MB）、恢复默认、折叠展开、轮播范围面板、错误提示都没动；
   新增文案只动了 `petGifs` 命名空间（`reorderHint` 改成拖动/右键说明，新增 `deleted(count)`）。
-- 方格区域最大高度 460px、超出内部滚动，避免一个表情几百张图把设置页拉成一条长柱。
+- 方格区域最大高度在独立设置窗口里 460px、岛内浮层里 300px，超出内部滚动，避免一个表情几百张图把设置页拉成一条长柱。
 - 相关文件：`src/PetGifRotationSettings.tsx`、`src/PetGifRotationSettings.css`（持久化仍复用 `src/petGifRotation.ts`）。
 - 已知限制：HTML5 拖拽在触摸屏上不触发，排序需要在桌面用鼠标拖；键盘可达性只做到格子可聚焦
   （`:focus-visible` 描边），暂不支持键盘排序。
