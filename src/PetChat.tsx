@@ -28,7 +28,6 @@ import {
   chatTimeouts,
   clearChatBusy,
   markChatBusy,
-  shouldKeepReasoning,
   shouldPersistReply,
 } from "./chatGuard";
 import "./PetChat.css";
@@ -158,6 +157,7 @@ export function PetChat() {
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   /** 首字是否已经到达（分级超时用）。 */
   const firstDeltaRef = useRef(false);
+  /** 正在进行的流式请求：用于「停止生成」和防止旧请求回写。 */
 
   // 打开聊天总是停在最新一条：挂载时直接跳到底部（不要动画），
   // 之后消息变化、窗口/面板高度变化（展开动画、聊天框高度设置）都重新贴底。
@@ -350,10 +350,29 @@ export function PetChat() {
   const streamLocalReply = useCallback(
     async (message: string, history: ChatMessage[], images: string[]) => {
       const requestId = createId();
+      const active = { requestId, cancelled: false };
+      activeRequestRef.current = active;
+      firstDeltaRef.current = false;
+      const depth = chatConfig.thinkingDepth;
+      const timeouts = chatTimeouts(depth);
+      let rejectGuard: ((error: Error) => void) | null = null;
+      const guard = new Promise<never>((_, reject) => {
+        rejectGuard = reject;
+      });
+      const failWith = (reason: string) => {
+        if (active.cancelled) return;
+        active.cancelled = true;
+        // 让 Rust 侧尽快断开连接、释放模型槽位。
+        void invoke("local_chat_cancel", { requestId }).catch(() => undefined);
+        rejectGuard?.(new Error(reason));
+      };
+      let firstTimer: number | null = null;
+      let totalTimer: number | null = null;
       const unlisten = chatConfig.stream
         ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
-          if (event.payload.requestId !== requestId) return;
+          if (event.payload.requestId !== requestId || active.cancelled) return;
           if (event.payload.kind === "delta") {
+            firstDeltaRef.current = true;
             setStreamingReply((current) => current + event.payload.text);
           } else if (event.payload.kind === "reasoning") {
             setStreamingReasoning((current) => current + event.payload.text);
@@ -363,7 +382,15 @@ export function PetChat() {
         })
         : null;
       try {
-        const depth = chatConfig.thinkingDepth;
+        // 分级硬超时：首字迟迟不来 / 整轮太慢都主动中止并复位 busy。
+        firstTimer = window.setTimeout(() => {
+          if (!firstDeltaRef.current) {
+            failWith("模型没响应，已停止。可能还在加载，稍后再试一次。");
+          }
+        }, timeouts.firstTokenMs);
+        totalTimer = window.setTimeout(() => {
+          failWith("模型这轮太慢了，已停止。可以调浅思考或稍后重试。");
+        }, timeouts.totalMs);
         const payload = {
           requestId,
           baseUrl: chatConfig.baseUrl,
@@ -374,7 +401,8 @@ export function PetChat() {
           character,
           images: images.length > 0 ? images : null,
           settings: {
-            maxTokens: chatConfig.maxTokens,
+            // 思考预算会吃 token：至少给「预算 + 256」，避免只有思考没有正文。
+            maxTokens: chatMaxTokens(chatConfig.maxTokens, depth),
             temperature: chatConfig.temperature,
             topP: chatConfig.topP,
             enableThinking: depth !== "off",
@@ -382,20 +410,32 @@ export function PetChat() {
             reasoningBudgetTokens: thinkingBudget(depth),
           },
         };
-        if (chatConfig.stream) {
-          return await invoke<string>("local_chat_stream", payload);
+        const reply = chatConfig.stream
+          ? await Promise.race([invoke<string>("local_chat_stream", payload), guard])
+          : await Promise.race([
+              invoke<string>("local_chat", {
+                baseUrl: payload.baseUrl,
+                model: payload.model,
+                apiKey: payload.apiKey,
+                message: payload.message,
+                history: payload.history,
+                character: payload.character,
+                images: payload.images,
+              }),
+              guard,
+            ]);
+        if (active.cancelled) {
+          throw new Error("已停止生成。");
         }
-        return await invoke<string>("local_chat", {
-          baseUrl: payload.baseUrl,
-          model: payload.model,
-          apiKey: payload.apiKey,
-          message: payload.message,
-          history: payload.history,
-          character: payload.character,
-          images: payload.images,
-        });
+        if (!reply || !reply.trim()) {
+          throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
+        }
+        return reply;
       } finally {
+        if (firstTimer !== null) window.clearTimeout(firstTimer);
+        if (totalTimer !== null) window.clearTimeout(totalTimer);
         unlisten?.();
+        if (activeRequestRef.current === active) activeRequestRef.current = null;
       }
     },
     [
@@ -410,8 +450,8 @@ export function PetChat() {
       chatConfig.topP,
     ],
   );
-  const send = useCallback(async () => {
-    const text = draft.trim();
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? draft).trim();
     const sendImages = attachments.map((item) => item.send);
     const thumbnails = attachments.map((item) => item.thumb);
     if ((!text && sendImages.length === 0) || busy) return;
@@ -450,6 +490,8 @@ export function PetChat() {
     setBusy(true);
     setStreamingReply("");
     setStreamingReasoning("");
+    setFailedPrompt(null);
+    markChatBusy(window.localStorage);
     try {
       let replyText: string | undefined;
       // 「动手」流程：先让模型判断要不要调用本机技能。
@@ -530,12 +572,22 @@ export function PetChat() {
           },
         );
         try {
-          const reply = await invoke<DshChatReply>("dsh_chat", {
-            message: text,
-            sessionId,
-            character,
-            requestId,
+          // DSH 同样要有总时长上限，避免命令/事件挂住导致永久 busy。
+          const dshGuard = new Promise<never>((_, reject) => {
+            window.setTimeout(
+              () => reject(new Error("模型没响应，已停止。")),
+              chatTimeouts(chatConfig.thinkingDepth).totalMs,
+            );
           });
+          const reply = await Promise.race([
+            invoke<DshChatReply>("dsh_chat", {
+              message: text,
+              sessionId,
+              character,
+              requestId,
+            }),
+            dshGuard,
+          ]);
           if (reply.sessionId) {
             setSessionId(reply.sessionId);
             window.localStorage.setItem(SESSION_KEY, reply.sessionId);
@@ -544,6 +596,9 @@ export function PetChat() {
         } finally {
           unlisten();
         }
+      }
+      if (!shouldPersistReply(replyText, false)) {
+        throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
       }
       const reasoningText = streamingReasoning.trim().slice(0, 4000);
       persist([
@@ -559,9 +614,14 @@ export function PetChat() {
       setStreamingReply("");
       setStreamingReasoning("");
     } catch (reason) {
-      setError(String(reason));
+      const message = String(reason);
+      setError(message);
+      // 失败/取消时不要把思考内容当答案留在界面上。
       setStreamingReply("");
+      setStreamingReasoning("");
+      setFailedPrompt(message.includes("已停止") ? null : text || null);
     } finally {
+      clearChatBusy(window.localStorage);
       setBusy(false);
     }
   }, [
@@ -585,6 +645,27 @@ export function PetChat() {
     t.chat.modelNotConfigured,
     t.chat.multimodalLocalOnly,
   ]);
+  /** 「停止生成」：标记取消、通知 Rust 断开连接并立刻复位界面。 */
+  const stopGeneration = useCallback(() => {
+    const active = activeRequestRef.current;
+    if (active) {
+      active.cancelled = true;
+      void invoke("local_chat_cancel", { requestId: active.requestId }).catch(() => undefined);
+    }
+    setBusy(false);
+    setWaitSeconds(0);
+    setStreamingReply("");
+    setStreamingReasoning("");
+    setError("已停止生成。");
+    clearChatBusy(window.localStorage);
+  }, []);
+  /** 失败后一键重试同一条提问。 */
+  const retryFailed = useCallback(() => {
+    if (!failedPrompt || busy) return;
+    setError(null);
+    setDraft("");
+    void send(failedPrompt);
+  }, [busy, failedPrompt, send]);
 
   const clear = useCallback(() => {
     persist([]);
@@ -780,9 +861,23 @@ export function PetChat() {
             <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
               <LoaderCircle size={15} className="pet-chat__spin" />
               <span>
-                {thinkingOn ? "小狗正在思考…" : t.chat.thinking}
-                {waitSeconds >= 1 ? `（${waitSeconds}s）` : ""}
+                {waitSeconds >= 3
+                  ? `小狗在加载模型或思考，稍等（${waitSeconds}s）`
+                  : thinkingOn
+                    ? "小狗正在思考…"
+                    : t.chat.thinking}
+                {waitSeconds >= 1 && waitSeconds < 3 ? `（${waitSeconds}s）` : ""}
               </span>
+              <button
+                type="button"
+                className="pet-chat__stop"
+                title="停止生成"
+                aria-label="停止生成"
+                onClick={stopGeneration}
+              >
+                <Square size={11} strokeWidth={2.4} />
+                停止
+              </button>
             </div>
           </div>
         )}
@@ -793,7 +888,17 @@ export function PetChat() {
         )}
       </div>
 
-      {error && <p className="pet-chat__error" role="alert">{error}</p>}
+      {error && (
+        <p className="pet-chat__error" role="alert">
+          <span>{error}</span>
+          {failedPrompt && !busy && (
+            <button type="button" className="pet-chat__retry" onClick={retryFailed}>
+              <RotateCcw size={12} strokeWidth={2.2} />
+              重试
+            </button>
+          )}
+        </p>
+      )}
 
       {attachments.length > 0 && (
         <div className="pet-chat__attachments">

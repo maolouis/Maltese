@@ -4,7 +4,7 @@
 // 背景：docs/chat-vs-proactive-diagnosis-2026-11-17.md —— 思考预算会把 max_tokens
 // 吃光、流式空正文没有兜底、前端没有取消和分级超时，用户看到的是「一直卡住」。
 
-import { thinkingBudget, type ThinkingDepth } from "./localChat";
+import { thinkingBudget, type ThinkingDepth } from "./localChat.ts";
 
 /** 思考档位对应的「首字最迟多久」：浅/标准/深 分别 8s / 20s / 20s（深档首字同样放宽）。 */
 export const CHAT_FIRST_TOKEN_TIMEOUT_MS: Record<ThinkingDepth, number> = {

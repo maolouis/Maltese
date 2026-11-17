@@ -471,3 +471,44 @@
 .pet-chat__pin:active {
   transform: translateY(0) scale(0.97);
 }
+/* 忙碌时的「停止生成」和失败后的「重试」 */
+.pet-chat__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #e3b1b1;
+  background: #fff5f5;
+  color: #b44444;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.pet-chat__stop:hover {
+  background: #ffe8e8;
+}
+
+.pet-chat__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid #cfe0d6;
+  background: #f4fbf6;
+  color: #2f6b4f;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.pet-chat__error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}

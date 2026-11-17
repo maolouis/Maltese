@@ -66,6 +66,7 @@ import { useQQMail, type QQMailController } from "./QQMail";
 import { MessagesPanel, messagePanelHeight, type MessageView } from "./Messages";
 import { latestMessagePreview, type MessageSource } from "./messagePreview";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
+import { shouldSkipProactiveForChat } from "./chatGuard";
 import { previewPetLinkage } from "./petLinkPreview";
 import {
   buildLinkPlan,
@@ -7154,6 +7155,8 @@ function IslandApp({
     const tick = async (force = false) => {
       // 面板展开或正在聊天时先不插话，等回到挂机状态再处理。
       if (modeRef.current !== "collapsed") return;
+      // 对话优先：用户正在聊天 / 刚结束 60s 内，主动聊天直接让路，别抢单槽位。
+      if (!force && shouldSkipProactiveForChat(window.localStorage)) return;
       const now = Date.now();
       // 免打扰时段与每小时上限：手动「立即试一句」也遵守上限，但不吃静默时段。
       if (inQuietHours(plan) && !force) return;
