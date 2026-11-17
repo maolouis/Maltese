@@ -3,6 +3,14 @@
 // 目标是让小狗像一个真的在旁边的人：先说它看到了什么（界面 / 在听的歌 / 坐了多久），
 // 再给一句有情绪的回应；并且避免每天说同样的话。
 
+import {
+  buildProactiveVitalsLine,
+  describeRecentInteractions,
+  loadVitalsSummary,
+  readVitalsRaw,
+  type VitalsSummary,
+} from "./petContext.ts";
+
 export type ProactiveContext = {
   /** 前台程序类型：code / browser / video / music / chat / meeting / design / game / other */
   kind: string;
@@ -20,6 +28,10 @@ export type ProactiveContext = {
   recentEvents: string[];
   /** 当前桌宠形象：xiaobai / xiaojimao / duo */
   character?: string;
+  /** 小狗当前自我状态（缺省时自动读 localStorage，读不到就完全不影响提示词）。 */
+  vitals?: VitalsSummary;
+  /** 最近互动描述（"3 分钟前被摸头"，不含聊天正文）。 */
+  recentInteractions?: string[];
 };
 
 const HISTORY_KEY = "maltese-proactive-history";
@@ -148,16 +160,20 @@ export function isRepeated(line: string, history = recentLines()): boolean {
 }
 
 /** 选一个最近最少用过的角度，避免每次都是「心疼你」那一套。 */
-export function pickAngle(history = readHistoryEntries()): ProactiveAngle {
+export function pickAngle(history = readHistoryEntries(), vitals?: VitalsSummary | null): ProactiveAngle {
   const lastUsed = new Map<ProactiveAngle, number>();
   for (const entry of history) {
     if (entry.angle && !lastUsed.has(entry.angle)) lastUsed.set(entry.angle, entry.at);
   }
-  const unused = ANGLES.filter((angle) => !lastUsed.has(angle.id));
+  // 体力低时优先「心疼 / 共情 / 说自己在干嘛」这类安静角度，别兴奋地调侃。
+  const pool = vitals && vitals.energy < 35
+    ? ANGLES.filter((angle) => angle.id === "care" || angle.id === "empathy" || angle.id === "self")
+    : ANGLES;
+  const unused = pool.filter((angle) => !lastUsed.has(angle.id));
   if (unused.length > 0) {
     return unused[Math.floor(Math.random() * unused.length)].id;
   }
-  const sorted = [...ANGLES].sort(
+  const sorted = [...pool].sort(
     (a, b) => (lastUsed.get(a.id) ?? 0) - (lastUsed.get(b.id) ?? 0),
   );
   // 在最早用过的三个里随机，避免完全固定顺序。
@@ -260,6 +276,12 @@ export function buildPrompt(
   if (context.recentEvents.length > 0) {
     facts.push(`最近做过的事：${context.recentEvents.slice(0, 3).join("；")}`);
   }
+  // 小狗自己的状态 + 最近的互动：没数据时整段不出现，保证旧提示词逐字不变。
+  const vitalsLine = buildProactiveVitalsLine(
+    context.vitals ?? loadVitalsSummary(),
+    context.recentInteractions ?? describeRecentInteractions(readVitalsRaw()),
+  );
+  if (vitalsLine) facts.push(vitalsLine);
 
   const lines = [
     "你是住在主人电脑桌面上的线条小狗，现在主动找主人搭话。",
@@ -297,6 +319,19 @@ type FallbackRule = {
 };
 
 const FALLBACKS: FallbackRule[] = [
+  {
+    // 体力低：只说「累 / 想睡 / 趴一会儿」系的台词（优先于其它规则）。
+    when: (c) => {
+      const vitals = c.vitals ?? loadVitalsSummary();
+      return Boolean(vitals && vitals.energy < 35);
+    },
+    lines: [
+      "有点困了，我趴你旁边眯一会儿",
+      "今天好累呀，你也别撑了",
+      "眼皮打架了……我再陪你一小会儿",
+      "我先趴着，你忙完叫我",
+    ],
+  },
   {
     when: (c) => c.kind === "video" && Boolean(c.mediaTitle),
     lines: [
@@ -436,6 +471,14 @@ export function pickFallback(
   history = recentLines(),
   angle: ProactiveAngle = pickAngle(),
 ): string {
+  // 体力低：只从「累 / 困 / 趴」系台词里挑，别兴奋地调侃（人设一致性优先于角度轮换）。
+  const vitalsForFallback = context.vitals ?? loadVitalsSummary();
+  if (vitalsForFallback && vitalsForFallback.energy < 35) {
+    const tired = FALLBACKS[0].lines.map((line) => fillTemplate(line, context));
+    const fresh = tired.filter((line) => !isRepeated(line, history));
+    const pool = fresh.length > 0 ? fresh : tired;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
   const matching = FALLBACKS.filter((rule) => rule.when(context));
   const pool: string[] = [];
   // 与当前角度相关的句子优先，但不独占（避免模板太少反而更容易重复）。

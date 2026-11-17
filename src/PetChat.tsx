@@ -30,6 +30,7 @@ import {
   markChatBusy,
   shouldPersistReply,
 } from "./chatGuard";
+import { buildChatVitalsContext } from "./petContext";
 import "./PetChat.css";
 
 type DshChatReply = { text: string; sessionId: string | null };
@@ -85,6 +86,18 @@ function createId() {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * 把小狗状态/近期互动拼成一条 system 消息放进历史（不污染用户消息）。
+ * 没有状态数据时返回原历史，提示词与旧版完全一致。
+ */
+function withVitalsContext(
+  history: ChatMessage[],
+): Array<{ role: string; content: string }> {
+  const turns = history.slice(-16).map((item) => ({ role: item.role, content: item.text }));
+  const vitals = buildChatVitalsContext();
+  return vitals ? [{ role: "system", content: vitals }, ...turns] : turns;
 }
 
 function loadMessages(): ChatMessage[] {
@@ -397,7 +410,8 @@ export function PetChat() {
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
           message,
-          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          // 小狗自我状态 + 近期互动作为「系统上下文」注入（不进用户消息，也没有状态时整段省略）。
+          history: withVitalsContext(history),
           character,
           images: images.length > 0 ? images : null,
           settings: {
