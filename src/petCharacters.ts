@@ -155,11 +155,10 @@ function mergeShared(own: string[], shared: string[]): string[] {
 }
 
 /**
- * 单个状态最多轮播多少张：素材池里一个动作可能有 100 多张 GIF，
- * 全部预加载会吃掉几十 MB 内存，这里按均匀间隔抽一批，本次运行保持不变。
+ * 单个状态的轮播列表直接给完整素材池：播放端只预加载后面几张（PRELOAD_AHEAD），
+ * 不会再因为池子大就吃几十 MB 内存；而设置页的「共 N 张」必须等于素材池总量，
+ * 之前按 30 张抽样会把默认轮播列表和 UI 数量一起截小。
  */
-const MAX_FRAMES_PER_STATE = 30;
-
 const frameCache = new Map<string, string[]>();
 const rawFrameCache = new Map<string, string[]>();
 
@@ -196,17 +195,6 @@ function computeFrames(
   return xiaobai.length > 0 ? xiaobai : fallbackIdle();
 }
 
-/** 均匀抽样整个素材池，保证一次运行里各个动作的图都能轮到几张。 */function sampleFrames(frames: string[]): string[] {
-  if (frames.length <= MAX_FRAMES_PER_STATE) return frames;
-  const stride = frames.length / MAX_FRAMES_PER_STATE;
-  const offset = Math.floor(Math.random() * frames.length);
-  const picked: string[] = [];
-  for (let index = 0; index < MAX_FRAMES_PER_STATE; index += 1) {
-    picked.push(frames[Math.floor(offset + index * stride) % frames.length]);
-  }
-  return [...new Set(picked)];
-}
-
 /**
  * 某个形象在某个界面状态下的 GIF 列表（顺序稳定，可直接用于轮播）。
  *
@@ -240,7 +228,7 @@ export function characterFramePaths(
   const key = `${character}|${state}|${ownOnly ? "own" : "all"}`;
   const cached = rawFrameCache.get(key);
   if (cached) return cached;
-  const frames = sampleFrames(computeFrames(character, state, ownOnly));
+  const frames = computeFrames(character, state, ownOnly);
   rawFrameCache.set(key, frames);
   return frames;
 }
