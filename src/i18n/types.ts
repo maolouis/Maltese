@@ -352,6 +352,12 @@ export type Translations = {
     trashRestore: string;
     trashMeta: (character: string, state: string) => string;
     states: Record<string, string>;
+    /** 素材库总览（设置页）：总数 / 分组 / 去重与同框规则说明。 */
+    libraryTitle: string;
+    libraryTotal: (count: number) => string;
+    libraryGroup: (name: string, count: number) => string;
+    libraryNote: string;
+    librarySampled: (visible: number, pool: number) => string;
   };
 
   petLink: {

@@ -528,3 +528,56 @@
   padding: 4px 10px;
   font-size: 11.5px;
 }
+
+/* 素材库总览：把「物理文件 1172 / 去重清单 789 / 当前表情可选 / 轮播抽样」四个口径摊开。 */
+.pet-gif-settings__library {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(120, 205, 150, 0.08);
+  border: 1px solid rgba(120, 205, 150, 0.28);
+  font-size: 11.5px;
+  color: #4a505c;
+}
+
+.pet-gif-settings__library-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pet-gif-settings__library-title {
+  font-weight: 600;
+}
+
+.pet-gif-settings__library-total {
+  color: #2f8d57;
+}
+
+.pet-gif-settings__library-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pet-gif-settings__library-group {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(120, 205, 150, 0.4);
+  color: #2f8d57;
+}
+
+.pet-gif-settings__library-sampled,
+.pet-gif-settings__library-note {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pet-gif-settings__library-note {
+  color: #8a909d;
+}

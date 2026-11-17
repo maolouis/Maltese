@@ -41,7 +41,11 @@ import {
 } from "./petGifTrash";
 import {
   characterAllFrames,
+  PET_ASSET_GROUP_LABELS,
   PET_CHARACTER_LABELS,
+  PET_ROTATION_FRAMES_PER_STATE,
+  petAssetGroupCounts,
+  petAssetTotalCount,
   usePetCharacter,
   type PetCharacterId,
 } from "./petCharacters";
@@ -572,9 +576,9 @@ export function PetGifRotationSettings() {
       {expanded && (
         <>
           <div className="pet-gif-settings__toolbar">
-            {/* 数量标签必须等于方格墙实际显示的格子数（已选 + 素材池未选），
-                否则「标签 30、格子 96」这类对不上；悬停可看你已选了多少。 */}
-            <span title={`已选 ${items.length} 张，素材库共 ${availableItems.length} 张`}>
+            {/* 数量标签必须等于方格墙实际显示的格子数（已选 + 素材池未选）：
+                悬停能看到「已选 / 本表情素材 / 素材库总数」三个口径。 */}
+            <span title={`已选 ${items.length} 张 / 本表情素材 ${availableItems.length} 张 / 素材库共 ${petAssetTotalCount()} 张`}>
               {t.petGifs.count(displayItems.length)}
             </span>
             <span className="pet-gif-settings__toolbar-hint">{t.petGifs.reorderHint}</span>
@@ -596,6 +600,28 @@ export function PetGifRotationSettings() {
               <RotateCcw size={13} />
               {t.petGifs.reset}
             </button>
+          </div>
+
+          {/* 素材库总览：回答「素材库应该不止这么一点」——把 1172 个物理文件 /
+              789 条去重清单 / 当前表情可选 / 轮播抽样 四个口径一次说清。 */}
+          <div className="pet-gif-settings__library">
+            <div className="pet-gif-settings__library-head">
+              <span className="pet-gif-settings__library-title">{t.petGifs.libraryTitle}</span>
+              <span className="pet-gif-settings__library-total">
+                {t.petGifs.libraryTotal(petAssetTotalCount())}
+              </span>
+            </div>
+            <div className="pet-gif-settings__library-groups">
+              {Object.entries(petAssetGroupCounts()).map(([group, count]) => (
+                <span key={group} className="pet-gif-settings__library-group">
+                  {t.petGifs.libraryGroup(PET_ASSET_GROUP_LABELS[group] ?? group, count)}
+                </span>
+              ))}
+            </div>
+            <p className="pet-gif-settings__library-sampled">
+              {t.petGifs.librarySampled(Math.min(PET_ROTATION_FRAMES_PER_STATE, availableItems.length), availableItems.length)}
+            </p>
+            <p className="pet-gif-settings__library-note">{t.petGifs.libraryNote}</p>
           </div>
 
           {error && <p className="pet-gif-settings__error">{error}</p>}

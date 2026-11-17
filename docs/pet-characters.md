@@ -21,7 +21,24 @@ assets/pets/chars/
 node scripts/build-pet-manifest.mjs
 ```
 
-它会扫描上面三个目录，写出 `src/petCharacterAssets.generated.ts`。新增素材后重跑这个脚本即可，不需要改代码。
+它现在扫**三处**（顺序固定，stable diff）：
+
+| 扫描位置 | 物理文件 | 清单条目 | 说明 |
+| --- | --- | --- | --- |
+| `chars/xiaobai` | 394 | 394 | 全量收 |
+| `chars/xiaojimao` | 233 | 233 | 全量收 |
+| `chars/shared` | 152 | 152 | 全量收，只给 duo |
+| `stickers/weibo` | 296 | **9** | 其余 287 张与 chars 内容完全相同（sha256），跳过 |
+| 根级状态目录 + 根级 GIF | 97 | **1**（`rest.gif`） | 其余 96 张与 chars 重复，跳过 |
+| **合计** | **1172** | **789** | 按内容去重后的唯一素材 = 789 条 |
+
+- 去重按**文件内容 sha256**，不按文件名：素材多次归位后同名不同图很常见。
+- `stickers` 的 9 张与 `legacy` 的 `rest.gif` 都并入了**单角色**（小白 / 小鸡毛）的素材池（`petCharacters.extraPoolFrames`），
+  duo 只播同框池；微博表情包小动作按语义对齐：`sleep→sleeping`、`eat→eating`、`work→working`、`nervous→scared`、
+  `hop→celebrate`、`paper→attention`、`walk→chase`。
+- 设置页「表情轮播」里新增**素材库总览**：显示 789 条清单的分组计数，并说明「双狗同框图只给小白和小鸡毛」
+  「内容重复只保留一份」「轮播每个表情随机抽 30 张」。测试见 `tests/pet-asset-inventory.test.mjs`
+  （保证不会有「磁盘上有图、清单里没有」的孤儿素材）。
 
 ## 三个形象
 
@@ -156,7 +173,9 @@ HTML5 拖放事件（`dragstart/dragover/drop`）根本送不到网页 → React
 
 - **按动作分目录**：`weibo/<动作>/<组>-<序号>.gif`，动作名对齐 `assets/pets/chars/` 现有的 `idle / happy / pet / sleep / eat / relax / play / nervous / scared / peek / hide / work / paper / hop / walk`，另按画面补了 6 个新动作名 `angry`、`cry`、`love`、`ride`、`bath`、`costume`，共 21 类。逐张清单见同目录 `by-action.md`。
 - 每张还带情绪标签（开心 / 亲昵 / 难过 / 生气 / 惊讶 / 困倦 / 无语 / 害羞 / 进食 / 玩耍 / 中性），清单见 `by-emotion.md`。
-- **整库已并入轮播池**：21 类 296 张全部并入 `assets/pets/chars/shared/<动作>/`，随后按角色归位——单只小白 / 小鸡毛回到各自目录，`shared` 只留同框素材（当前 152 张）。默认形象每 3 张本角色图插 1 张同框图，所以官方表情包会自然混进轮播。
+- **归位与去重（2026-11-17 复查）**：296 张里 **287 张与 chars 内容完全相同**（按 sha256 比对，分布在
+  xiaobai 137 / xiaojimao 80 / shared 70），只有 **9 张是唯一内容**（`happy×4`、`scared×2`、`eating×1`、`pet×1`、`sleeping×1`）。
+  这 9 张已收进清单的 `stickers` 分组并并入小白的素材池；其余 287 张不重复计数，避免「同一张图在设置页出现两次、库存虚高」。
   `src/petCharacters.ts` 的 `STATE_TO_ACTION` 与 `ACTION_FALLBACK` 已挂上 6 个新动作
   （回退链分别是 `angry → nervous → scared → idle`、`cry → scared → nervous → idle`、`love → pet → happy → idle`、
   `ride → play → walk → idle`、`bath → relax → idle`、`costume → happy → idle`），

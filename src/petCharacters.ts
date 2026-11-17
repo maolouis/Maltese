@@ -9,7 +9,7 @@
 // 保证任何形象在任何状态下都有画面。
 
 import { useCallback, useEffect, useState } from "react";
-import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
+import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated.ts";
 import { petAssetUrl } from "./petAssetBase";
 
 export type PetCharacterId = "xiaobai" | "xiaojimao" | "duo";
@@ -152,10 +152,51 @@ function fallbackIdle(): string[] {
 }
 
 /**
+ * 额外素材池：官方微博表情包里「内容唯一」的 9 张 + 旧版兜底 rest.gif。
+ * 其余 287 张微博表情包与 chars 内容完全相同（生成脚本按 sha256 去重），不重复计入。
+ * 两只单角色都能用（贴纸是通用线条小狗画风）；duo 只播同框池，不混单只素材。
+ */
+const EXTRA_POOLS = ["stickers", "legacy"] as const;
+
+function extraPoolFrames(character: PetCharacterId, action: string): string[] {
+  if (character === "duo") return [];
+  const frames: string[] = [];
+  for (const pool of EXTRA_POOLS) {
+    frames.push(...(PET_CHARACTER_ASSETS[pool]?.[action] ?? []));
+  }
+  return frames;
+}
+
+/** 素材库分组（设置页总览用）：id -> 中文名。 */
+export const PET_ASSET_GROUP_LABELS: Record<string, string> = {
+  xiaobai: "小白",
+  xiaojimao: "小鸡毛",
+  shared: "双狗同框",
+  stickers: "微博表情包（仅内容唯一）",
+  legacy: "旧版兜底",
+};
+
+/** 素材库各分组条数（清单条目，不含被内容去重的重复文件）。 */
+export function petAssetGroupCounts(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const [group, actions] of Object.entries(PET_CHARACTER_ASSETS)) {
+    counts[group] = Object.values(actions).reduce((sum, files) => sum + files.length, 0);
+  }
+  return counts;
+}
+
+/** 素材库总条数（= 设置页「素材库 M」）。 */
+export function petAssetTotalCount(): number {
+  return Object.values(petAssetGroupCounts()).reduce((sum, count) => sum + count, 0);
+}
+
+/**
  * 单个状态最多轮播多少张：素材池里一个动作可能有 100 多张 GIF，
  * 全部预加载会吃掉几十 MB 内存，这里按均匀间隔抽一批，本次运行保持不变。
  */
 const MAX_FRAMES_PER_STATE = 30;
+/** 设置页提示用：轮播每个状态最多抽多少张（完整素材池仍然全部可选）。 */
+export const PET_ROTATION_FRAMES_PER_STATE = MAX_FRAMES_PER_STATE;
 
 const frameCache = new Map<string, string[]>();
 const rawFrameCache = new Map<string, string[]>();
@@ -180,10 +221,10 @@ function computeFrames(
     return own.length > 0 ? own : fallbackIdle();
   }
 
-  const own = collectFrames(character, action);
+  const own = [...collectFrames(character, action), ...extraPoolFrames(character, action)];
   // 单角色（小白 / 小鸡毛）只播自己的素材，不再混入双狗同框图；
   // 同框池只给「一起出现」(duo) 用。
-  if (own.length > 0) return own;
+  if (own.length > 0) return [...new Set(own)];
   const xiaobai = collectFrames("xiaobai", action);
   return xiaobai.length > 0 ? xiaobai : fallbackIdle();
 }
