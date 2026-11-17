@@ -7,6 +7,14 @@ import {
   loadPetCharacter,
   type PetCharacterId,
 } from "./petCharacters";
+import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
+
+/** 内置素材的真实清单（磁盘上确实存在、能被加载的路径）。
+ *  素材库多次归位后，旧配置里还留着已移动/已删除文件的路径：这些条目在设置页
+ *  计入「共 N 张」却永远加载不出来，数量自然对不上。读取时直接剔除，不改 UI。 */
+const BUILTIN_ASSET_PATHS = new Set(
+  Object.values(PET_CHARACTER_ASSETS).flatMap((actions) => Object.values(actions).flat()),
+);
 
 /** 旧版按状态存的配置键，读取时迁移到小白。 */
 const LEGACY_STORAGE_KEY = "maltese-pet-gif-rotation";
@@ -165,7 +173,10 @@ export function loadPetGifRotationConfig(
     if (!Array.isArray(list)) continue;
     // 显式保存空数组是合法的：用户删光后，主狗会退回默认顺序显示。
     defaults[state] = dedupeRotationItems(
-      list.map(normalizeItem).filter((item): item is PetGifRotationItem => item !== null),
+      list
+        .map(normalizeItem)
+        .filter((item): item is PetGifRotationItem => item !== null)
+        .filter((item) => item.custom === true || !item.src || BUILTIN_ASSET_PATHS.has(item.src)),
     );
   }
   return defaults;
