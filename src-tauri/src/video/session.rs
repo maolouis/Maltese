@@ -686,7 +686,8 @@ impl SessionEngine {
             try_transition(&mut state.phase, Phase::Collecting, &mut diagnostics);
             state.diagnostics = diagnostics;
 
-            let session = VideoSession::new(session_id, provider, started_at);
+            let mut session = VideoSession::new(session_id, provider, started_at);
+            session.account_id = account_id.clone();
             self.store.save_session(&session);
         }
 
@@ -1151,6 +1152,7 @@ impl SessionEngine {
             let session = VideoSession {
                 session_id: state.session_id.clone(),
                 platform: state.platform,
+                account_id: state.account_id.clone(),
                 started_at: state.started_at,
                 ended_at: Some(ended_at),
                 stop_reason: Some(reason),

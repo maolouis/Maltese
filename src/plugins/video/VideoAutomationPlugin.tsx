@@ -7,7 +7,7 @@
 // 一行状态条 + 平台/登录 + 小结 +「高级设置」折叠 +「评论」折叠；
 // 首屏不放参数、账号档案、自检、诊断、观后感草稿。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./VideoAutomationPlugin.css";
 import "../../App.css";
@@ -46,6 +46,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [commentDraft, setCommentDraft] = useState("");
   const [commentStatus, setCommentStatus] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
+  const accountSelectionHydrated = useRef(false);
 
   const snapshot = video.snapshot;
   const running = snapshot?.running ?? false;
@@ -56,6 +57,15 @@ export function VideoAutomationPanel({ onNotice }: Props) {
     setPageInterval(snapshot.intervalSeconds);
     setMaxMinutes(snapshot.maxMinutes);
   }, [snapshot]);
+
+  useEffect(() => {
+    if (!video.activeAccountLoaded || accountSelectionHydrated.current) return;
+    accountSelectionHydrated.current = true;
+    if (video.activeAccount) {
+      setSelectedAccountId(video.activeAccount.id);
+      setProvider(video.activeAccount.platform);
+    }
+  }, [video.activeAccount, video.activeAccountLoaded]);
 
   useEffect(() => {
     const selected = video.accounts.find((item) => item.id === selectedAccountId);
@@ -129,6 +139,8 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         goals: accountGoals,
       });
       setSelectedAccountId(account.id);
+      setProvider(account.platform);
+      await video.setActiveAccount(account.id);
       onNotice(`已创建「${account.displayName}」账号档案`);
     } catch (reason) {
       setLocalError(describeVideoError(reason, "创建账号档案失败。"));
@@ -279,6 +291,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         pendingCount={snapshot?.pendingCount ?? 0}
         preview={video.preview}
         sessions={video.sessions}
+        accounts={video.accounts}
         onTake={() => void video.takePending()}
         onLoadSessions={() => void video.loadSessions()}
       />

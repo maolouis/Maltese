@@ -38,6 +38,8 @@ export type VideoPluginState = {
   snapshot: VideoSnapshot | null;
   config: VideoConfig;
   accounts: AgentAccount[];
+  activeAccount: AgentAccount | null;
+  activeAccountLoaded: boolean;
   channel: ChannelState | null;
   diagnostics: DiagnosticEntry[];
   sessions: SessionSummary[];
@@ -69,6 +71,8 @@ export function useVideoPluginState(): VideoPluginState {
   const [snapshot, setSnapshot] = useState<VideoSnapshot | null>(null);
   const [config, setConfig] = useState<VideoConfig>(DEFAULT_VIDEO_CONFIG);
   const [accounts, setAccounts] = useState<AgentAccount[]>([]);
+  const [activeAccount, setActiveAccountState] = useState<AgentAccount | null>(null);
+  const [activeAccountLoaded, setActiveAccountLoaded] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [preview, setPreview] = useState<DigestDraft | null>(null);
@@ -84,6 +88,21 @@ export function useVideoPluginState(): VideoPluginState {
     }
   }, []);
 
+  const loadActiveAccount = useCallback(async () => {
+    if (!isTauri()) {
+      setActiveAccountLoaded(true);
+      return;
+    }
+    try {
+      const result = await invoke<AgentAccount | null>("video_get_active_account");
+      setActiveAccountState(result && typeof result === "object" ? result : null);
+    } catch {
+      // 旧实例没有该命令时仍然允许面板工作，按临时观看处理。
+    } finally {
+      setActiveAccountLoaded(true);
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!isTauri()) return;
     try {
@@ -91,10 +110,11 @@ export function useVideoPluginState(): VideoPluginState {
       if (isVideoSnapshot(next)) setSnapshot(next);
       const listed = await invoke<AgentAccount[]>("video_list_accounts");
       if (Array.isArray(listed)) setAccounts(listed);
+      await loadActiveAccount();
     } catch {
       // 保留上一次状态，面板显示「暂时不可用」。
     }
-  }, []);
+  }, [loadActiveAccount]);
 
   useEffect(() => {
     void refresh();
@@ -133,15 +153,33 @@ export function useVideoPluginState(): VideoPluginState {
     void loadBrowserStatus();
   }, [loadBrowserStatus]);
 
+  const loadSessions = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await invoke<SessionSummary[]>("video_list_sessions", { limit: 20 });
+      if (Array.isArray(result)) setSessions(result);
+    } catch {
+      setSessions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSessions();
+  }, [loadSessions]);
+
   useEffect(() => {
     if (!isTauri()) return;
     const unlisten = listen<unknown>("video-session-updated", (event) => {
-      if (isVideoSnapshot(event.payload)) setSnapshot(event.payload);
+      if (!isVideoSnapshot(event.payload)) return;
+      setSnapshot(event.payload);
+      if (event.payload.phase === "ended" || event.payload.phase === "interrupted" || event.payload.phase === "stopped") {
+        void loadSessions();
+      }
     });
     return () => {
       void unlisten.then((stop) => stop());
     };
-  }, []);
+  }, [loadSessions]);
 
   const start = useCallback(async (provider: "bilibili" | "douyin", accountId?: string) => {
     await invoke("video_start_session", {
@@ -156,8 +194,8 @@ export function useVideoPluginState(): VideoPluginState {
       },
       accountId: accountId || undefined,
     });
-    await refresh();
-  }, [config, refresh]);
+    await Promise.all([refresh(), loadSessions()]);
+  }, [config, loadSessions, refresh]);
 
   const createAccount = useCallback(async (input: {
     platform: "bilibili" | "douyin";
@@ -173,23 +211,27 @@ export function useVideoPluginState(): VideoPluginState {
 
   const openAccountLogin = useCallback(async (account: AgentAccount) => {
     await invoke("video_open_login_window", { provider: account.platform, accountId: account.id });
-    setAccounts((current) => current.map((item) => item.id === account.id ? { ...item, status: "awaitingLogin" } : item));
+    const awaiting = { ...account, status: "awaitingLogin" as const };
+    setAccounts((current) => current.map((item) => item.id === account.id ? awaiting : item));
+    setActiveAccountState(awaiting);
   }, []);
 
   const markAccountReady = useCallback(async (accountId: string) => {
     const account = await invoke<AgentAccount>("video_mark_account_ready", { accountId });
     setAccounts((current) => current.map((item) => item.id === account.id ? account : item));
+    setActiveAccountState(account);
   }, []);
 
   const setActiveAccount = useCallback(async (accountId: string) => {
-    await invoke("video_set_active_account", { accountId });
-    await refresh();
-  }, [refresh]);
+    const account = await invoke<AgentAccount>("video_set_active_account", { accountId });
+    setActiveAccountState(account);
+    await Promise.all([refresh(), loadSessions()]);
+  }, [loadSessions, refresh]);
 
   const stop = useCallback(async () => {
     await invoke("video_stop_session");
-    await refresh();
-  }, [refresh]);
+    await Promise.all([refresh(), loadSessions()]);
+  }, [loadSessions, refresh]);
 
   const updateConfig = useCallback(async (patch: Partial<VideoConfig>) => {
     const next = { ...config, ...patch };
@@ -223,16 +265,6 @@ export function useVideoPluginState(): VideoPluginState {
     await Promise.all([refresh(), loadBrowserStatus()]);
   }, [loadBrowserStatus, refresh]);
 
-  const loadSessions = useCallback(async () => {
-    if (!isTauri()) return;
-    try {
-      const result = await invoke<SessionSummary[]>("video_list_sessions", { limit: 20 });
-      if (Array.isArray(result)) setSessions(result);
-    } catch {
-      setSessions([]);
-    }
-  }, []);
-
   const takePending = useCallback(async () => {
     if (!isTauri()) return;
     try {
@@ -255,6 +287,8 @@ export function useVideoPluginState(): VideoPluginState {
     snapshot,
     config,
     accounts,
+    activeAccount,
+    activeAccountLoaded,
     channel: snapshot?.channel ?? null,
     diagnostics,
     sessions,

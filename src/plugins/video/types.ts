@@ -155,6 +155,8 @@ export type DiagnosticEntry = {
 export type SessionSummary = {
   sessionId: string;
   platform: Platform;
+  /** 旧版本历史没有账号归属时为 null，表示临时观看。 */
+  accountId: string | null;
   startedAt: number;
   endedAt: number | null;
   stopReason: StopReason | null;

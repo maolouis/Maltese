@@ -1,12 +1,13 @@
 // 小结与历史：待投递小结 + 历史会话（QA §1 #7：只保留必要内容，清空数据移到「高级设置」）。
 
-import type { DigestDraft, SessionSummary } from "./types";
+import type { AgentAccount, DigestDraft, SessionSummary } from "./types";
 import { sessionReason } from "./videoPanelLogic";
 
 type Props = {
   pendingCount: number;
   preview: DigestDraft | null;
   sessions: SessionSummary[];
+  accounts: AgentAccount[];
   onTake: () => void;
   onLoadSessions: () => void;
 };
@@ -19,6 +20,7 @@ export function VideoDigestList({
   pendingCount,
   preview,
   sessions,
+  accounts,
   onTake,
   onLoadSessions,
 }: Props) {
@@ -65,12 +67,18 @@ export function VideoDigestList({
             {sessions.map((session) => (
               <li key={session.sessionId}>
                 {dateText(session.startedAt)} · {session.platform === "bilibili" ? "B站" : "抖音"}
+                · {session.accountId
+                  ? `账号 ${accounts.find((account) => account.id === session.accountId)?.displayName ?? "已移除"}`
+                  : "临时观看"}
                 · {sessionReason(session)}
                 · 条目 {session.itemCount}
               </li>
             ))}
           </ul>
         </details>
+      )}
+      {sessions.length === 0 && (
+        <p className="video-automation__muted">暂无历史会话；小狗完成一轮观看后会自动显示在这里。</p>
       )}
     </div>
   );

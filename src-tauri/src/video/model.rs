@@ -393,6 +393,9 @@ impl Default for DigestGenerator {
 pub struct VideoSession {
     pub session_id: String,
     pub platform: Platform,
+    /// 绑定的小狗账号。旧版本会话没有这个字段，反序列化时按临时观看处理。
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub started_at: u64,
     pub ended_at: Option<u64>,
     pub stop_reason: Option<StopReason>,
@@ -411,6 +414,7 @@ impl VideoSession {
         Self {
             session_id,
             platform,
+            account_id: None,
             started_at,
             ended_at: None,
             stop_reason: None,
@@ -437,6 +441,9 @@ impl Default for Platform {
 pub struct SessionSummary {
     pub session_id: String,
     pub platform: Platform,
+    /// 绑定的小狗账号。旧版本索引没有这个字段，按临时观看展示。
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub started_at: u64,
     pub ended_at: Option<u64>,
     pub stop_reason: Option<StopReason>,
@@ -452,6 +459,7 @@ impl From<&VideoSession> for SessionSummary {
         Self {
             session_id: session.session_id.clone(),
             platform: session.platform,
+            account_id: session.account_id.clone(),
             started_at: session.started_at,
             ended_at: session.ended_at,
             stop_reason: session.stop_reason,
@@ -596,9 +604,17 @@ mod tests {
     #[test]
     fn snapshot_serializes_camel_case() {
         let session = VideoSession::new("bili-1".to_string(), Platform::Bilibili, 10);
-        let value = serde_json::to_value(&session).expect("serialize session");
+        let mut value = serde_json::to_value(&session).expect("serialize session");
         assert!(value.get("sessionId").is_some());
         assert!(value.get("channelCapability").is_some());
         assert!(value.get("schemaVersion").is_some());
+        assert!(value.get("accountId").is_some());
+
+        value
+            .as_object_mut()
+            .expect("session object")
+            .remove("accountId");
+        let legacy: VideoSession = serde_json::from_value(value).expect("legacy session");
+        assert_eq!(legacy.account_id, None);
     }
 }
