@@ -47,16 +47,21 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [commentStatus, setCommentStatus] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const accountSelectionHydrated = useRef(false);
+  const snapshotProviderHydrated = useRef(false);
 
   const snapshot = video.snapshot;
   const running = snapshot?.running ?? false;
 
   useEffect(() => {
     if (!snapshot) return;
-    setProvider(snapshot.provider);
+    const shouldApplyProvider = snapshot.running || !snapshotProviderHydrated.current;
+    if (shouldApplyProvider && (!video.activeAccount || video.activeAccount.platform === snapshot.provider || snapshot.running)) {
+      setProvider(snapshot.provider);
+    }
+    snapshotProviderHydrated.current = true;
     setPageInterval(snapshot.intervalSeconds);
     setMaxMinutes(snapshot.maxMinutes);
-  }, [snapshot]);
+  }, [snapshot, video.activeAccount]);
 
   useEffect(() => {
     if (!video.activeAccountLoaded || accountSelectionHydrated.current) return;
