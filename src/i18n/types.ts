@@ -358,6 +358,10 @@ export type Translations = {
     libraryGroup: (name: string, count: number) => string;
     libraryNote: string;
     librarySampled: (visible: number, pool: number) => string;
+    /** 同框素材只在 duo 形象下可选（避免用户以为丢了）。 */
+    librarySharedOnly: string;
+    /** 已删除多少张与 chars 完全重复的副本（体积收益）。 */
+    libraryDeduped: (count: number, mb: number) => string;
   };
 
   petLink: {

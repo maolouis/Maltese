@@ -41,6 +41,7 @@ import {
 } from "./petGifTrash";
 import {
   characterAllFrames,
+  PET_ASSET_DEDUPE,
   PET_ASSET_GROUP_LABELS,
   PET_CHARACTER_LABELS,
   PET_ROTATION_FRAMES_PER_STATE,
@@ -620,6 +621,10 @@ export function PetGifRotationSettings() {
             </div>
             <p className="pet-gif-settings__library-sampled">
               {t.petGifs.librarySampled(Math.min(PET_ROTATION_FRAMES_PER_STATE, availableItems.length), availableItems.length)}
+            </p>
+            <p className="pet-gif-settings__library-shared">{t.petGifs.librarySharedOnly}</p>
+            <p className="pet-gif-settings__library-deduped">
+              {t.petGifs.libraryDeduped(PET_ASSET_DEDUPE.removedFiles, PET_ASSET_DEDUPE.removedMB)}
             </p>
             <p className="pet-gif-settings__library-note">{t.petGifs.libraryNote}</p>
           </div>

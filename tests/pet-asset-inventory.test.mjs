@@ -1,5 +1,7 @@
 // 素材库清单一致性：物理文件 ↔ 生成清单 ↔ 设置页库存。
 // 目的：防止「磁盘上有图、设置里看不到」或「清单里有路径、磁盘上没有」再次发生。
+// 2026-11-17 去重后：磁盘上已没有与 chars 内容重复的副本（383 个已删），
+// 所以「物理 = 清单」是硬约束：1172 → 789。
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -34,36 +36,37 @@ test("清单里每个路径都在磁盘上（没有失效条目）", () => {
   assert.deepEqual(missing, [], `清单里有 ${missing.length} 个路径磁盘上不存在`);
 });
 
-test("磁盘上每个 GIF 要么在清单里，要么是清单条目的内容重复（不丢图）", () => {
-  const orphan = [];
-  for (const file of physical) {
-    if (manifestSet.has(file)) continue;
-    if (manifestHashes.has(hashOf(file))) continue; // 内容重复：已被别的条目代表
-    orphan.push(file);
-  }
-  assert.deepEqual(orphan, [], `有 ${orphan.length} 张素材既不在清单里、内容也不重复：${orphan.slice(0, 5).join(", ")}`);
+test("磁盘上每个 GIF 都在清单里（去重后不应再有未收录素材）", () => {
+  const orphan = physical.filter((file) => !manifestSet.has(file));
+  assert.deepEqual(orphan, [], `有 ${orphan.length} 张素材不在清单里：${orphan.slice(0, 5).join(", ")}`);
 });
 
-test("清单覆盖 chars 全量 + stickers/legacy 的唯一内容", () => {
-  // chars 三个角色全量收录（779 张）
+test("磁盘上没有与 chars 内容重复的副本（stickers / 旧兜底已按 sha256 清理）", () => {
+  const charsHashes = new Set(
+    physical.filter((file) => file.startsWith("chars/")).map(hashOf),
+  );
+  const duplicates = physical
+    .filter((file) => !file.startsWith("chars/"))
+    .filter((file) => charsHashes.has(hashOf(file)));
+  assert.deepEqual(duplicates, [], `仍有 ${duplicates.length} 个 chars 的重复副本`);
+});
+
+test("清单覆盖 chars 全量 + stickers 唯一 9 张 + legacy 唯一 1 张", () => {
   const charsPhysical = physical.filter((file) => file.startsWith("chars/"));
   assert.equal(charsPhysical.length, 779);
   for (const file of charsPhysical) assert.ok(manifestSet.has(file), `chars 素材漏收：${file}`);
-  // stickers 296 张里 287 张与 chars 重复，只收唯一 9 张
+  // 微博表情包：删除 287 张重复后只剩 9 张唯一内容
   const stickerPhysical = physical.filter((file) => file.startsWith("stickers/"));
-  assert.equal(stickerPhysical.length, 296);
-  const stickerInManifest = stickerPhysical.filter((file) => manifestSet.has(file));
-  assert.equal(stickerInManifest.length, 9);
-  // legacy 97 张里只有 rest.gif 唯一
+  assert.equal(stickerPhysical.length, 9);
+  for (const file of stickerPhysical) assert.ok(manifestSet.has(file), `stickers 漏收：${file}`);
+  // 旧兜底：只剩 rest.gif
   const legacyPhysical = physical.filter((file) => !file.startsWith("chars/") && !file.startsWith("stickers/"));
-  assert.equal(legacyPhysical.length, 97);
-  const legacyInManifest = legacyPhysical.filter((file) => manifestSet.has(file));
-  assert.deepEqual(legacyInManifest, ["rest.gif"]);
+  assert.deepEqual(legacyPhysical, ["rest.gif"]);
 });
 
-test("清单条数 = 789（779 chars + 9 stickers + 1 legacy），生成文件按分组排序稳定", () => {
+test("清单条数 = 789 = 物理 789（1172 - 383 个重复副本）", () => {
   assert.equal(manifestPaths.length, 789);
-  assert.equal(physical.length, 1172);
+  assert.equal(physical.length, 789);
   // 分组顺序固定：xiaobai / xiaojimao / shared / stickers / legacy
   const groups = [...manifestText.matchAll(/^  "([a-z]+)": \{/gm)].map((match) => match[1]);
   assert.deepEqual(groups, ["xiaobai", "xiaojimao", "shared", "stickers", "legacy"]);

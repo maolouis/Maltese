@@ -337,6 +337,8 @@ const en: Translations = {
     libraryGroup: (name, count) => `${name}: ${count}`,
     libraryNote: "Two-dog frames are only used by \"Both\"; identical files stored in several folders count once; rotation samples a subset per expression, so a huge pool won't all appear in the rotation — everything is still selectable in the grid below.",
     librarySampled: (visible, pool) => `${pool} available for this expression; rotation samples ${visible}`,
+    librarySharedOnly: "The 152 two-dog frames are only selectable with the \"Both\" character; Solo Xiaobai / Jijimao use their own pools.",
+    libraryDeduped: (count, mb) => `${count} duplicate copies of character frames were removed, saving about ${mb} MB — no content lost, each image is kept once.`,
     confirmTitle: "Delete this GIF?",
     confirmDeleteBuiltin: "It will only be removed from the carousel; the built-in file stays on disk.",
     confirmDeleteFile: "It will be removed from the carousel and the GIF file will be deleted. You can undo for 8 seconds.",

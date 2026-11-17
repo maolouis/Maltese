@@ -340,6 +340,8 @@ const zhCN: Translations = {
     libraryGroup: (name, count) => `${name} ${count} 张`,
     libraryNote: "双狗同框图只给「小白和小鸡毛」用；同一张图在多个目录里只保留一份；轮播每个表情随机抽一批上屏，素材池更大的表情不会全部出现在轮播里（但都能在下面格子墙里选）。",
     librarySampled: (visible, pool) => `本表情可选 ${pool} 张；实际轮播随机抽 ${visible} 张`,
+    librarySharedOnly: "「双狗同框 152 张」只在形象选「小白和小鸡毛」时可选；小白 / 小鸡毛各自只播自己的素材。",
+    libraryDeduped: (count, mb) => `已清理 ${count} 张与角色素材完全重复的副本，安装包少约 ${mb} MB（内容没少：同一张图只保留一份）。`,
     confirmTitle: "删除这张 GIF？",
     confirmDeleteBuiltin: "只会从轮播列表移除，内置素材文件不会被删除。",
     confirmDeleteFile: "会从轮播列表移除，并删除这个 GIF 文件；8 秒内可以撤销。",

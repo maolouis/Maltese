@@ -190,6 +190,10 @@ export function petAssetTotalCount(): number {
   return Object.values(petAssetGroupCounts()).reduce((sum, count) => sum + count, 0);
 }
 
+/** 2026-11-17 去重：删掉与 chars 内容完全相同的 383 个副本（287 微博表情包 + 96 旧兜底）。
+ *  数值写死是为了设置页能给出「少了多少 MB」的可核对说明；如以后再次清理，同步改这里。 */
+export const PET_ASSET_DEDUPE = { removedFiles: 383, removedMB: 31 } as const;
+
 /**
  * 单个状态最多轮播多少张：素材池里一个动作可能有 100 多张 GIF，
  * 全部预加载会吃掉几十 MB 内存，这里按均匀间隔抽一批，本次运行保持不变。

@@ -84,3 +84,11 @@ assets/pets/stickers/weibo/
 ## 版权
 
 素材版权归 ©MALTESE / 线条小狗官方所有。这里只做本地素材归档；随安装包分发或商用需自行向版权方取得授权。
+
+## 2026-11-17 去重后只保留 9 张
+
+按 sha256 复查：本目录 296 张里 **287 张与 `assets/pets/chars/` 中的文件内容完全相同**（早前归位时已并入三个角色池），
+经用户确认已从磁盘删除；**只保留 9 张唯一内容**（`eat/1`、`happy/4`、`nervous/1`、`pet/1`、`scared/1`、`sleep/1`）。
+删除清单（路径 + sha256 + 对应保留路径）见仓库根 `work/asset-dedupe-plan.txt`（`work/` 不进版本库）。
+
+`index.json`、`by-action.md`、`by-emotion.md`、`preview.png` 仍记录采集时的完整 296 张（含已删文件路径），用于追溯来源与版权说明。
