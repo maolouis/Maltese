@@ -164,6 +164,9 @@ export function PetGifRotationSettings() {
   }));
   const selectedKeys = new Set(items.map((item) => petGifItemKey(item)));
   const missingItems = availableItems.filter((item) => !selectedKeys.has(petGifItemKey(item)));
+  // 方格墙 = 已选列表 + 素材池里还没选的图：全部以小缩略图展示，看到的数量
+  // 就和素材库一致；未选中的半透明，点一下即可加入轮播（原轮播策略不变）。
+  const displayItems = [...items, ...missingItems];
 
   useEffect(
     () => () => {
@@ -431,6 +434,8 @@ export function PetGifRotationSettings() {
     if (!measured) return;
     const hit = petGifIndexAtPoint(measured.rects, { x: event.clientX, y: event.clientY });
     if (hit === null) return;
+    // 素材池里未加入轮播的格子不参与拖拽排序，只响应点击加入。
+    if (hit >= items.length) return;
     dragSession.current = {
       pointerId: event.pointerId,
       from: hit,
@@ -559,7 +564,7 @@ export function PetGifRotationSettings() {
             }}
           >
             <ChevronDown size={14} className="pet-gif-settings__chevron" />
-            {expanded ? t.petGifs.collapseWithCount(items.length) : t.petGifs.expandWithCount(items.length)}
+            {expanded ? t.petGifs.collapseWithCount(displayItems.length) : t.petGifs.expandWithCount(displayItems.length)}
           </button>
         </div>
       </div>
@@ -600,7 +605,7 @@ export function PetGifRotationSettings() {
             </p>
           )}
 
-          {items.length === 0 ? (
+          {displayItems.length === 0 ? (
             <p className="pet-gif-settings__empty">{t.petGifs.empty}</p>
           ) : (
             <div
@@ -614,22 +619,30 @@ export function PetGifRotationSettings() {
               onPointerCancel={cancelPointerDrag}
               onLostPointerCapture={cancelPointerDrag}
             >
-              {items.map((item, index) => {
-                const dragging = draggingIndex === index;
-                const dropTarget = dropIndex === index && draggingIndex !== null && draggingIndex !== index;
+              {displayItems.map((item, index) => {
+                const inRotation = index < items.length;
+                const dragging = inRotation && draggingIndex === index;
+                const dropTarget = inRotation && dropIndex === index && draggingIndex !== null && draggingIndex !== index;
                 // 向下拖时松手是「插到目标格之后」，插入线要画在右边才和结果一致。
                 const dropAfter = dropTarget && draggingIndex !== null && index > draggingIndex;
                 return (
                   <figure
                     key={item.id}
                     role="listitem"
-                    className={`pet-gif-tile${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}${dropAfter ? " is-drop-target--after" : ""}`}
+                    className={`pet-gif-tile${inRotation ? "" : " pet-gif-tile--pool"}${dragging ? " is-dragging" : ""}${dropTarget ? " is-drop-target" : ""}${dropAfter ? " is-drop-target--after" : ""}`}
                     data-gif-index={index}
                     tabIndex={0}
-                    aria-label={`${t.petGifs.order(index + 1)} · ${item.name}`}
-                    title={`${t.petGifs.order(index + 1)} · ${item.name} · ${item.path ?? item.src ?? ""}`}
+                    aria-label={inRotation ? `${t.petGifs.order(index + 1)} · ${item.name}` : item.name}
+                    title={inRotation
+                      ? `${t.petGifs.order(index + 1)} · ${item.name} · ${item.path ?? item.src ?? ""}`
+                      : `${item.name} · 点击加入轮播`}
                     draggable={false}
+                    onClick={() => {
+                      // 未选中的素材池格子：点击加入轮播末尾；已选格子仍走拖拽/删除。
+                      if (!inRotation) saveItems([...items, item]);
+                    }}
                     onContextMenu={(event) => {
+                      if (!inRotation) return;
                       event.preventDefault();
                       requestRemove(item);
                     }}
@@ -642,14 +655,15 @@ export function PetGifRotationSettings() {
                       draggable={false}
                     />
                     <span className="pet-gif-tile__order" aria-hidden="true">
-                      {index + 1}
+                      {inRotation ? index + 1 : "+"}
                     </span>
                     <figcaption className="pet-gif-tile__name" title={item.name}>
                       {item.name}
                     </figcaption>
-                    <button
-                      type="button"
-                      className="pet-gif-tile__delete"
+                    {inRotation && (
+                      <button
+                        type="button"
+                        className="pet-gif-tile__delete"
                       aria-label={`${t.petGifs.delete} · ${item.name}`}
                       title={t.petGifs.delete}
                       onClick={(event) => {
@@ -663,8 +677,9 @@ export function PetGifRotationSettings() {
                         requestRemove(item);
                       }}
                     >
-                      <Trash2 size={12} />
-                    </button>
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </figure>
                 );
               })}

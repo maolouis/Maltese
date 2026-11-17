@@ -96,11 +96,12 @@
 /* —— 缩略图方格：拖动排序，右键删除 —— */
 .pet-gif-settings__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  /* 小缩略图：一个动作的整个素材池都能一屏放下，数量和素材库一致。 */
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
   /* 行高给 max-content：格子内部只有 aspect-ratio，默认 auto 轨道会把它压扁。 */
   grid-auto-rows: max-content;
   align-content: start;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 10px;
   /* 一个表情几百张图时限制高度，设置页不至于被拉成一条长柱。 */
   max-height: 460px;
@@ -147,6 +148,17 @@
 
 .pet-gif-tile:active {
   cursor: grabbing;
+}
+
+/* 素材池里还没加入轮播的格子：半透明虚线 + 「+」角标，点击加入，不参与排序。 */
+.pet-gif-tile--pool {
+  opacity: 0.5;
+  border-style: dashed;
+  cursor: copy;
+}
+
+.pet-gif-tile--pool:hover {
+  opacity: 0.9;
 }
 
 .pet-gif-tile:focus-visible {
