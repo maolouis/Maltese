@@ -1,4 +1,4 @@
-/* 插件中心：卡片只留名字 + 按钮，说明一律进悬停气泡；正文 13px 起，不再用 8-9px 小字。 */
+/* 插件中心：卡片只留名字 + 按钮，点击卡片或「?」才弹出说明；正文 13px 起，不再用 8-9px 小字。 */
 .plugins-page {
   display: flex;
   flex-direction: column;
@@ -144,6 +144,23 @@
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.06);
   padding: 12px 14px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+/* 键盘焦点与「说明已展开」用同一套浅橙描边，避免用户以为点击没响应。 */
+.plugin-card:focus-visible {
+  outline: 2px solid rgba(255, 216, 170, 0.9);
+  outline-offset: 2px;
+}
+
+.plugin-card--help-open {
+  border-color: rgba(255, 216, 170, 0.85);
+  background: rgba(255, 216, 170, 0.14);
+  box-shadow: 0 0 0 2px rgba(255, 216, 170, 0.32);
 }
 
 .plugin-card--builtin {
@@ -191,6 +208,37 @@
   color: #fff3b0;
 }
 
+/* 「?」按钮：卡片主体也能点，这里只是给鼠标用户一个明确的可点提示。 */
+.plugin-card button.plugin-card__help-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 216, 170, 0.5);
+  background: rgba(255, 216, 170, 0.12);
+  color: #ffe0c2;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.plugin-card button.plugin-card__help-toggle:hover {
+  border-color: rgba(255, 216, 170, 0.85);
+  background: rgba(255, 216, 170, 0.28);
+  transform: none;
+}
+
+.plugin-card button.plugin-card__help-toggle[aria-expanded="true"] {
+  border-color: rgba(255, 216, 170, 0.95);
+  background: rgba(255, 216, 170, 0.4);
+  color: #2b1a08;
+}
+
 .plugin-card__actions {
   display: flex;
   flex: none;
@@ -224,7 +272,7 @@
   font-size: 14px;
 }
 
-/* ---------- 悬停气泡：所有说明文字都在这里，14px / 高对比 ---------- */
+/* ---------- 点击气泡：所有说明文字都在这里，14px / 高对比 ---------- */
 .plugin-help-window {
   position: fixed;
   z-index: 80;
@@ -241,19 +289,26 @@
   background: #fdfefb;
   color: #1d332c;
   box-shadow: 0 14px 34px rgba(25, 42, 35, 0.22);
-  pointer-events: none;
+  /* 点击弹出的浮层需要能接收鼠标（右上角关闭按钮），且不能挡住卡片操作区。 */
+  pointer-events: auto;
   scrollbar-width: thin;
+}
+
+/* 放到卡片上方时把阴影方向翻过来，视觉上仍贴着卡片。 */
+.plugin-help-window--above {
+  box-shadow: 0 -14px 34px rgba(25, 42, 35, 0.22);
 }
 
 .plugin-help-window__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 
 .plugin-help-window__head strong {
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
   color: #14352a;
   font-size: 16px;
   text-overflow: ellipsis;
@@ -268,6 +323,25 @@
   color: #2b5c3c;
   font-size: 13px;
   padding: 2px 7px;
+}
+
+.plugin-help-window__close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #d7e4d6;
+  border-radius: 8px;
+  background: #f2f7f1;
+  color: #2b5c3c;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.plugin-help-window__close:hover {
+  border-color: #b9cfb6;
+  background: #e6f1e4;
 }
 
 .plugin-help-window__description {
@@ -340,6 +414,17 @@
   background: #fff8ef;
 }
 
+/* 浅色面板里的「已展开说明」与键盘焦点，用品牌浅橙描边区分。 */
+.island__expanded .plugin-card--help-open {
+  border-color: #e6b26a;
+  background: #fffaf2;
+  box-shadow: 0 0 0 2px rgba(230, 178, 106, 0.28);
+}
+
+.island__expanded .plugin-card:focus-visible {
+  outline-color: #e6b26a;
+}
+
 .island__expanded .plugins-panel__title,
 .island__expanded .plugin-card__name,
 .island__expanded .plugin-video-card__head strong {
@@ -352,6 +437,23 @@
   border-color: #d5e0d4;
   background: #f2f7f1;
   color: #24493a;
+}
+
+.island__expanded .plugin-card button.plugin-card__help-toggle {
+  border-color: #e0c08e;
+  background: #fff4e2;
+  color: #9a5b1b;
+}
+
+.island__expanded .plugin-card button.plugin-card__help-toggle:hover {
+  border-color: #d2a45f;
+  background: #ffe9c7;
+}
+
+.island__expanded .plugin-card button.plugin-card__help-toggle[aria-expanded="true"] {
+  border-color: #c98d3c;
+  background: #f3c47f;
+  color: #3a2410;
 }
 
 .island__expanded .plugins-panel__install input {
