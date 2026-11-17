@@ -86,6 +86,12 @@ pub enum StopReason {
     LeftRecommendFeed,
     Crash,
     TakeoverTimeout,
+    /// 专用浏览器没启动起来 / CDP 端口不通（QA U1/U5：不再笼统记成 crash）。
+    BrowserUnavailable,
+    /// 页面要求登录或停在登录墙（QA U5）。
+    LoginRequired,
+    /// 页面能打开但解析不到内容（选择器失效 / 未加载完，QA U5）。
+    ParseFailed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

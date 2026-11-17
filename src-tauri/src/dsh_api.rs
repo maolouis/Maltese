@@ -496,7 +496,10 @@ fn handle_request_inner(
             let reason = payload
                 .get("reason")
                 .and_then(|value| serde_json::from_value::<StopReason>(value.clone()).ok());
-            serde_json::to_value(engine.stop(reason)).unwrap_or_else(|_| json!({}))
+            let app = APP.get().cloned().ok_or_else(|| {
+                ApiResponse::error(503, "APP_NOT_READY", "Maltese 尚未就绪。")
+            })?;
+            serde_json::to_value(engine.stop(&app, reason)).unwrap_or_else(|_| json!({}))
         }
         ("POST", "/api/video/facts") => {
             let engine = engine().ok_or_else(|| {

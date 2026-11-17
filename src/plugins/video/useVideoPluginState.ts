@@ -13,6 +13,7 @@ import {
   type VideoConfig,
   type VideoSnapshot,
 } from "./types";
+import type { BrowserStatus } from "./videoPanelLogic";
 
 export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   provider: "bilibili",
@@ -41,7 +42,10 @@ export type VideoPluginState = {
   diagnostics: DiagnosticEntry[];
   sessions: SessionSummary[];
   preview: DigestDraft | null;
+  browserStatus: BrowserStatus | null;
   refresh: () => Promise<void>;
+  loadBrowserStatus: () => Promise<void>;
+  closeBrowser: () => Promise<void>;
   start: (provider: "bilibili" | "douyin", accountId?: string) => Promise<void>;
   stop: () => Promise<void>;
   updateConfig: (patch: Partial<VideoConfig>) => Promise<void>;
@@ -68,6 +72,7 @@ export function useVideoPluginState(): VideoPluginState {
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [preview, setPreview] = useState<DigestDraft | null>(null);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatus | null>(null);
 
   useEffect(() => {
     for (const key of OLD_KEYS) {
@@ -96,6 +101,37 @@ export function useVideoPluginState(): VideoPluginState {
     const timer = window.setInterval(() => void refresh(), 2000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  const loadDiagnostics = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await invoke<DiagnosticEntry[]>("video_diagnostics", { limit: 20 });
+      if (Array.isArray(result)) setDiagnostics(result);
+    } catch {
+      // 保留上一次诊断；失败不打扰用户。
+    }
+  }, []);
+
+  // QA U4：诊断要读后端真实落盘的轨迹，而不是前端自检临时拼的 5 条。
+  useEffect(() => {
+    void loadDiagnostics();
+    const timer = window.setInterval(() => void loadDiagnostics(), 4000);
+    return () => window.clearInterval(timer);
+  }, [loadDiagnostics]);
+
+  const loadBrowserStatus = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const status = await invoke<BrowserStatus>("video_browser_status");
+      if (status && typeof status === "object") setBrowserStatus(status);
+    } catch {
+      setBrowserStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBrowserStatus();
+  }, [loadBrowserStatus]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -178,7 +214,14 @@ export function useVideoPluginState(): VideoPluginState {
     } catch {
       setDiagnostics([]);
     }
-  }, []);
+    await loadDiagnostics();
+  }, [loadDiagnostics]);
+
+  /** U10：用户手动关掉专用浏览器（残留会占住 profile/端口）。 */
+  const closeBrowser = useCallback(async () => {
+    await invoke("video_close_browser");
+    await Promise.all([refresh(), loadBrowserStatus()]);
+  }, [loadBrowserStatus, refresh]);
 
   const loadSessions = useCallback(async () => {
     if (!isTauri()) return;
@@ -216,7 +259,10 @@ export function useVideoPluginState(): VideoPluginState {
     diagnostics,
     sessions,
     preview,
+    browserStatus,
     refresh,
+    loadBrowserStatus,
+    closeBrowser,
     start,
     stop,
     updateConfig,

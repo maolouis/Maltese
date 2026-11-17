@@ -1,9 +1,16 @@
-/* 自动刷视频：插件窗口 / 视频页用的是浅色背景，
-   而 App.css 里这套样式是为深色悬浮岛写的（白字、8–10px），直接搬过来会看不清。
-   这里只在这两个容器里覆盖成浅色高对比版本，不影响悬浮岛本身。 */
+/* 自动刷视频面板。
+ *
+ * 浅色容器（插件窗口 / 视频页 / 插件页）用白底绿字；岛内设置页是深色玻璃，
+ * 文件末尾用 `.island__expanded .video-automation` 覆盖一份深色版。
+ * 版式对齐 QA §1 精简 IA：状态条 + 平台/登录 + 小结 + 高级/评论折叠，
+ * 首屏只留状态、主按钮、平台、登录、小结与两个折叠标题。
+ */
+
 :is(.plugin-window, .video-page, .plugins-page) .video-automation {
-  gap: 14px;
-  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
   border: 1px solid #d9e7d8;
   border-radius: 16px;
   background: #ffffff;
@@ -11,127 +18,335 @@
 
 :is(.plugin-window, .video-page, .plugins-page) .video-automation .assistant-panel__label {
   color: #33564a;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__head strong {
-  color: #14352a;
-  font-size: 17px;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__steps {
-  color: #4c6b60;
-  font-size: 13px;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls {
+/* ---------- 一行状态条 ---------- */
+.video-automation__statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  min-height: 36px;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls select,
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls input {
-  height: 38px;
-  padding: 6px 10px;
-  border: 1px solid #bcd6c6;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #17302a;
+.video-automation__status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.video-automation__phase {
   font-size: 14px;
+  color: #14352a;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls input {
-  width: 64px;
+.video-automation__phase.is-running {
+  color: #1f7a4d;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls label {
-  color: #33564a;
-  font-size: 13px;
+.video-automation__steps {
+  color: #4c6b60;
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button {
-  height: 38px;
+.video-automation__primary {
+  flex: 0 0 auto;
+  min-height: 34px;
   padding: 0 18px;
+  border: 0;
   border-radius: 10px;
   background: #7fc390;
   color: #10301f;
-  font-size: 14px;
+  font: inherit;
+  font-size: 13.5px;
   font-weight: 700;
+  cursor: pointer;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button:hover:not(:disabled) {
+.video-automation__primary:hover {
   background: #6cb580;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__controls button:disabled {
-  background: #d5e3d8;
-  color: #6c8377;
+.video-automation__primary.is-stop {
+  background: #f2b48c;
+  color: #44240f;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__hint {
-  color: #4c6b60;
-  font-size: 12.5px;
-  line-height: 1.65;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__hint--warn {
+/* ---------- 常驻错误条（收起重开仍在，来自 snapshot） ---------- */
+.video-automation__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f2c2bd;
+  border-radius: 10px;
+  background: #fff6f5;
   color: #a33b2a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.video-automation__error-code {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #f7e3e0;
+  color: #8a4a40;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* ---------- 平台 + 登录 ---------- */
+.video-automation__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-automation__provider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #33564a;
   font-size: 12.5px;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment {
-  gap: 10px;
-  margin-top: 4px;
-  padding-top: 14px;
-  border-top: 1px dashed #cfe0d2;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-toggle {
-  gap: 7px;
-  color: #2c4a3f;
-  font-size: 13px;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-toggle input {
-  width: 16px;
-  height: 16px;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment textarea {
-  min-height: 84px;
-  padding: 10px 12px;
+.video-automation__provider select,
+.video-automation__row select,
+.video-automation__params input,
+.video-automation__account-form input {
+  height: 32px;
+  padding: 4px 9px;
   border: 1px solid #bcd6c6;
-  border-radius: 12px;
+  border-radius: 9px;
   background: #ffffff;
   color: #17302a;
-  font-size: 14px;
-  line-height: 1.6;
+  font: inherit;
+  font-size: 12.5px;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions {
-  gap: 8px;
+.video-automation__login {
+  flex: 1 1 150px;
+  color: #4c6b60;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions button {
-  min-height: 36px;
-  padding: 7px 14px;
+.video-automation__secondary {
+  min-height: 32px;
+  padding: 0 12px;
   border: 1px solid #bcd6c6;
-  border-radius: 10px;
+  border-radius: 9px;
   background: #eef6ef;
   color: #1f473a;
-  font-size: 13px;
+  font: inherit;
+  font-size: 12.5px;
   font-weight: 600;
+  cursor: pointer;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__comment-actions button:hover:not(:disabled) {
+.video-automation__secondary:hover:not(:disabled) {
   background: #dcecdf;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__publish {
+.video-automation__secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.video-automation__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #2f7d5b;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.video-automation__muted {
+  margin: 0;
+  color: #4c6b60;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ---------- 小结 / 历史 ---------- */
+.video-automation__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f7fbf7;
+}
+
+.video-automation__summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-automation__summary-head .video-automation__muted {
+  flex: 1;
+}
+
+.video-automation__history summary,
+.video-automation__advanced > summary,
+.video-automation__comment > summary,
+.video-automation__account > summary,
+.video-automation__diagnostics summary {
+  cursor: pointer;
+  color: #2c4a3f;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.video-automation__history ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #4c6b60;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+:is(.plugin-window, .video-page, .plugins-page) .video-channel,
+:is(.plugin-window, .video-page, .plugins-page) .video-digest {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #33564a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.video-digest ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* ---------- 高级设置 / 评论折叠 ---------- */
+.video-automation__advanced,
+.video-automation__comment {
+  display: block;
+  padding-top: 8px;
+  border-top: 1px dashed #cfe0d2;
+}
+
+.video-automation__advanced-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-top: 8px;
+}
+
+.video-automation__params {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-automation__params label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #33564a;
+  font-size: 12px;
+}
+
+.video-automation__params input {
+  width: 62px;
+  text-align: center;
+}
+
+.video-automation__browser {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f7fbf7;
+}
+
+.video-automation__account {
+  padding-top: 6px;
+}
+
+.video-automation__account-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.video-automation__account-form input {
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+
+.video-automation__channel {
+  display: grid;
+  gap: 6px;
+}
+
+.video-automation__diagnostics ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #5b6470;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.video-automation__danger-zone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+}
+
+.video-automation__danger {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #f2c2bd;
+  border-radius: 9px;
+  background: #fff6f5;
+  color: #b64238;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.video-automation__comment textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 76px;
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px solid #bcd6c6;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #17302a;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.video-automation__comment .video-automation__row {
+  padding-top: 8px;
 }
 
 .plugins-page .video-page__notice {
@@ -144,88 +359,134 @@
   color: #14352a;
   font-size: 16px;
 }
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__section {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.72);
-}
 
-:is(.plugin-window, .video-page, .plugins-page) .video-channel,
-:is(.plugin-window, .video-page, .plugins-page) .video-digest {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__diagnostics {
-  font-size: 12px;
-  color: #5b6470;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__danger {
-  justify-self: start;
-  border: 1px solid #f2c2bd;
-  background: #fff6f5;
-  color: #b64238;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account {
-  display: grid;
-  gap: 10px;
-  margin-top: 4px;
-  padding: 14px;
-  border: 1px solid #cfe0d2;
-  border-radius: 14px;
-  background: #f7fbf7;
-}
-
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row,
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form {
+/* ---------- 岛内设置页（深色玻璃） ---------- */
+.island__expanded .video-automation {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.05);
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form input,
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row select {
-  min-width: 150px;
-  flex: 1 1 150px;
-  height: 36px;
-  padding: 7px 10px;
-  border: 1px solid #bcd6c6;
-  border-radius: 9px;
-  background: #ffffff;
-  color: #17302a;
+.island__expanded .video-automation .assistant-panel__label {
+  color: #ffe8cf;
+  font-size: 11.5px;
+}
+
+.island__expanded .video-automation__phase {
+  color: #ffd8af;
+  font-size: 12.5px;
+}
+
+.island__expanded .video-automation__phase.is-running {
+  color: #9fe0b5;
+}
+
+.island__expanded .video-automation__steps,
+.island__expanded .video-automation__muted,
+.island__expanded .video-automation__login {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 10.5px;
+}
+
+.island__expanded .video-automation__primary {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(247, 188, 125, 0.24);
+  color: #ffe8cf;
   font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row button,
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form button {
-  min-height: 36px;
-  padding: 7px 14px;
-  border: 1px solid #bcd6c6;
+.island__expanded .video-automation__primary.is-stop {
+  background: rgba(247, 188, 125, 0.4);
+  color: #2b1706;
+}
+
+.island__expanded .video-automation__error {
+  border: 1px solid rgba(255, 150, 130, 0.4);
+  border-radius: 9px;
+  background: rgba(120, 40, 30, 0.35);
+  color: #ffc8bd;
+  font-size: 10.5px;
+}
+
+.island__expanded .video-automation__error-code {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffd8cf;
+}
+
+.island__expanded .video-automation__provider,
+.island__expanded .video-automation__params label {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 10.5px;
+}
+
+.island__expanded .video-automation__provider select,
+.island__expanded .video-automation__row select,
+.island__expanded .video-automation__params input,
+.island__expanded .video-automation__account-form input,
+.island__expanded .video-automation__comment textarea {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(8, 9, 13, 0.32);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 10.5px;
+}
+
+.island__expanded .video-automation__secondary,
+.island__expanded .video-automation__danger {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffe8cf;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.island__expanded .video-automation__danger {
+  border-color: rgba(255, 150, 130, 0.4);
+  color: #ffc8bd;
+}
+
+.island__expanded .video-automation__link {
+  color: #ffd8af;
+  font-size: 10.5px;
+}
+
+.island__expanded .video-automation__summary,
+.island__expanded .video-automation__browser {
+  background: rgba(255, 255, 255, 0.06);
   border-radius: 10px;
-  background: #eef6ef;
-  color: #1f473a;
-  font-size: 13px;
-  font-weight: 600;
+  padding: 8px 10px;
 }
 
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-row button:hover,
-:is(.plugin-window, .video-page, .plugins-page) .video-automation__account-form button:hover {
-  background: #dcecdf;
+.island__expanded .video-automation__history summary,
+.island__expanded .video-automation__advanced > summary,
+.island__expanded .video-automation__comment > summary,
+.island__expanded .video-automation__account > summary,
+.island__expanded .video-automation__diagnostics summary {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
 }
 
-.video-automation__account-status {
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: #e9f4ea;
-  color: #2d6044;
-  font-size: 13px;
-  font-weight: 600;
+.island__expanded .video-automation__history ul,
+.island__expanded .video-automation__diagnostics ul,
+.island__expanded .video-digest {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+}
+
+.island__expanded .video-automation__advanced,
+.island__expanded .video-automation__comment {
+  border-top: 1px dashed rgba(255, 255, 255, 0.14);
 }

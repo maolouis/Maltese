@@ -39,7 +39,10 @@ export type StopReason =
   | "riskControl"
   | "leftRecommendFeed"
   | "crash"
-  | "takeoverTimeout";
+  | "takeoverTimeout"
+  | "browserUnavailable"
+  | "loginRequired"
+  | "parseFailed";
 
 export type Capability = "full" | "enhanced" | "basic";
 
@@ -77,6 +80,8 @@ export type ErrorCode =
   | "CDP_STALLED"
   | "CDP_RECONNECT_FAILED"
   | "BROWSER_CLOSED"
+  | "LOGIN_WINDOW_NOT_VISIBLE"
+  | "BROWSER_START_FAILED"
   | "ACCOUNT_NOT_READY"
   | "ACCOUNT_NOT_FOUND"
   | "ACCOUNT_PLATFORM_MISMATCH"
@@ -276,6 +281,7 @@ export function isDigestDraft(value: unknown): value is DigestDraft {
   });
 }
 
+
 export function errorMessageForCode(code: string | null, fallback: string): string {
   switch (code) {
     case "BROWSER_UNAVAILABLE":
@@ -291,13 +297,17 @@ export function errorMessageForCode(code: string | null, fallback: string): stri
     case "SESSION_RUNNING":
       return "请先停止当前观看会话。";
     case "CDP_UNAVAILABLE":
-      return "小狗浏览器没有及时准备好，本轮已经停止。";
+      return "小狗专用浏览器没有及时打开调试接口，本轮已经停止。";
     case "CDP_STALLED":
       return "视频页面连续无响应，本轮已经停止。";
     case "CDP_RECONNECT_FAILED":
       return "视频页面连接多次失败，本轮已经停止。";
     case "BROWSER_CLOSED":
-      return "小狗浏览器已关闭，本轮已经停止。";
+      return "小狗专用浏览器已关闭，本轮已经停止。";
+    case "LOGIN_WINDOW_NOT_VISIBLE":
+      return "专用浏览器没有出现可见的登录窗口，请先关闭它再重试。";
+    case "BROWSER_START_FAILED":
+      return "专用浏览器没能启动起来，请稍后重试。";
     case "ACCOUNT_NOT_READY":
       return "请先完成小狗账号登录，再开始运营。";
     case "ACCOUNT_NOT_FOUND":

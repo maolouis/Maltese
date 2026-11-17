@@ -5,7 +5,7 @@
 
 use super::adapter::adapter_for;
 use super::accounts::{AccountStore, AccountStatus, AgentAccount};
-use super::browser::{self, BrowserProcess};
+use super::browser::{self, BrowserInstance};
 use super::cdp::{CdpSession, EVALUATE_TIMEOUT};
 use super::channel::ChannelManager;
 use super::CommentReport;
@@ -37,6 +37,20 @@ pub const SAMPLE_BURST_LIMIT: usize = 30;
 pub const SAMPLE_BURST_KEEP: usize = 10;
 const MAX_CDP_FAILURES: u32 = 3;
 const MAX_RECONNECT_FAILURES: u32 = 3;
+
+/// 专用浏览器实例的现状（面板高级设置里展示，便于判断「会不会复用上次的浏览器」）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserStatus {
+    pub pid: Option<u32>,
+    pub port: Option<u16>,
+    pub profile_dir: String,
+    pub marker_present: bool,
+    pub marker_pid_alive: bool,
+    pub cdp_ready: bool,
+    /// owned / external / fresh，和 browser::reuse_decision 一致。
+    pub reuse: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,7 +363,7 @@ pub struct SessionEngine {
     config: Mutex<VideoConfig>,
     channel: Mutex<ChannelManager>,
     guard: Mutex<Guard>,
-    browser: Mutex<Option<BrowserProcess>>,
+    browser: Mutex<Option<BrowserInstance>>,
     stop: AtomicBool,
     run_id: AtomicU64,
 }
@@ -440,11 +454,105 @@ impl SessionEngine {
         }
     }
 
+    /// 取出（并关闭）内存里记录的专用浏览器实例。
+    fn take_browser(&self) -> Option<BrowserInstance> {
+        match self.browser.lock() {
+            Ok(mut browser) => browser.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
+
+    fn close_browser_instance(&self) {
+        if let Some(mut instance) = self.take_browser() {
+            instance.close();
+        }
+        browser::clear_marker();
+    }
+
+    /// 装上本次要用的实例；同时把 CDP 端口写进运行态（评论等一次性操作要用）。
+    fn install_browser(&self, instance: BrowserInstance) -> u16 {
+        let handle = instance.handle().clone();
+        if let Some(mut previous) = self.take_browser() {
+            previous.close();
+        }
+        match self.browser.lock() {
+            Ok(mut browser) => *browser = Some(instance),
+            Err(poisoned) => *poisoned.into_inner() = Some(instance),
+        }
+        browser::write_marker(&handle);
+        if let Ok(mut state) = self.state.lock() {
+            state.cdp_port = handle.port;
+        }
+        handle.port
+    }
+
+    /// 内存里同 profile、仍存活且 CDP 可用的实例。
+    fn owned_reusable(&self, profile: &std::path::Path) -> bool {
+        match self.browser.lock() {
+            Ok(mut browser) => match browser.as_mut() {
+                Some(instance) => {
+                    instance.is_alive()
+                        && browser::same_profile(&instance.handle().profile_dir, profile)
+                        && browser::cdp_ready(instance.handle().port)
+                }
+                None => false,
+            },
+            Err(poisoned) => match poisoned.into_inner().as_mut() {
+                Some(instance) => {
+                    instance.is_alive()
+                        && browser::same_profile(&instance.handle().profile_dir, profile)
+                        && browser::cdp_ready(instance.handle().port)
+                }
+                None => false,
+            },
+        }
+    }
+
+    /// 启动失败时把本次启动的浏览器关掉，并落一条诊断日志（QA U1/U4）。
+    fn fail_start(&self, app: &AppHandle, code: &str, message: &str, detail: &str) -> VideoError {
+        self.close_browser_instance();
+        self.set_runtime_error(code, message);
+        self.store.log(DiagnosticEntry {
+            at: now_seconds(),
+            session_id: {
+                let state = lock_state(&self.state);
+                if state.session_id.is_empty() {
+                    None
+                } else {
+                    Some(state.session_id.clone())
+                }
+            },
+            channel: None,
+            level: "error".to_string(),
+            code: code.to_string(),
+            message: format!("{message}{detail}"),
+        });
+        self.finish(app, StopReason::BrowserUnavailable, false);
+        VideoError::with_detail(code, message, detail)
+    }
+
     fn set_runtime_error(&self, code: &str, message: &str) {
-        let mut state = lock_state(&self.state);
-        state.error_code = Some(code.to_string());
-        state.error_message = Some(message.to_string());
-        state.waiting_for_browser = false;
+        // 错误必须同时进「持久状态」和诊断日志：
+        // 持久状态保证面板重挂载后还能看到，日志保证 DSH /api/video/diagnostics 能排障（QA U3/U4）。
+        let entry = {
+            let mut state = lock_state(&self.state);
+            state.error_code = Some(code.to_string());
+            state.error_message = Some(message.to_string());
+            state.waiting_for_browser = false;
+            DiagnosticEntry {
+                at: now_seconds(),
+                session_id: if state.session_id.is_empty() {
+                    None
+                } else {
+                    Some(state.session_id.clone())
+                },
+                channel: Some(state.channel.channel_type),
+                level: "error".to_string(),
+                code: code.to_string(),
+                message: message.to_string(),
+            }
+        };
+        self.store.log(entry);
     }
 
     pub fn config(&self) -> VideoConfig {
@@ -581,37 +689,83 @@ impl SessionEngine {
         let run_id = self.run_id.fetch_add(1, Ordering::SeqCst) + 1;
         self.stop.store(false, Ordering::SeqCst);
 
-        let port = match browser::pick_port(browser::DEFAULT_PORT) {
-            Ok(port) => port,
-            Err(error) => {
-                self.abort_start(Phase::Stopped, &error.code, &error.message);
-                return Err(error);
-            }
-        };
         let profile = profile.unwrap_or_else(browser::profile_dir);
-        let process = match browser::launch(provider, port, &profile, false) {
-            Ok(process) => process,
-            Err(error) => {
-                self.abort_start(Phase::Stopped, &error.code, &error.message);
+
+        // U1：专用浏览器只允许「一个 profile 一个实例」。
+        // 顺序：内存里还活着 → 复用；上次运行留下的同 profile 实例（应用重启后 handle 丢了）
+        // → 接管它的端口；都没有 → 先清掉残留实例再启动，端口和 profile 始终绑在同一个实例上。
+        let port = if self.owned_reusable(&profile) {
+            let port = match self.browser.lock() {
+                Ok(browser) => browser
+                    .as_ref()
+                    .map(|instance| instance.handle().port)
+                    .unwrap_or(0),
+                Err(poisoned) => poisoned
+                    .into_inner()
+                    .as_ref()
+                    .map(|instance| instance.handle().port)
+                    .unwrap_or(0),
+            };
+            if let Ok(mut state) = self.state.lock() {
+                state.cdp_port = port;
+            }
+            port
+        } else if let Some(handle) = browser::find_reusable(&profile) {
+            // 接管上次留下的实例：它的端口已经在监听，不再开新进程（以前会换端口再 launch，
+            // 结果新进程被转交给旧实例，端口永远不监听 → 15s 后 CDP_UNAVAILABLE）。
+            let port = handle.port;
+            self.install_browser(BrowserInstance::External(handle));
+            port
+        } else {
+            // 残留实例还占着 profile/端口但 CDP 不通：先关掉，否则新进程拿不到 profile。
+            let closed = browser::close_profile_instance(&profile);
+            if closed > 0 {
+                self.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: None,
+                    channel: None,
+                    level: "info".to_string(),
+                    code: "STALE_BROWSER_CLOSED".to_string(),
+                    message: format!(
+                        "启动了新专用浏览器前，先关闭了上一个占用同一登录 profile 的残留实例（{closed} 个）。"
+                    ),
+                });
+            }
+            self.close_browser_instance();
+            let port = match browser::pick_port(browser::DEFAULT_PORT) {
+                Ok(port) => port,
+                Err(error) => {
+                    self.abort_start(Phase::Stopped, &error.code, &error.message);
+                    // 失败也要落一条会话，历史里才能看到真实原因（QA U5）。
+                    self.finish(&app, StopReason::BrowserUnavailable, false);
+                    return Err(error);
+                }
+            };
+            let process = match browser::launch(provider, port, &profile, false) {
+                Ok(process) => process,
+                Err(error) => {
+                    self.abort_start(Phase::Stopped, &error.code, &error.message);
+                    self.finish(&app, StopReason::BrowserUnavailable, false);
+                    return Err(error);
+                }
+            };
+            let handle = process.handle.clone();
+            if !browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+                // 本次启动的进程必须关掉，不能留下占着 profile 的孤儿实例（U1/U10）。
+                let mut process = process;
+                process.close();
+                let error = self.fail_start(
+                    &app,
+                    "CDP_UNAVAILABLE",
+                    "小狗专用浏览器启动后没有打开调试端口，本轮已停止。",
+                    &format!("port={port} profile={}", profile.display()),
+                );
                 return Err(error);
             }
+            browser::write_marker(&handle);
+            self.install_browser(BrowserInstance::Owned(process));
+            port
         };
-        {
-            let mut browser = match self.browser.lock() {
-                Ok(browser) => browser,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(mut previous) = browser.take() {
-                previous.close();
-            }
-            *browser = Some(process);
-        }
-
-        // 记录端口：评论等一次性操作需要复用同一个浏览器实例。
-        {
-            let mut state = self.state.lock().expect("video state lock");
-            state.cdp_port = port;
-        }
         if let Some(account_id) = account_id.as_deref() {
             let _ = self.accounts.lock().map_err(|_| ()).and_then(|mut accounts| accounts.mark_run(account_id).map_err(|_| ())); 
         }
@@ -626,29 +780,60 @@ impl SessionEngine {
     }
 
     fn abort_start(&self, phase: Phase, code: &str, message: &str) {
-        let mut state = lock_state(&self.state);
-        state.phase = phase;
-        state.error_code = Some(code.to_string());
-        state.error_message = Some(message.to_string());
-    }
-
-    pub fn stop(&self, reason: Option<StopReason>) -> VideoSnapshot {
-        self.stop.store(true, Ordering::SeqCst);
-        self.run_id.fetch_add(1, Ordering::SeqCst);
         {
             let mut state = lock_state(&self.state);
-            let stop_reason = reason.unwrap_or(StopReason::UserStop);
-            let mut diagnostics = 0;
-            if try_transition(&mut state.phase, Phase::Stopped, &mut diagnostics) {
-                state.stop_reason = Some(stop_reason);
-                state.ended_at = Some(now_seconds());
-            }
+            state.phase = phase;
+            state.error_code = Some(code.to_string());
+            state.error_message = Some(message.to_string());
         }
-        if let Some(mut browser) = match self.browser.lock() {
-            Ok(mut browser) => browser.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        } {
-            browser.close();
+        self.store.log(DiagnosticEntry {
+            at: now_seconds(),
+            session_id: {
+                let state = lock_state(&self.state);
+                if state.session_id.is_empty() {
+                    None
+                } else {
+                    Some(state.session_id.clone())
+                }
+            },
+            channel: None,
+            level: "error".to_string(),
+            code: code.to_string(),
+            message: message.to_string(),
+        });
+    }
+
+    pub fn stop(&self, app: &AppHandle, reason: Option<StopReason>) -> VideoSnapshot {
+        self.stop.store(true, Ordering::SeqCst);
+        self.run_id.fetch_add(1, Ordering::SeqCst);
+        let stop_reason = reason.unwrap_or(StopReason::UserStop);
+        // 正在跑就按「结束」保存会话（保留已采集条目、不生成小结），
+        // 这样历史里能看到真实的条目数/停止原因，而不是一条 0 条的空会话（QA U5）。
+        let running = {
+            let state = lock_state(&self.state);
+            matches!(
+                state.phase,
+                Phase::Preparing | Phase::AwaitingLogin | Phase::Collecting | Phase::UserTakeover
+            )
+        };
+        if running {
+            self.finish(app, stop_reason, false);
+            {
+                let mut state = lock_state(&self.state);
+                state.phase = Phase::Stopped;
+                state.stop_reason = Some(stop_reason);
+            }
+            let _ = app.emit("video-session-updated", self.snapshot());
+        } else {
+            {
+                let mut state = lock_state(&self.state);
+                let mut diagnostics = 0;
+                if try_transition(&mut state.phase, Phase::Stopped, &mut diagnostics) {
+                    state.stop_reason = Some(stop_reason);
+                    state.ended_at = Some(now_seconds());
+                }
+            }
+            self.close_browser_instance();
         }
         self.snapshot()
     }
@@ -700,8 +885,12 @@ impl SessionEngine {
                     runtime.degraded = true;
                 }
             }
-            self.set_runtime_error("CDP_UNAVAILABLE", "小狗浏览器没有在 15 秒内准备好，已停止本轮。 ");
-            self.finish(&app, StopReason::Crash, false);
+            self.set_runtime_error(
+                "CDP_UNAVAILABLE",
+                "小狗专用浏览器没有在 15 秒内打开调试接口，本轮已停止。请点「打开登录窗」确认浏览器能正常启动，或在高级设置里先「关闭专用浏览器」再重试。",
+            );
+            self.close_browser_instance();
+            self.finish(&app, StopReason::BrowserUnavailable, false);
             return;
         }
 
@@ -758,6 +947,7 @@ impl SessionEngine {
                             reconnect_failures = reconnect_failures.saturating_add(1);
                             if reconnect_failures >= MAX_RECONNECT_FAILURES {
                                 self.set_runtime_error("CDP_RECONNECT_FAILED", "小狗浏览器连接连续失败，已停止本轮。");
+                                self.close_browser_instance();
                                 self.finish(&app, StopReason::Crash, false);
                                 break;
                             }
@@ -790,6 +980,7 @@ impl SessionEngine {
                             session = None;
                             if cdp_failures >= MAX_CDP_FAILURES {
                                 self.set_runtime_error("CDP_STALLED", "页面连续无响应，已停止本轮以避免桌宠卡死。");
+                                self.close_browser_instance();
                                 self.finish(&app, StopReason::Crash, false);
                                 break;
                             }
@@ -933,6 +1124,16 @@ impl SessionEngine {
         let profile = self.store.profile();
         let (mut session, items, platform, ended_at) = {
             let mut state = lock_state(&self.state);
+            // 0 条时不要笼统记成「异常崩溃」（QA U5）：按真实原因细分。
+            let reason = if produce_digest && state.items.is_empty() {
+                match state.error_code.as_deref() {
+                    Some("LOGIN_REQUIRED") => StopReason::LoginRequired,
+                    Some(_) => reason,
+                    None => StopReason::ParseFailed,
+                }
+            } else {
+                reason
+            };
             let ended_at = now_seconds();
             state.ended_at = Some(ended_at);
             state.stop_reason = Some(reason);
@@ -1083,6 +1284,8 @@ impl SessionEngine {
             try_transition(&mut state.phase, Phase::Ended, &mut diagnostics);
             state.persist_failed = self.store.persist_failed();
         }
+        // U10：一轮结束就关掉专用浏览器，避免残留实例继续占住 profile/端口。
+        self.close_browser_instance();
         let snapshot = self.snapshot();
         let _ = app.emit("video-session-updated", snapshot);
     }
@@ -1248,16 +1451,65 @@ impl SessionEngine {
     }
 
     pub fn close_browser(&self) -> VideoResult<()> {
-        if let Some(mut browser) = match self.browser.lock() {
-            Ok(mut browser) => browser.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        } {
-            browser.close();
-        }
+        self.close_browser_instance();
         Ok(())
     }
 
+    /// 当前专用浏览器实例现状：面板高级设置里展示「会复用上次实例 / 会先清理残留再启动」。
+    pub fn browser_status(&self) -> BrowserStatus {
+        let profile = browser::profile_dir();
+        let marker = browser::read_marker();
+        let (marker_present, marker_matches, marker_pid_alive, marker_cdp_ready, marker_port) =
+            match marker.as_ref() {
+                Some(marker) => (
+                    true,
+                    browser::same_profile(&marker.profile_dir, &profile),
+                    browser::pid_alive_browser(marker.pid),
+                    browser::cdp_ready(marker.port),
+                    Some(marker.port),
+                ),
+                None => (false, false, false, false, None),
+            };
+        let owned_alive = self.owned_reusable(&profile);
+        let owned = match self.browser.lock() {
+            Ok(browser) => browser
+                .as_ref()
+                .map(|instance| (instance.handle().pid, instance.handle().port)),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .as_ref()
+                .map(|instance| (instance.handle().pid, instance.handle().port)),
+        };
+        let decision = browser::reuse_decision(
+            owned_alive,
+            marker_matches,
+            marker_pid_alive,
+            marker_cdp_ready,
+        );
+        let reuse = match decision {
+            browser::BrowserReuse::Owned => "owned",
+            browser::BrowserReuse::External => "external",
+            browser::BrowserReuse::Fresh => "fresh",
+        };
+        BrowserStatus {
+            pid: owned.map(|(pid, _)| pid).or(if marker_pid_alive {
+                marker.as_ref().map(|marker| marker.pid)
+            } else {
+                None
+            }),
+            port: owned.map(|(_, port)| port).or(marker_port),
+            profile_dir: profile.to_string_lossy().into_owned(),
+            marker_present,
+            marker_pid_alive,
+            cdp_ready: owned_alive || marker_cdp_ready,
+            reuse: reuse.to_string(),
+        }
+    }
+
     /// 首次登录：这是唯一允许把窗口提到前台的路径。
+    ///
+    /// 成功判据（QA U2）：真的出现一个可见的浏览器窗口且 CDP 可用；否则报中文错误、
+    /// 关掉本次启动的进程并写诊断日志，绝不「提示成功但没窗口」。
     pub fn open_login_window(&self, platform: Platform, account_id: Option<&str>) -> VideoResult<()> {
         let profile = if let Some(account_id) = account_id {
             let mut accounts = self.accounts.lock().map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?;
@@ -1275,22 +1527,79 @@ impl SessionEngine {
         } else {
             browser::profile_dir()
         };
-        let same_profile = match self.browser.lock() {
-            Ok(browser) => browser.as_ref().map(|process| process.handle.profile_dir == profile.to_string_lossy()).unwrap_or(false),
-            Err(poisoned) => poisoned.into_inner().as_ref().map(|process| process.handle.profile_dir == profile.to_string_lossy()).unwrap_or(false),
+
+        let not_visible = || {
+            VideoError::new(
+                "LOGIN_WINDOW_NOT_VISIBLE",
+                "小狗专用浏览器已在运行，但没能把登录窗显示出来。请在任务栏找到它手动打开，或在高级设置里点「关闭专用浏览器」后重试。",
+            )
         };
-        if same_profile && browser::focus_browser_window(platform) {
-            return Ok(());
+
+        // 1) 已有同 profile 实例（内存里或上次留下的）：接管它，把登录页开成新标签并前置。
+        if self.owned_reusable(&profile) {
+            let port = match self.browser.lock() {
+                Ok(browser) => browser.as_ref().map(|item| item.handle().port).unwrap_or(0),
+                Err(poisoned) => poisoned.into_inner().as_ref().map(|item| item.handle().port).unwrap_or(0),
+            };
+            if browser::focus_browser_window(platform) {
+                return Ok(());
+            }
+            let _ = browser::open_target(port, platform.feed_url());
+            std::thread::sleep(Duration::from_millis(600));
+            if browser::focus_browser_window(platform) {
+                return Ok(());
+            }
+            return Err(not_visible());
         }
-        if !same_profile {
-            self.close_browser()?;
+        if let Some(handle) = browser::find_reusable(&profile) {
+            let port = handle.port;
+            self.install_browser(BrowserInstance::External(handle));
+            let _ = browser::open_target(port, platform.feed_url());
+            std::thread::sleep(Duration::from_millis(600));
+            if browser::focus_browser_window(platform) {
+                return Ok(());
+            }
+            return Err(not_visible());
         }
+
+        // 2) 没有可复用实例：先清掉残留（占着 profile 的旧实例会让新进程静默转交），再启动。
+        browser::close_profile_instance(&profile);
+        self.close_browser_instance();
         let port = browser::pick_port(browser::DEFAULT_PORT)?;
-        let process = browser::launch(platform, port, &profile, true)?;
-        match self.browser.lock() {
-            Ok(mut browser) => *browser = Some(process),
-            Err(poisoned) => *poisoned.into_inner() = Some(process),
+        let mut process = browser::launch(platform, port, &profile, true)?;
+        let pid = process.handle.pid;
+        if !browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+            process.close();
+            browser::clear_marker();
+            self.abort_start(
+                Phase::Stopped,
+                "CDP_UNAVAILABLE",
+                "小狗专用浏览器启动后没有打开调试接口，登录窗没有打开。",
+            );
+            return Err(VideoError::with_detail(
+                "CDP_UNAVAILABLE",
+                "小狗专用浏览器启动后没有打开调试接口，登录窗没有打开。请确认电脑上 Chrome/Edge 能正常启动后重试。",
+                format!("port={port} profile={}", profile.display()),
+            ));
         }
+        if !browser::wait_for_visible_window(pid, browser::LOGIN_WINDOW_TIMEOUT) {
+            // CDP 起来了但没有可见窗口：多半被旧实例转交/最小化了，关掉并报错。
+            process.close();
+            browser::clear_marker();
+            self.abort_start(
+                Phase::Stopped,
+                "LOGIN_WINDOW_NOT_VISIBLE",
+                "小狗专用浏览器已经启动，但没有出现可见的登录窗口。",
+            );
+            return Err(VideoError::with_detail(
+                "LOGIN_WINDOW_NOT_VISIBLE",
+                "小狗专用浏览器已经启动，但没有出现可见的登录窗口。请先点「关闭专用浏览器」再重试。",
+                format!("pid={pid} port={port}"),
+            ));
+        }
+        let handle = process.handle.clone();
+        browser::write_marker(&handle);
+        self.install_browser(BrowserInstance::Owned(process));
         let _ = browser::focus_browser_window(platform);
         Ok(())
     }

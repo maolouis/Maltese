@@ -47,5 +47,5 @@ pub async fn start_video_automation(
 
 #[tauri::command]
 pub async fn stop_video_automation(app: AppHandle) -> Result<VideoSnapshot, video::VideoError> {
-    Ok(video::session::engine(&app).stop(None))
+    Ok(video::session::engine(&app).stop(&app, None))
 }

@@ -4483,6 +4483,7 @@ pub fn run() {
             video::video_post_comment,
             video::video_open_login_window,
             video::video_close_browser,
+            video::video_browser_status,
             video::video_open_external_url,
         ])
         .build(context)
@@ -4501,6 +4502,8 @@ pub fn run() {
                 if exit_instance_dir.is_some() {
                     instance_lock::clear_instance_info();
                 }
+                // U10：退出应用时关掉刷视频专用的浏览器，避免残留实例占住 profile/端口。
+                let _ = video::session::engine(app).close_browser();
             }
         });
 }

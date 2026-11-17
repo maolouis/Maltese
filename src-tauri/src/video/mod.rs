@@ -154,7 +154,7 @@ pub async fn video_stop_session(
     app: AppHandle,
     reason: Option<StopReason>,
 ) -> VideoResult<VideoSnapshot> {
-    Ok(session::engine(&app).stop(reason))
+    Ok(session::engine(&app).stop(&app, reason))
 }
 
 #[tauri::command]
@@ -244,6 +244,12 @@ pub fn video_open_login_window(
 #[tauri::command]
 pub fn video_close_browser(app: AppHandle) -> VideoResult<()> {
     session::engine(&app).close_browser()
+}
+
+/// 专用浏览器实例现状（面板高级设置展示；用于解释「会复用上次实例还是清理后重开」）。
+#[tauri::command]
+pub fn video_browser_status(app: AppHandle) -> session::BrowserStatus {
+    session::engine(&app).browser_status()
 }
 
 #[tauri::command]

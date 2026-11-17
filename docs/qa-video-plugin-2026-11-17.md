@@ -216,3 +216,101 @@
 | `work/qa-video-history-login.log` | 「刷新历史」6 条全部条目 0；「打开登录窗」无新窗口（NEW_CHROME_WINDOWS=0） |
 | `work/qa-video-probe-comment.log` / `.png` | 「重新自检」输出 `失败：noResponse`、诊断日志（前端本地）；发送评论入口状态 |
 | `work/qa-edit-report.ps1` 等 | 本轮只读脚本留档 |
+## 6. 研发处置（2026-11-17 P0 修复 + UI 精简轮）
+
+> 角色：研发；基线 `e2fd8cb` + 本轮改动；版本仍 **2.0.2**，未 push、未打 tag。
+> 本轮同时修 U1–U5（P0/P1）与 §1 的精简 IA，并补了 U7/U8/U9/U10 的低成本项。
+
+### 6.1 U1–U10 状态
+
+| 编号 | 原判定 | 本轮状态 | 修法 / 证据 |
+| --- | --- | --- | --- |
+| U1 残留专用浏览器占 profile，开始必失败 | P0 | **已修** | `browser.rs` 新增实例标记 `%LOCALAPPDATA%\Maltese\video-browser.json`（pid/port/profile）与 `find_reusable` / `close_profile_instance` / `pid_alive_browser` / `wait_for_cdp`；`reuse_decision()` 纯函数决定 复用内存实例 → 接管上次实例 → 清残留后重启。`session.start()` 改为三条路径，**端口与 profile 始终绑在同一个实例**；新启动后必须 `wait_for_cdp` 成功，失败就关掉本次进程并写日志。启动前若端口被同 profile 残留实例占用，先关掉它（QA 的 9333 + 旧 pid 场景）。 |
+| U2 「打开登录窗」假成功 | P0 | **已修** | `open_login_window` 现在：复用实例时先 `focus_browser_window`，不行就用 CDP `PUT /json/new` 开登录页再前置，仍不行报 `LOGIN_WINDOW_NOT_VISIBLE`；新启动时校验 `wait_for_cdp` + `wait_for_visible_window(pid, 5s)`（该进程必须有可见顶层窗口），任一失败立即关进程并返回中文错误。 |
+| U3 失败提示丢失 | P0 | **已修** | 失败原因本来就写在 Rust snapshot 的 `errorCode/error` 里；前端新增 `resolvePanelError()`：优先本次 invoke 错误，其次**一定回落 snapshot 的持久错误**，所以收起浮层/重挂载后错误条仍在。`phaseText()` 补 `interrupted`/`blocked` 分支，状态条显示「本轮失败」+ 常驻错误条（含诊断码小标签）。 |
+| U4 失败不写日志 | P1 | **已修** | `set_runtime_error()` 与 `abort_start()` 统一落 `store.log(DiagnosticEntry)`（code/message/sessionId/level=error），写 `logs\video-<日期>.jsonl`；面板「诊断日志」从 `video_diagnostics` 读后端真实轨迹（4 秒刷新），不再是前端自检临时拼的 5 条。DSH `/api/video/diagnostics` 同源。 |
+| U5 失败记成「异常崩溃」/历史全 0 条 | P1 | **已修** | `model::StopReason` 新增 `browserUnavailable / loginRequired / parseFailed`；`finish()` 在 0 条时按 `error_code`（LOGIN_REQUIRED）或「无错误但 0 条」细分原因，不再一律 `crash`。前端 `sessionReason()` 把 stopReason + errorCode 翻成中文人话（浏览器没起来 / 需要登录 / 页面没解析到内容 / 风控 / 手动停止 …）。 |
+| U6 从未成功采集 | P1 | **未验证** | 需要已登录的专用 profile 实机跑一轮；本轮修完 U1 后「开始 → 采集 → 停」路径已具备条件，见 6.4。 |
+| U7 英文错误码 | P2 | **已修** | `failureReasonText()` 把 `noResponse/portBusy/...` 全翻中文；英文码只放 tooltip。通道卡移入「高级设置」。 |
+| U8 `[object Object]` | P2 | **已修** | `describeVideoError()` 统一解析 Rust `VideoError` 对象（code + message），评论/账号/配置/登录/清空全走它。 |
+| U9 参数不落盘且无提示 | P2 | **已修（说明）** | 高级设置参数区写明「仅本次运行有效：重开面板或重启后会回到已保存值」；保存后提示同义。 |
+| U10 退出后不关专用浏览器 | P2 | **已修** | 一轮结束 / 停止 / 应用退出都会关闭专用浏览器（`finish()`、`stop()`、`RunEvent::Exit`），并清掉实例标记；高级设置新增「关闭专用浏览器」按钮（`video_close_browser`）。 |
+
+### 6.2 UI 精简（§1 的 IA）
+
+新面板（`src/plugins/video/VideoAutomationPlugin.tsx`）：
+
+```
+[小狗刷视频 · 状态 + 条目/强兴趣]                        [开始看/停下]
+（失败时常驻错误条 + 诊断码）
+平台 [B站推荐流▾]   登录：未登录（临时观看）            [打开登录窗]
+── 最近小结 ──────────────────────────────────────────────
+  主题/最多 3 条 / 待投递 N / 刷新历史 / ▸历史会话（每条带真实原因）
+▸ 高级设置（参数 · 仅本次有效 / 专用浏览器状态+关闭 / 账号档案 / 自检与诊断 / 清空数据）
+▸ 评论（可选，只有点发送才发）
+```
+
+- 删除「观后感草稿」「复制草稿」「打开投稿页 / 打开直播中心」（与看视频无关）；
+  小结直接看 `最近小结` 卡片与历史。
+- 「通道与诊断」收进高级；「清空数据」收进高级且二次确认；「保存配置 / 4 个参数 /
+  账号档案」全部收进高级。
+- 首屏不再滚动：平台、登录、开始/停下、小结都在第一屏。
+
+### 6.3 验证输出（本轮）
+
+| 命令 | 结果 |
+| --- | --- |
+| `node node_modules\typescript\bin\tsc --noEmit` | exit 0 |
+| `cd src-tauri; cargo check` | exit 0（仅既有 warning） |
+| `node --test tests/*.test.mjs` | `tests 92 / pass 92 / fail 0`（原 78 + 新增 14 条 `tests/video-panel-logic.test.mjs`） |
+| `vite build`（TEMP 指到仓库内目录绕开杀软临时文件拦截） | exit 0 |
+| `cargo build --release --features custom-protocol` | exit 0；产物 28,568,576 B，已装到 `E:\Maltese2`（旧 exe 备份 `maltese-assistant.exe.video.bak`） |
+| 构建产物抽查 | `dist` 含「小狗刷视频」「高级设置」「最近小结」「关闭专用浏览器」等新文案 |
+
+新增 Rust 单测：`browser::reuse_decision`（内存/残留/清理三态）、`same_profile`（大小写/分隔符）、
+`cdp_ready`（关闭端口为 false）。本机 `cargo test` 仍受 `0xc0000139` 环境限制，只验证到编译级。
+
+#### 实机验证（DSH API 驱动，真实 Chrome + 真实专用 profile）
+
+本轮把新 exe 装到 `E:\Maltese2`（旧 exe 备份 `maltese-assistant.exe.video.bak`），用
+`POST /api/video/start|stop` + `GET /api/video/status|sessions|diagnostics` 跑真实链路：
+
+| 场景 | 实测结果 |
+| --- | --- |
+| **U1 残留实例复用**（QA 报告里那个 10:57 启动、pid 12488、占 9333 的旧浏览器，由旧版本启动、**没有实例标记**） | 点开始后 **2 秒内 `phase=collecting`、`itemCount=1`、无 `CDP_UNAVAILABLE`**；`%LOCALAPPDATA%\Maltese\video-browser.json` 写成 `{"pid":12488,"port":9333,...}` —— 走的是「命令行匹配同 profile 实例 → 接管 9333」，不再换端口重开。 |
+| **U10 / 清理** | 停止后 `phase=stopped`、浏览器 pid 12488 已退出、实例标记被删除；历史里该轮 `itemCount=1`。 |
+| **U6 首次采集成功** | 同一次运行 `itemCount` 从 0 变 1（此前 6 条全部 0 条），说明修复后主流程至少能进采集并拿到页面事实。 |
+| **U5 手动停止记录** | 停止的会话：`stopReason:"userStop"`、`endedAt` 有值、`itemCount:1`（修复前是 `stopReason:null`、0 条的「空会话」）。 |
+| **U4 失败落盘 + /diagnostics** | 人为占满 9333–9338 再开始：API 返回 `{"code":"PORT_BUSY","message":"本机调试端口被占用，无法启动小狗浏览器。"}`；状态 `errorCode=PORT_BUSY`；`video/logs/video-20261117.jsonl` 落一条 error；`GET /api/video/diagnostics` 返回 `{"code":"PORT_BUSY","level":"error","sessionId":"bili-20261117-29987f"}`；历史会话 `stopReason:"browserUnavailable"`、`errorCode:"PORT_BUSY"`。 |
+
+> 未覆盖：「打开登录窗」的真实窗口出现（U2 的 `wait_for_visible_window` 分支）、
+> 真实登录后的连续采集、以及面板 UI 的鼠标点击链路（见 J1/J2 与 6.5）。
+
+### 6.4 J1–J9 现状
+
+| # | 判据 | 本轮结果 |
+| --- | --- | --- |
+| J1 | 首屏交互控件 ≤8 | **静态计数 6**（开始/停下、平台、打开登录窗、刷新历史、高级 summary、评论 summary；待投递与历史折叠展开时才多 1–2 个）。**UIA 实测待 QA**：本轮实机 UIA 截图被同机其它进程抢鼠标打断（SetCursorPos 到岛屿后光标被外部移回 952,1176，合成点击时灵时不灵）。 |
+| J2 | 面板总高 ≤1.2 屏 | 按新面板结构（状态条 36 + 平台行 32 + 小结约 80 + 两个折叠标题 40 + 间距/内边距）**估算 ≈ 0.6 屏（约 260–300px / 窗口 430–490px）**；同样待 UIA 复测。 |
+| J3 | 到开始采集 ≤3 次点击、无需滚动 | 主窗：展开桌宠 → 插件页 → 开始看（3 次）；面板顶部即主按钮，无需滚动。 |
+| J4 | 开始后 ≤20s 有结果/常驻错误 | 失败路径：`start()` 内最多等 15s CDP + 失败立即 `set_runtime_error` + finish；错误条来自 snapshot，收起重开仍在。 |
+| J5 | 失败可排障 | 每次失败 `store.log` + `/api/video/diagnostics` 可读（U4）。 |
+| J6 | 残留浏览器恢复 | 复用/清理/重开三态 + 面板显示当前实例状态 + 一键关闭（U1/U10）。 |
+| J7 | 0 条呈现真实原因 | `sessionReason()`（未登录 / 页面解析失败 / 浏览器没起来 / 风控 / 手动停止）。 |
+| J8 | 错误文案全中文 | `describeVideoError` + `errorMessageForCode` + `failureReasonText`；不再有英文码刷屏或 `[object Object]`。 |
+| J9 | 端到端最小演练 | **部分通过（API 驱动）**：真实 Chrome + 专用 profile 跑通「开始 → 采集（items=1）→ 停」，残留实例复用与停止后自动关闭均已实测；**UI 点击链路与登录窗流程待实机**。 |
+
+### 6.5 复测步骤（QA / 用户）
+
+1. 冷启动 → 展开桌宠 → 插件页：确认首屏能看到「开始看」「平台」「打开登录窗」「最近小结」，
+   不用滚动；状态条显示「已暂停 · 条目 0」。
+2. 点「开始看」（没登录）：≤20s 内要么进入「小狗正在看」，要么出现常驻中文错误条；
+   收起浮层再打开 → 错误条仍在（U3）。
+3. 点「打开登录窗」：5s 内必须出现可见浏览器窗口；若机器上已有上次的专用浏览器，
+   应直接复用/前置（U1/U2），不再出现「提示成功但没窗口」。
+4. 登录后点「开始看」：应在 20s 内 `条目 > 0`（U6/J9）；「停下」后专用浏览器自动关闭。
+5. 故意留一个旧专用浏览器进程再点「开始看」：应自动识别并复用或清理后重启，
+   不再 15s 超时（U1）。
+6. 失败后看 `%APPDATA%\com.maolouis.maltese\video\logs\video-<date>.jsonl` 与
+   `/api/video/diagnostics`：应有对应 code；历史里同一轮显示真实原因（U4/U5）。
+7. UIA 复测 J1/J2：脚本见 `work/`（本轮临时脚本未入库），或人工数首屏按钮 + 量面板高度。
