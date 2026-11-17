@@ -498,6 +498,22 @@ fn extract_reasoning_delta(value: &Value) -> Option<String> {
     None
 }
 
+/// `/v1/models` 里是否有 `status.value == "loaded"` 的模型。
+fn models_loaded(parsed: &Value) -> bool {
+    parsed
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items.iter().any(|item| {
+                item.pointer("/status/value")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value == "loaded")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// 确保本机模型（F:\Strata 里的 Strata 服务）已经在跑。
 /// 主动聊天、聊天发送前调用：服务没起来就顺手拉起，避免一路退化成模板台词。
 #[tauri::command]
@@ -518,72 +534,60 @@ pub async fn ensure_local_model(base_url: String, model: Option<String>) -> Resu
         .timeout(Duration::from_secs(4))
         .build()
         .map_err(|error| error.to_string())?;
-    if client.get(&health).send().await.map(|response| response.status().is_success()).unwrap_or(false) {
-        // 端口在跑 ≠ 模型已加载：`status.value == "unloaded"` 时第一个请求可能长时间
-        // 没有任何 SSE 事件（用户看到的就是「完全没回复」）。这里用一次极短的补全预热模型。
-        let mut body: Option<String> = None;
-        if let Ok(response) = client.get(&health).send().await {
-            if response.status().is_success() {
-                body = response.text().await.ok();
-            }
-        }
+    let models_body = client
+        .get(&health)
+        .send()
+        .await
+        .ok()
+        .filter(|response| response.status().is_success());
+    if let Some(response) = models_body {
+        let body = response.text().await.ok();
         let parsed: Value = body
             .as_deref()
             .and_then(|text| serde_json::from_str(text).ok())
             .unwrap_or(Value::Null);
-        let loaded = parsed
-            .get("data")
-            .and_then(|data| data.as_array())
-            .map(|items| {
-                items.iter().any(|item| {
-                    item.pointer("/status/value")
-                        .and_then(|value| value.as_str())
-                        .map(|value| value == "loaded")
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false);
+        let loaded = models_loaded(&parsed);
         if loaded {
             return Ok(true);
         }
-        let model_id = model
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_string())
-            .or_else(|| {
-                parsed
-                    .pointer("/data/0/id")
-                    .and_then(|value| value.as_str())
-                    .map(|value| value.to_string())
-            });
-        if let Some(model_id) = model_id {
-            let warm_payload = json!({
-                "model": model_id,
-                "messages": [{ "role": "user", "content": "你好" }],
-                "max_tokens": 1,
-                "temperature": 0.1,
-                "stream": false
-            });
-            let warm_client = Client::builder()
-                .connect_timeout(Duration::from_secs(5))
-                .timeout(Duration::from_secs(240))
-                .build()
-                .map_err(|error| error.to_string())?;
-            if let Ok(response) = warm_client
-                .post(format!("{}://{host}:{port}/v1/chat/completions", endpoint.scheme()))
-                .json(&warm_payload)
-                .send()
-                .await
-            {
-                if response.status().is_success() {
-                    return Ok(true);
+        // 端口在跑，但模型是 lazy/unloaded（Strata 的 `lazy_load` 预设）：
+        // 发一次 HTTP POST /load 让它真正把权重读进显存，然后轮询到 loaded:true。
+        let control = format!("{}://{host}:{port}/load", endpoint.scheme());
+        let load_client = Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(240))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let _ = load_client
+            .post(&control)
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await;
+        // 轮询 /v1/models（每 2s，最多 240s）：只有 loaded:true 才算就绪。
+        for _ in 0..120 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let body = {
+                if let Ok(response) = client.get(&health).send().await {
+                    if response.status().is_success() {
+                        response.text().await.ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
+            };
+            let parsed: Value = body
+                .as_deref()
+                .and_then(|text| serde_json::from_str(text).ok())
+                .unwrap_or(Value::Null);
+            if models_loaded(&parsed) {
+                return Ok(true);
             }
         }
         return Ok(false);
-    }
-    // 没在跑：拉起 Strata，最多等 120 秒。
+    }    // 没在跑：拉起 Strata，最多等 120 秒。
     strata_launch().await?;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_secs(3)).await;

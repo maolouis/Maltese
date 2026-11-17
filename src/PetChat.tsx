@@ -186,6 +186,8 @@ export function PetChat() {
   const firstDeltaRef = useRef(false);
   // 聊天里的「小狗状态条」+ 阈值跨越灰色提示（只展示，不写记录、不发给模型）。
   const [stateNotices, setStateNotices] = useState<string[]>([]);
+  /** 正在加载本地模型（预热）：用来把 busy 文案从「思考」换成「加载模型…」。 */
+  const [modelLoading, setModelLoading] = useState(false);
   const prevVitalsRef = useRef<VitalsSummary | null>(loadVitalsSummary());
   const [noticeAtInitial] = useState<number>(() => {
     try {
@@ -602,15 +604,22 @@ export function PetChat() {
       // 本地模型：发送前确认「端口在跑 + 模型已加载」。冷启动可能要 1–2 分钟，
       // 期间 busy 文案会显示加载中；加载失败/超时给中文原因，不让请求静默挂着。
       if (chatConfig.backend === "local") {
-        const ready = await Promise.race([
-          invoke<boolean>("ensure_local_model", {
-            baseUrl: chatConfig.baseUrl,
-            model: chatConfig.model,
-          }).catch(() => false),
-          new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 240_000)),
-        ]);
+        setModelLoading(true);
+        let ready = false;
+        try {
+          ready = await Promise.race([
+            invoke<boolean>("ensure_local_model", {
+              baseUrl: chatConfig.baseUrl,
+              model: chatConfig.model,
+            }).catch(() => false),
+            new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 240_000)),
+          ]);
+        } finally {
+          setModelLoading(false);
+        }
+        if (activeRequestRef.current?.cancelled) throw new Error("已停止生成。");
         if (!ready) {
-          throw new Error("模型没有准备好：加载失败或超时（请确认模型服务已启动，首次加载可能需要 1–2 分钟）。");
+          throw new Error("模型没能加载：请检查 Strata 是否在运行、显存是否够（首次加载约 1–4 分钟）。");
         }
       }
       let replyText: string | undefined;
@@ -993,12 +1002,14 @@ export function PetChat() {
             <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
               <LoaderCircle size={15} className="pet-chat__spin" />
               <span>
-                {waitSeconds >= 3
-                  ? `小狗在加载模型或思考，稍等（${waitSeconds}s）`
-                  : thinkingOn
-                    ? "小狗正在思考…"
-                    : t.chat.thinking}
-                {waitSeconds >= 1 && waitSeconds < 3 ? `（${waitSeconds}s）` : ""}
+                {modelLoading
+                  ? `正在加载本地模型…（已 ${waitSeconds}s，首次约 1–4 分钟）`
+                  : waitSeconds >= 3
+                    ? `小狗在加载模型或思考，稍等（${waitSeconds}s）`
+                    : thinkingOn
+                      ? "小狗正在思考…"
+                      : t.chat.thinking}
+                {!modelLoading && waitSeconds >= 1 && waitSeconds < 3 ? `（${waitSeconds}s）` : ""}
               </span>
               <button
                 type="button"

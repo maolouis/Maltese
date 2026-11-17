@@ -245,3 +245,28 @@ UI 显示：`模型响应超时，已停止。首次加载会比较慢，稍后�
   总上限 180s；错误映射新增 `CHAT_MODEL_NOT_READY` / `CHAT_BUSY` / `CHAT_BACKEND_ERROR`。
 - 失败时把完整错误对象写 `console.error` 并持久化到 `maltese-chat-last-error`（不含聊天正文），
   方便下次直接取证。
+
+## 本地模型一直是 `loaded:false`：Strata 的 lazy_load 与 /load（2026-11-17 定案）
+
+用户实测 `http://127.0.0.1:8080/health` 一直 `loaded:false`，等不来。只读排查结论（`E:\Maltese\work\strata-control-extract`）：
+
+- `serve/runconfig.py:38` → `lazy_load`：「Start without loading the model; the first request loads it (text only)」。
+  这台机器的 Strata 是 lazy 启动：**进程在跑 ≠ 模型已加载**，`/v1/models` 的 `status.value` 长时间是 `unloaded`。
+- `serve/server.py:4866` → `idle_unload_s = 0`（默认 0 = 从不在空闲后卸载）；只有显式配置/`--idle-unload`
+  才会卸载。所以「加载后又被卸载」只在预设里设过 `idle_unload_s` 时才发生。
+- `serve/server.py:8228` → `POST /load`：「load now, e.g. ahead of a request」，本地控制请求可用；
+  实测 `POST /load` 返回 200，从 unload 到真正 `loaded:true` 冷加载约 **26s**（我们机器）。
+
+我们做的：
+- `ensure_local_model(base_url, model)`：读 `/v1/models` 判断 `status.value`；不是 `loaded` 就先 `POST /load`，
+  然后**每 2s 轮询 `/v1/models` 直到 `loaded:true`，最多 240s**（只有真加载好才返回 true）。
+- 前端：打开聊天即后台预热；发送前等待预热完成，期间气泡显示
+  「正在加载本地模型…（已 Ns，首次约 1–4 分钟）」+「停止生成」；加载失败给中文原因
+  「模型没能加载：请检查 Strata 是否在运行、显存是否够」。
+- 保活：聊天打开期间每 4 分钟轻触一次 `ensure_local_model`，防止预设里配了 `idle_unload_s` 时被卸载。
+
+手动排查/恢复：
+1. `curl http://127.0.0.1:8080/v1/models` 看 `status.value`（`loaded` / `unloaded`）。
+2. 想立刻加载：`curl -X POST http://127.0.0.1:8080/load -H "content-type: application/json" -d "{}"`。
+3. 想彻底重启：`powershell -ExecutionPolicy Bypass -File F:\Strata\bin\start-qwen36.ps1`
+   （端口占用时它只进监控；先 `curl -X POST http://127.0.0.1:8080/stop` 或关掉 Strata 窗口）。
