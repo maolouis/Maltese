@@ -68,6 +68,9 @@ export function extractSticker(text: string): { text: string; sticker: StickerId
     ...text.matchAll(STICKER_PATTERN),
     ...text.matchAll(ID_ONLY_PATTERN),
   ];
+  // 实测模型常把标记写成行尾裸 id（「～ pet」「。eating」）：只认行尾、且必须是白名单，
+  // 避免把正文里的普通单词当表情包。
+  const bareMatch = text.match(new RegExp("(?:^|[\\s～~。.!！?？,，、])(" + IDS + ")\\s*$", "i"));
   for (const match of candidates) {
     const id = (match[1] ?? "").toLowerCase();
     if (isStickerId(id)) {
@@ -75,9 +78,14 @@ export function extractSticker(text: string): { text: string; sticker: StickerId
       break;
     }
   }
+  if (!sticker && bareMatch) {
+    const bare = (bareMatch[1] ?? "").toLowerCase();
+    if (isStickerId(bare)) sticker = bare;
+  }
   const cleaned = text
     .replace(MARKER_PATTERN, "")
     .replace(ID_ONLY_PATTERN, "")
+    .replace(new RegExp("[\\s～~。.!！?？,，、]*(" + IDS + ")\\s*$", "i"), "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+\n/g, "\n")
     .trim();

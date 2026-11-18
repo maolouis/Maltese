@@ -24,6 +24,10 @@ test("非法 id / 缺标记：标记被删掉、不产生表情包", () => {
   // 模型偶尔偷懒写 <relax> 也要能认出来
   assert.equal(extractSticker("先歇会儿 <relax>").sticker, "relax");
   assert.equal(extractSticker("先歇会儿 <relax>").text, "先歇会儿");
+  // 实测模型也会写成行尾裸 id（「～ pet」「。eating」）
+  assert.equal(extractSticker("求摸摸～ pet").sticker, "pet");
+  assert.equal(extractSticker("求摸摸～ pet").text, "求摸摸");
+  assert.equal(extractSticker("陪着你一起挑今晚的大餐，馋嘴小狗已经摇着尾巴等开饭啦！eating").sticker, "eating");
   assert.deepEqual(extractSticker("普通回复"), { text: "普通回复", sticker: null });
   assert.deepEqual(extractSticker(""), { text: "", sticker: null });
   // 大写与空格容错
