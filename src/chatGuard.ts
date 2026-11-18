@@ -21,11 +21,14 @@ export const CHAT_FIRST_TOKEN_TIMEOUT_MS: Record<ThinkingDepth, number> = {
 
 /** 总时长上限：120s（本机实测流式 36s、非流式 55s 都可能出现，不能掐断）。 */
 export const CHAT_TOTAL_TIMEOUT_MS: Record<ThinkingDepth, number> = {
-  off: 180_000,
-  shallow: 180_000,
-  normal: 180_000,
-  deep: 180_000,
+  off: 300_000,
+  shallow: 300_000,
+  normal: 300_000,
+  deep: 300_000,
 };
+
+/** 排队等待上限：一直没有事件＝可能在单槽位排队，最多等 240s（不是错误）。 */
+export const CHAT_QUEUE_WAIT_MS = 240_000;
 
 /** 已经开始输出后，允许的最长「完全没有新事件」的空窗。 */
 // 本机实测：思考档位两个 chunk 之间可静默 20s+（首次 prefill 45s），20s 会误杀。
@@ -77,17 +80,29 @@ export function shouldAbortStream(input: StreamAbortInput): { abort: boolean; re
   const profile = chatTimeouts(input.depth);
   const elapsed = input.now - input.startedAt;
   if (elapsed >= profile.totalMs) {
-    return { abort: true, reason: `模型这轮超过 ${Math.round(profile.totalMs / 1000)} 秒还没结束，已停止。可调浅思考或稍后重试。` };
+    return { abort: true, reason: `这次等了 ${Math.round(profile.totalMs / 1000)} 秒还没轮到/没结束，已停止。可以稍后再发，或调浅思考。` };
   }
-  // 还没有任何事件：可能是模型在加载、或单槽位正在跑别的请求（队头占着不吐字）。
-  // 这种情况**不要中止**，只提示排队；到了总时长才停（否则用户会看到「完全没回复」）。
+  // 还没有任何事件：可能在加载、也可能在单槽位排队（队头占着不吐字）。
+  // 排队不中止，只提示；只有排队等待超过上限才结束（文案走 CHAT_QUEUED，不叫超时）。
   if (input.lastActivityAt === null) {
+    if (elapsed >= CHAT_QUEUE_WAIT_MS) {
+      return { abort: true, reason: `前面还有请求在跑，排队 ${Math.round(CHAT_QUEUE_WAIT_MS / 1000)} 秒还没轮到，已停止。可以稍后再发，或调浅思考。` };
+    }
     return { abort: false, reason: "" };
   }
   if (input.now - input.lastActivityAt >= profile.idleMs) {
-    return { abort: true, reason: `模型中途 ${Math.round(profile.idleMs / 1000)} 秒没有新内容，已停止。` };
+    return { abort: true, reason: `已经开始输出后 ${Math.round(profile.idleMs / 1000)} 秒没有新内容，已停止。` };
   }
   return { abort: false, reason: "" };
+}
+
+/** 刚发出不到 3s：先不要下「排队」结论。 */
+export const CHAT_QUEUE_HINT_AFTER_MS = 3_000;
+
+/** 还没有任何事件、且已经等了一小会儿 → 视为「排队中」（只提示、不中止）。 */
+export function isQueueing(input: StreamAbortInput): boolean {
+  if (input.lastActivityAt !== null) return false;
+  return input.now - input.startedAt >= CHAT_QUEUE_HINT_AFTER_MS;
 }
 
 /** 已经等超过首字时限但还没有任何事件 → 显示「排队 / 模型忙」提示（不中止）。 */
@@ -100,10 +115,10 @@ export type ChatErrorInfo = { code: string; message: string; raw: string };
 
 const ERROR_MAP: Array<{ test: RegExp; code: string; message: string }> = [
   { test: /没有准备好|加载失败|模型没有|unloaded/i, code: "CHAT_MODEL_NOT_READY", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
-  { test: /排队|模型忙|一直忙|单槽位/i, code: "CHAT_BUSY", message: "模型还在处理上一条回答（单槽位排队），这次没等到；稍后重试或调浅思考。" },
+  { test: /排队|模型忙|一直忙|单槽位/i, code: "CHAT_QUEUED", message: "前面还有请求在跑，这次排队太久没轮到（已停止）。可以稍后再发，或调浅思考。" },
   { test: /^已停止/, code: "CHAT_STOPPED", message: "已停止生成。想继续可以点「重试」或再说一句。" },
   { test: /连接不到|ECONNREFUSED|Connection refused|os error 10061/i, code: "CHAT_BACKEND_DOWN", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
-  { test: /超时|timeout|timed out|太慢|没有任何输出|空窗|没有新内容|没有响应/i, code: "CHAT_TIMEOUT", message: "模型响应超时，已停止。首次加载会比较慢，稍后重试或调浅思考。" },
+  { test: /没有新内容|输出后|超时|timeout|timed out/i, code: "CHAT_TIMEOUT", message: "已经输出了一部分但中途 45 秒没有新内容，已停止。可以点「重试」。\n（还没轮到属于排队，会显示「排队中…」而不是这个错误。）" },
   { test: /5\d\d|服务返回错误|请求本地模型失败|读取本地模型流失败|stream|连接被重置|reset/i, code: "CHAT_BACKEND_ERROR", message: "模型服务这次返回错误（原因已记录到控制台），稍后重试或重启模型。" },
   { test: /400|template|chat template|Bad Request/i, code: "CHAT_BAD_REQUEST", message: "模型拒绝了这次请求（可能是对话模板不兼容），已尝试去掉状态上下文重试。" },
   { test: /401|403|api.?key|鉴权|unauthorized/i, code: "CHAT_AUTH", message: "模型接口鉴权失败，请检查聊天设置里的 API Key。" },

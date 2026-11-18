@@ -46,8 +46,12 @@ export const STICKER_INSTRUCTION =
   "如果你想说点什么但文字不够，可以在回复末尾单独一行输出 <sticker:表情>，表情只能取以下之一：" +
   "happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax；最多一个，不确定就不要输出。";
 
-const STICKER_PATTERN = /<sticker:\s*([a-zA-Z_]+)\s*>/gi;
-const MARKER_PATTERN = /<sticker:[^>]*>/gi;
+const IDS = STICKER_IDS.join("|");
+/** 规范写法 `<sticker:relax>`；也容忍模型偷懒写 `<relax>`。 */
+const STICKER_PATTERN = new RegExp("<sticker:\\s*([a-zA-Z_]+)\\s*>", "gi");
+const ID_ONLY_PATTERN = new RegExp("<(" + IDS + ")>", "gi");
+/** 移除所有标记（含未写完的一半），用于清洗正文。 */
+const MARKER_PATTERN = new RegExp("<sticker:[^>]*>?", "gi");
 
 export function isStickerId(value: unknown): value is StickerId {
   return typeof value === "string" && (STICKER_IDS as readonly string[]).includes(value);
@@ -60,8 +64,11 @@ export function isStickerId(value: unknown): value is StickerId {
 export function extractSticker(text: string): { text: string; sticker: StickerId | null } {
   if (!text) return { text: "", sticker: null };
   let sticker: StickerId | null = null;
-  const matches = [...text.matchAll(STICKER_PATTERN)];
-  for (const match of matches) {
+  const candidates = [
+    ...text.matchAll(STICKER_PATTERN),
+    ...text.matchAll(ID_ONLY_PATTERN),
+  ];
+  for (const match of candidates) {
     const id = (match[1] ?? "").toLowerCase();
     if (isStickerId(id)) {
       sticker = id;
@@ -70,6 +77,7 @@ export function extractSticker(text: string): { text: string; sticker: StickerId
   }
   const cleaned = text
     .replace(MARKER_PATTERN, "")
+    .replace(ID_ONLY_PATTERN, "")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
@@ -78,7 +86,12 @@ export function extractSticker(text: string): { text: string; sticker: StickerId
 
 /** 流式展示时先把标记（可能还没写完整）隐藏掉。 */
 export function stripStickerMarkup(text: string): string {
-  return text.replace(/<sticker:[^>]*>?/gi, "");
+  // 流式时标记可能只写到一半（`<sticker:hap` / `<relax`），连未闭合的一起隐藏。
+  return text
+    .replace(/<sticker:[^>]*>?/gi, "")
+    .replace(new RegExp("<(?:" + IDS + ")>", "gi"), "")
+    .replace(new RegExp("<(?:" + IDS + ")$", "i"), "")
+    .replace(/<sticker:[^>]*$/, "");
 }
 
 /** 连续 3 条不重复同一 sticker：候选在最近 3 条里出现过就返回 null。 */
@@ -108,4 +121,32 @@ export function stickerPoolOrder(id: StickerId, character: string): Array<{ grou
     pools.push({ group: "xiaobai", action });
   }
   return pools;
+}
+
+/** 表情包内联显示宽度（px）：
+ * - 正常 144–160（按气泡宽度微调），最小 128、最大 180；
+ * - 源 GIF 比 128 还小（例如 120）时按自然尺寸渲染，避免拉伸糊掉；
+ * - 放大预览用原始尺寸（CSS 再限制到窗口 60%）。
+ */
+export function stickerDisplayWidth(naturalWidth: number, bubbleWidth = 360): number {
+  const target = Math.round(Math.min(160, Math.max(144, bubbleWidth * 0.4)));
+  const natural = Number.isFinite(naturalWidth) && naturalWidth > 0 ? Math.round(naturalWidth) : 0;
+  if (natural > 0 && natural < 128) return natural;
+  return Math.min(180, Math.max(128, target));
+}
+
+/**
+ * 把模型输出拆成「文字 + 可选表情包」两条消息的数据（纯函数，便于单测）：
+ * - 文字部分去掉标记；只剩标记时 text 为空字符串（调用方不产生文字消息）；
+ * - sticker 只取第一个白名单 id，其余忽略；最近 3 条内出现过则丢弃（不显示）。
+ */
+export function splitAssistantReply(
+  rawText: string,
+  recentStickers: Array<string | null | undefined> = [],
+): { text: string; sticker: StickerId | null } {
+  const parsed = extractSticker(rawText ?? "");
+  return {
+    text: parsed.text,
+    sticker: dedupeSticker(recentStickers, parsed.sticker),
+  };
 }

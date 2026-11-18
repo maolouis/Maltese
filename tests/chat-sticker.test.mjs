@@ -6,6 +6,8 @@ import {
   isStickerId,
   STICKER_ACTION,
   STICKER_IDS,
+  splitAssistantReply,
+  stickerDisplayWidth,
   stickerOfMessage,
   stickerPoolOrder,
   stripStickerMarkup,
@@ -19,6 +21,9 @@ test("标记抽取：合法 id 取出并从正文移除", () => {
 
 test("非法 id / 缺标记：标记被删掉、不产生表情包", () => {
   assert.deepEqual(extractSticker("嘿嘿 <sticker:banana>"), { text: "嘿嘿", sticker: null });
+  // 模型偶尔偷懒写 <relax> 也要能认出来
+  assert.equal(extractSticker("先歇会儿 <relax>").sticker, "relax");
+  assert.equal(extractSticker("先歇会儿 <relax>").text, "先歇会儿");
   assert.deepEqual(extractSticker("普通回复"), { text: "普通回复", sticker: null });
   assert.deepEqual(extractSticker(""), { text: "", sticker: null });
   // 大写与空格容错
@@ -68,4 +73,30 @@ test("白名单 12 个 id，且素材池顺序符合预研（stickers → 角色
     { group: "shared", action: "sleep" },
     { group: "xiaobai", action: "sleep" },
   ]);
+});
+
+test("表情包显示尺寸：144–160 档位、最小 128、最大 180，小图不放大", () => {
+  assert.ok(stickerDisplayWidth(300, 360) >= 144 && stickerDisplayWidth(300, 360) <= 160);
+  assert.equal(stickerDisplayWidth(300, 200), 144, "窄气泡也不低于 144");
+  assert.equal(stickerDisplayWidth(300, 1200), 160, "宽气泡不超过 160");
+  assert.equal(stickerDisplayWidth(120, 360), 120, "源图 120px 按自然尺寸渲染（不拉伸）");
+  assert.equal(stickerDisplayWidth(1000, 360), stickerDisplayWidth(1000, 360));
+  assert.ok(stickerDisplayWidth(1000, 360) <= 180);
+});
+
+test("拆分规则：只有标记→无文字；文字+标记→两条；多个标记只取第一个", () => {
+  const only = splitAssistantReply("  <sticker:happy>  ", []);
+  assert.equal(only.text, "", "只剩标记时不产生文字消息");
+  assert.equal(only.sticker, "happy");
+
+  const both = splitAssistantReply("今天也辛苦啦 <sticker:relax>", []);
+  assert.equal(both.text, "今天也辛苦啦");
+  assert.equal(both.sticker, "relax");
+
+  const many = splitAssistantReply("好耶 <sticker:happy> 又说 <sticker:cry>", []);
+  assert.equal(many.sticker, "happy", "只取第一个白名单 id");
+  assert.ok(!many.text.includes("sticker"), "标记全部从正文移除");
+
+  assert.equal(splitAssistantReply("再来 <sticker:happy>", ["cry", "happy"]).sticker, null);
+  assert.equal(splitAssistantReply("再来 <sticker:happy>", ["cry", "pet", "love"]).sticker, "happy");
 });

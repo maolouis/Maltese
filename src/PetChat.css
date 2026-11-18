@@ -554,28 +554,34 @@
 
 /* ------------------------------------------------------------------
    表情包信使：模型在回复末尾输出 <sticker:xxx>，前端从素材库取 GIF 内联显示。
-   96×96、圆角、点击放大；任何取图失败都不渲染（绝不显示破图）。
+   尺寸 144–160（最小 128、最大 180，实际宽度由 stickerDisplayWidth 按 GIF 自然尺寸修正）；
+   圆角 12、与文字间距 ≥8px、淡淡阴影保证浅色/深色底都能看清；点击放大到窗口 60%。
    ------------------------------------------------------------------ */
 .pet-chat__sticker {
   display: block;
-  width: 96px;
-  height: 96px;
-  margin-top: 6px;
+  width: auto;
+  max-width: 180px;
+  margin-top: 10px;
   padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: transparent;
   cursor: zoom-in;
   overflow: hidden;
+  box-shadow: 0 1px 3px rgba(20, 24, 35, 0.12);
 }
 
 .pet-chat__sticker img {
   display: block;
-  width: 96px;
-  height: 96px;
-  border-radius: 10px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
   object-fit: contain;
   image-rendering: auto;
+}
+
+.pet-chat__bubble p + .pet-chat__sticker {
+  margin-top: 10px;
 }
 
 .pet-chat__sticker-preview {
@@ -586,13 +592,17 @@
   place-items: center;
   padding: 0;
   border: 0;
-  background: rgba(20, 24, 35, 0.55);
+  background: rgba(20, 24, 35, 0.58);
   cursor: zoom-out;
 }
 
 .pet-chat__sticker-preview img {
-  width: min(280px, 76vw);
-  height: min(280px, 76vh);
+  width: auto;
+  height: auto;
+  max-width: 60vw;
+  max-height: 60vh;
+  min-width: 128px;
+  min-height: 128px;
   padding: 10px;
   border-radius: 14px;
   background: #fff;

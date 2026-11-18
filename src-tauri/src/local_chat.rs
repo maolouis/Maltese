@@ -13,9 +13,7 @@ use tauri::{AppHandle, Emitter};
 /// 表情包信使：受控标记指令（12 个 id，与素材库动作对齐）。
 /// 只在正常聊天时注入；技能判断/工具调用传 sticker=false，避免污染动作决策。
 fn sticker_instruction() -> &'static str {
-    "如果你想说点什么但文字不够，可以在回复末尾单独一行输出 <sticker:表情>，表情只能取以下之一：\
-happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax；\
-最多一个，不确定就不要输出。标记行不要加标点，也不要解释。"
+    "如果你想说点什么但文字不够，可以在回复末尾单独一行输出一个表情标记，格式必须是 <sticker:表情>：\\n例如：<sticker:happy>\\n表情只能取以下之一：happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax。最多一个，不确定就不要输出。标记行不要加标点，也不要解释。"
 }
 
 fn persona(character: &str) -> &'static str {

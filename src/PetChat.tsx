@@ -31,6 +31,7 @@ import {
   chatTimeouts,
   clearChatBusy,
   describeChatError,
+  isQueueing,
   isTemplateRejection,
   markChatBusy,
   shouldAbortStream,
@@ -39,13 +40,16 @@ import {
 import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
 import { PetStateBar } from "./PetStateBar";
 import {
-  dedupeSticker,
-  extractSticker,
+  isStickerId,
+  splitAssistantReply,
+  STICKER_IDS,
+  stickerDisplayWidth,
   stickerOfMessage,
   stickerPoolOrder,
   stripStickerMarkup,
   type StickerId,
 } from "./chatSticker";
+import { pickStickerForVitals } from "./petVitals";
 import {
   detectThresholdCross,
   shouldShowNotice,
@@ -69,6 +73,8 @@ type ChatMessage = {
   reasoning?: string;
   /** 模型选的表情包（白名单 id；旧记录没有该字段也正常渲染）。 */
   sticker?: StickerId;
+  /** 消息类型：缺省=文字（兼容旧记录）；sticker=独立表情包消息。 */
+  kind?: "text" | "sticker";
 };
 
 type LocalChatStreamEvent = {
@@ -204,8 +210,15 @@ export function PetChat() {
   const [stateNotices, setStateNotices] = useState<string[]>([]);
   /** 正在加载本地模型（预热）：用来把 busy 文案从「思考」换成「加载模型…」。 */
   const [modelLoading, setModelLoading] = useState(false);
+  /** 单槽位排队中（后端 processing=true 且我们还没收到任何事件）。 */
+  const [queueing, setQueueing] = useState(false);
+  /** 客户端发送队列：忙时连发的消息先排队，等当前回答完再自动发。 */
+  const [sendQueue, setSendQueue] = useState<string[]>([]);
+  const sendRef = useRef<((overrideText?: string) => Promise<void>) | null>(null);
   /** 点击放大的表情包预览（null 表示没有）。 */
   const [stickerPreview, setStickerPreview] = useState<string | null>(null);
+  /** 内联表情包显示宽度（默认 150，onLoad 按自然尺寸修正）。 */
+  const [stickerWidth, setStickerWidth] = useState(150);
   const prevVitalsRef = useRef<VitalsSummary | null>(loadVitalsSummary());
   const [noticeAtInitial] = useState<number>(() => {
     try {
@@ -481,6 +494,7 @@ export function PetChat() {
           rejectGuard?.(new Error(reason));
         };
         let watchdog: number | null = null;
+        let lastStatusAt = 0;
         const unlisten = useStream
           ? await listen<LocalChatStreamEvent>("local-chat-stream", (event) => {
             if (event.payload.requestId !== requestId || active.cancelled) return;
@@ -509,6 +523,21 @@ export function PetChat() {
             }
             const verdict = shouldAbortStream({ startedAt, lastActivityAt, now, depth });
             if (verdict.abort) failWith(verdict.reason);
+            // 还没有任何事件：查后端单槽位是否在忙（/slots is_processing）→ 显示「排队中…」，
+            // 排队不中止（排队上限 240s，见 shouldAbortStream）。
+            if (lastActivityAt !== null) {
+              if (queueing) setQueueing(false);
+            } else if (
+              isQueueing({ startedAt, lastActivityAt, now, depth })
+              && now - lastStatusAt >= 3_000
+            ) {
+              lastStatusAt = now;
+              void invoke<{ loaded: boolean; processing: boolean }>('local_model_status', {
+                baseUrl: chatConfig.baseUrl,
+              })
+                .then((status) => setQueueing(Boolean(status?.processing)))
+                .catch(() => setQueueing(true));
+            }
           }, 1_000);
           const vitals = injectVitals ? buildChatVitalsContext() : null;
           // 上下文只放状态（贴纸指令由 Rust 侧 persona 注入，模型才真的看得到）。
@@ -606,7 +635,14 @@ export function PetChat() {
     const text = (overrideText ?? draft).trim();
     const sendImages = attachments.map((item) => item.send);
     const thumbnails = attachments.map((item) => item.thumb);
-    if ((!text && sendImages.length === 0) || busy) return;
+    if (!text && sendImages.length === 0) return;
+    if (busy) {
+      // 连发：当前回答还没结束，先把这条排进本地队列，等前面的完成再自动发送。
+      setSendQueue((current) => [...current, text]);
+      setDraft("");
+      setAttachments([]);
+      return;
+    }
     if (!isTauri()) {
       setError(t.chat.desktopOnly);
       return;
@@ -645,6 +681,7 @@ export function PetChat() {
     setFailedPrompt(null);
     markChatBusy(window.localStorage);
     cancelRef.current = false;
+    setQueueing(false);
     try {
       // 本地模型：发送前确认「端口在跑 + 模型已加载」。冷启动可能要 1–2 分钟，
       // 期间 busy 文案会显示加载中；加载失败/超时给中文原因，不让请求静默挂着。
@@ -780,12 +817,25 @@ export function PetChat() {
       }
       const reasoningText = streamingReasoning.trim().slice(0, 4000);
       // 表情包信使：抽受控标记 → 校验白名单 → 最近 3 条去重；非法标记会被移除且不显示。
-      const parsed = extractSticker(replyText ?? "");
       const recentStickers = messages
-        .filter((item) => item.role === "assistant")
+        .filter((item) => item.role === "assistant" && item.sticker)
         .slice(-3)
         .map((item) => item.sticker);
-      const sticker = dedupeSticker(recentStickers, parsed.sticker);
+      const split = splitAssistantReply(replyText ?? "", recentStickers);
+      const finalText = split.text;
+      let sticker = split.sticker;
+      // 模型没给标记时的兜底（只在明确场景补，避免自说自话）：体力低 → 按 vitals 权重补一个安静表情。
+      if (!sticker) {
+        const vitals = loadVitalsSummary();
+        if (vitals && vitals.energy < 35) {
+          const picked = pickStickerForVitals(
+            { ...vitals, focus: vitals.focus ?? 0 },
+            STICKER_IDS,
+            { avoid: recentStickers.filter(Boolean) as string[] },
+          );
+          if (isStickerId(picked)) sticker = picked;
+        }
+      }
       // 调试证据：保留模型原文末尾，便于确认标记确实来自模型（不含整段聊天正文）。
       try {
         const previous = JSON.parse(window.localStorage.getItem("maltese-chat-sticker-debug") ?? "[]");
@@ -799,21 +849,34 @@ export function PetChat() {
       } catch {
         // 忽略
       }
-      const finalText = parsed.text;
-      if (!shouldPersistReply(finalText, false)) {
+      // 文字为空但模型只给了表情包：只产生 sticker 消息；文字和表情包都空才算失败。
+      if (!shouldPersistReply(finalText, false) && !sticker) {
         throw new Error("模型没有返回正文，请重试或把「思考」调浅。");
       }
-      persist([
-        ...next,
-        {
+      const at = Date.now();
+      const appended: ChatMessage[] = [];
+      if (finalText) {
+        appended.push({
           id: createId(),
           role: "assistant",
+          kind: "text",
           text: finalText,
-          at: Date.now(),
+          at,
           reasoning: reasoningText ? reasoningText : undefined,
-          sticker: sticker ?? undefined,
-        },
-      ]);
+        });
+      }
+      if (sticker) {
+        // 表情包单独一条消息，紧跟在文字之后（顺序稳定：文字 → 表情包）。
+        appended.push({
+          id: createId(),
+          role: "assistant",
+          kind: "sticker",
+          text: "",
+          at: at + 1,
+          sticker,
+        });
+      }
+      persist([...next, ...appended]);
       setStreamingReply("");
       setStreamingReasoning("");
     } catch (reason) {
@@ -835,6 +898,15 @@ export function PetChat() {
     } finally {
       clearChatBusy(window.localStorage);
       setBusy(false);
+      // 队列里还有就自动发下一条（忙时连发的消息不会丢）。
+      setSendQueue((current) => {
+        if (current.length === 0) return current;
+        const [next, ...rest] = current;
+        window.setTimeout(() => {
+          void sendRef.current?.(next);
+        }, 30);
+        return rest;
+      });
     }
   }, [
     busy,
@@ -857,6 +929,18 @@ export function PetChat() {
     t.chat.modelNotConfigured,
     t.chat.multimodalLocalOnly,
   ]);
+  // 放大预览：Esc 也能关（点任意处关闭由遮罩按钮负责）。
+  useEffect(() => {
+    if (!stickerPreview) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setStickerPreview(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [stickerPreview]);
+
+  sendRef.current = send;
+
   /** 「停止生成」：标记取消、通知 Rust 断开连接并立刻复位界面。 */
   const stopGeneration = useCallback(() => {
     cancelRef.current = true;
@@ -1018,7 +1102,9 @@ export function PetChat() {
                 <ChatReasoning text={message.reasoning} />
               ) : null}
               {message.text && <ChatText text={message.text} />}
+              {message.kind === "sticker" && !message.text ? null : null}
               {(() => {
+                // 独立表情包消息或旧记录的内联字段都走同一套渲染。
                 const url = stickerUrl(stickerOfMessage(message));
                 return url ? (
                   <button
@@ -1032,6 +1118,11 @@ export function PetChat() {
                       src={url}
                       alt=""
                       loading="lazy"
+                      style={{ width: `${stickerWidth}px`, height: `${stickerWidth}px` }}
+                      onLoad={(event) => {
+                        const natural = event.currentTarget.naturalWidth;
+                        setStickerWidth(stickerDisplayWidth(natural, 360));
+                      }}
                       onError={(event) => {
                         const box = event.currentTarget.closest(".pet-chat__sticker");
                         if (box instanceof HTMLElement) box.style.display = "none";
@@ -1102,7 +1193,11 @@ export function PetChat() {
               <span>
                 {modelLoading
                   ? `正在加载本地模型…（已 ${waitSeconds}s，首次约 1–4 分钟）`
-                  : waitSeconds >= 3
+                  : sendQueue.length > 0
+                    ? `已排队 ${sendQueue.length} 条，等前面回答完就发…`
+                    : queueing
+                    ? `前面还有请求，排队中…（已 ${waitSeconds}s）`
+                    : waitSeconds >= 3
                     ? `小狗在加载模型或思考，稍等（${waitSeconds}s）`
                     : thinkingOn
                       ? "小狗正在思考…"
@@ -1183,7 +1278,6 @@ export function PetChat() {
           maxLength={4000}
           placeholder={t.chat.placeholder}
           aria-label={t.chat.placeholder}
-          disabled={busy}
           onChange={(event) => setDraft(event.currentTarget.value)}
           onPaste={(event) => {
             // 直接 Ctrl+V 粘贴截图 / 复制的图片，不用先存成文件。
@@ -1207,7 +1301,7 @@ export function PetChat() {
         <button
           className="pet-chat__send"
           type="button"
-          disabled={busy || (!draft.trim() && attachments.length === 0)}
+          disabled={!draft.trim() && attachments.length === 0}
           title={t.chat.send}
           aria-label={t.chat.send}
           onClick={() => void send()}

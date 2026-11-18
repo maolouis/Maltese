@@ -56,7 +56,9 @@ pub struct DshChatReply {
 
 /// 表情包信使：受控标记指令（与 local_chat 保持一致）。
 /// 表情包信使：受控标记指令（与 local_chat 保持一致）。
-const STICKER_INSTRUCTION: &str = "如果你想说点什么但文字不够，可以在回复末尾单独一行输出 <sticker:表情>，表情只能取以下之一：happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax；最多一个，不确定就不要输出。标记行不要加标点，也不要解释。";
+const STICKER_INSTRUCTION: &str = "如果你想说点什么但文字不够，可以在回复末尾单独一行输出一个表情标记，格式必须是 <sticker:表情>：
+例如：<sticker:happy>
+表情只能取以下之一：happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax。最多一个，不确定就不要输出。标记行不要加标点，也不要解释。";
 
 #[tauri::command]
 
