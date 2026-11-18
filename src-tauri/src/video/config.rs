@@ -17,6 +17,35 @@ impl Default for ChannelPriority {
     }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoCommentModelConfig {
+    /// 当前聊天设置选择的后端：dsh 或 local。
+    pub backend: String,
+    /// OpenAI 兼容本地模型地址；DSH 后端为空。
+    #[serde(default)]
+    pub base_url: String,
+    /// 本地模型名称；DSH 后端为空。
+    #[serde(default)]
+    pub model: String,
+    /// 本地模型 API key。只在内存中使用，不写入视频配置文件。
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// 生成评论时使用的桌宠角色。
+    #[serde(default = "default_comment_character")]
+    pub character: String,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+}
+
+fn default_comment_character() -> String {
+    "xiaobai".to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoConfig {
@@ -72,6 +101,8 @@ pub struct VideoConfigPatch {
     pub channel_priority: Option<ChannelPriority>,
     pub model_summary: Option<bool>,
     pub auto_comment: Option<bool>,
+    /// 当前聊天模型配置，仅随启动请求传递，不写入 VideoConfig。
+    pub comment_model: Option<VideoCommentModelConfig>,
     pub auto_like: Option<bool>,
     pub auto_favorite: Option<bool>,
     pub auto_like_daily_limit: Option<u32>,

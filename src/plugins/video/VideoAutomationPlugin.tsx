@@ -23,6 +23,7 @@ import {
   type VideoErrorInfo,
 } from "./videoPanelLogic";
 import type { Platform } from "./types";
+import { loadLocalChatConfig } from "../../localChat";
 
 type Props = {
   onNotice: (notice: string) => void;
@@ -95,7 +96,20 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const start = useCallback(async () => {
     setLocalError(null);
     try {
-      await video.start(provider, selectedAccountId || undefined, { autoComment });
+      const chatConfig = loadLocalChatConfig();
+      await video.start(provider, selectedAccountId || undefined, {
+        autoComment,
+        commentModel: {
+          backend: chatConfig.backend,
+          baseUrl: chatConfig.baseUrl,
+          model: chatConfig.model,
+          apiKey: chatConfig.apiKey.trim() || null,
+          character: "xiaobai",
+          maxTokens: Math.min(chatConfig.maxTokens, 256),
+          temperature: chatConfig.temperature,
+          topP: chatConfig.topP,
+        },
+      });
       onNotice(provider === "bilibili" ? "小狗开始看 B 站了" : "小狗开始看抖音了");
     } catch (reason) {
       const info = describeVideoError(reason, "启动失败，请稍后再试。");

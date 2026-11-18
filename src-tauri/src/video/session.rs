@@ -8,9 +8,9 @@ use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserInstance};
 use super::cdp::{CdpSession, EVALUATE_TIMEOUT};
 use super::channel::ChannelManager;
-use super::comment::build_content_comment;
+use super::comment::generate_content_comment;
 use super::CommentReport;
-use super::config::{apply_patch, validate_config, VideoConfig, VideoConfigPatch};
+use super::config::{apply_patch, validate_config, VideoCommentModelConfig, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
 use super::digest::build_digest;
 use super::extract::{normalize_value, ExtractIssue, PageFacts, PageKind, RawFacts};
@@ -306,6 +306,8 @@ struct RuntimeState {
     provider: String,
     account_id: Option<String>,
     auto_comment_attempted: HashSet<String>,
+    /// 本轮启动时从聊天设置传入的模型配置，只保存在内存。
+    comment_model: Option<VideoCommentModelConfig>,
     interval_seconds: u64,
     max_minutes: u64,
     sample_interval_seconds: u64,
@@ -340,6 +342,7 @@ impl Default for RuntimeState {
             provider: "bilibili".to_string(),
             account_id: None,
             auto_comment_attempted: HashSet::new(),
+            comment_model: None,
             interval_seconds: 45,
             max_minutes: 30,
             sample_interval_seconds: 2,
@@ -637,6 +640,7 @@ impl SessionEngine {
         patch: Option<VideoConfigPatch>,
         requested_account_id: Option<String>,
     ) -> VideoResult<VideoSnapshot> {
+        let comment_model = patch.as_ref().and_then(|value| value.comment_model.clone());
         if let Some(patch) = patch.as_ref() {
             self.update_config(patch)?;
         }
@@ -690,6 +694,7 @@ impl SessionEngine {
                 interval_seconds: config.page_interval_seconds,
                 max_minutes: config.max_minutes,
                 sample_interval_seconds: config.sample_interval_seconds,
+                comment_model: comment_model.clone(),
                 started_at,
                 ..RuntimeState::default()
             };
@@ -1033,7 +1038,7 @@ impl SessionEngine {
 
                 if let Some(Ok((facts, _unknown))) = facts_result {
                     let kind = adapter.classify_page(&facts);
-                    let mut auto_comment: Option<(PageFacts, String)> = None;
+                    let mut auto_comment: Option<PageFacts> = None;
                     {
                         let mut state = lock_state(&self.state);
                         state.foreground_title = facts.title.clone();
@@ -1080,59 +1085,97 @@ impl SessionEngine {
                                 && facts.canonical_url.is_some()
                                 && !state.auto_comment_attempted.contains(&facts.item_key)
                             {
-                                if let Some(comment) = build_content_comment(&facts) {
-                                    state.auto_comment_attempted.insert(facts.item_key.clone());
-                                    auto_comment = Some((facts.clone(), comment));
-                                }
+                                state.auto_comment_attempted.insert(facts.item_key.clone());
+                                auto_comment = Some(facts.clone());
                             }
                         }
                         }
                     }
-                    if let Some((facts, comment)) = auto_comment {
+                    if let Some(facts) = auto_comment {
                         let session_id = self.snapshot().session_id;
-                        match self.post_comment(&comment).await {
-                            Ok(report) => {
-                                let code = if report.ok {
-                                    "AUTO_COMMENT_SENT"
-                                } else {
-                                    "AUTO_COMMENT_SKIPPED"
-                                };
+                        let model = {
+                            let state = lock_state(&self.state);
+                            state.comment_model.clone()
+                        };
+                        let generated = match model.as_ref() {
+                            Some(model) => match tokio::time::timeout(
+                                Duration::from_secs(35),
+                                generate_content_comment(&app, &facts, model),
+                            )
+                            .await
+                            {
+                                Ok(result) => result,
+                                Err(_) => Err("评论模型响应超时，未发送评论".to_string()),
+                            },
+                            None => Err("没有传入当前聊天模型配置，未生成评论".to_string()),
+                        };
+                        match generated {
+                            Err(error) => {
+                                let message = format!("{}：{}", facts.title, error);
                                 self.store.log(DiagnosticEntry {
                                     at: now,
                                     session_id: Some(session_id.clone()),
                                     channel: Some(ChannelType::Cdp),
-                                    level: if report.ok { "info" } else { "warn" }.to_string(),
-                                    code: code.to_string(),
-                                    message: format!("{}：{}", facts.title, report.message),
+                                    level: "warn".to_string(),
+                                    code: "AUTO_COMMENT_MODEL_FAILED".to_string(),
+                                    message: message.clone(),
                                 });
                                 let _ = app.emit(
                                     "video-auto-comment",
                                     serde_json::json!({
                                         "sessionId": session_id,
                                         "itemKey": facts.item_key,
-                                        "ok": report.ok,
-                                        "message": report.message,
-                                    }),
-                                );
-                            }
-                            Err(error) => {
-                                let message = error.to_string();
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(session_id),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "warn".to_string(),
-                                    code: "AUTO_COMMENT_FAILED".to_string(),
-                                    message: message.clone(),
-                                });
-                                let _ = app.emit(
-                                    "video-auto-comment",
-                                    serde_json::json!({
                                         "ok": false,
                                         "message": message,
                                     }),
                                 );
                             }
+                            Ok(comment) => match self.post_comment(&comment).await {
+                                Ok(report) => {
+                                    let code = if report.ok {
+                                        "AUTO_COMMENT_SENT"
+                                    } else {
+                                        "AUTO_COMMENT_SKIPPED"
+                                    };
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(session_id.clone()),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: if report.ok { "info" } else { "warn" }.to_string(),
+                                        code: code.to_string(),
+                                        message: format!("{}：{}", facts.title, report.message),
+                                    });
+                                    let _ = app.emit(
+                                        "video-auto-comment",
+                                        serde_json::json!({
+                                            "sessionId": session_id,
+                                            "itemKey": facts.item_key,
+                                            "ok": report.ok,
+                                            "message": report.message,
+                                        }),
+                                    );
+                                }
+                                Err(error) => {
+                                    let message = error.to_string();
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(session_id.clone()),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "warn".to_string(),
+                                        code: "AUTO_COMMENT_FAILED".to_string(),
+                                        message: message.clone(),
+                                    });
+                                    let _ = app.emit(
+                                        "video-auto-comment",
+                                        serde_json::json!({
+                                            "sessionId": session_id,
+                                            "itemKey": facts.item_key,
+                                            "ok": false,
+                                            "message": message,
+                                        }),
+                                    );
+                                }
+                            },
                         }
                     }
                 }

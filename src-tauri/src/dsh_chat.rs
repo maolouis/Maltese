@@ -91,6 +91,19 @@ pub async fn dsh_chat(
         .map_err(|error| format!("聊天线程失败：{error}"))?
 }
 
+/// 视频自动评论复用 DSH 当前登录模型，不创建持久聊天会话，也不注入表情标记。
+pub(crate) async fn generate_video_comment(
+    app: AppHandle,
+    prompt: String,
+    character: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        chat(&app, &prompt, None, &character, false, None).map(|reply| reply.text)
+    })
+    .await
+    .map_err(|error| format!("评论模型线程失败：{error}"))?
+}
+
 fn chat(
     app: &AppHandle,
     message: &str,

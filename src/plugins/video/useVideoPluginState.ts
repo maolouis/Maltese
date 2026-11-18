@@ -50,7 +50,19 @@ export type VideoPluginState = {
   refresh: () => Promise<void>;
   loadBrowserStatus: () => Promise<void>;
   closeBrowser: () => Promise<void>;
-  start: (provider: "bilibili" | "douyin", accountId?: string, options?: { autoComment?: boolean }) => Promise<void>;
+  start: (provider: "bilibili" | "douyin", accountId?: string, options?: {
+    autoComment?: boolean;
+    commentModel?: {
+      backend: "dsh" | "local";
+      baseUrl: string;
+      model: string;
+      apiKey?: string | null;
+      character?: string;
+      maxTokens?: number;
+      temperature?: number;
+      topP?: number;
+    };
+  }) => Promise<void>;
   stop: () => Promise<void>;
   updateConfig: (patch: Partial<VideoConfig>) => Promise<void>;
   createAccount: (input: {
@@ -201,7 +213,19 @@ export function useVideoPluginState(): VideoPluginState {
   const start = useCallback(async (
     provider: "bilibili" | "douyin",
     accountId?: string,
-    options?: { autoComment?: boolean },
+    options?: {
+      autoComment?: boolean;
+      commentModel?: {
+        backend: "dsh" | "local";
+        baseUrl: string;
+        model: string;
+        apiKey?: string | null;
+        character?: string;
+        maxTokens?: number;
+        temperature?: number;
+        topP?: number;
+      };
+    },
   ) => {
     await invoke("video_start_session", {
       provider,
@@ -213,6 +237,7 @@ export function useVideoPluginState(): VideoPluginState {
         dailyDeliveries: config.dailyDeliveries,
         modelSummary: config.modelSummary,
         autoComment: options?.autoComment ?? config.autoComment,
+        commentModel: options?.commentModel,
       },
       accountId: accountId || undefined,
     });

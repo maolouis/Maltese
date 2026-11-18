@@ -302,6 +302,38 @@ pub async fn local_chat(
         .ok_or_else(|| "本地模型没有返回文字。请检查模型名称是否正确。".to_string())
 }
 
+/// 视频自动评论复用当前聊天设置，但关闭思考并限制输出预算，避免自动评论阻塞刷视频会话。
+pub(crate) async fn generate_video_comment(
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    prompt: String,
+    character: String,
+    max_tokens: u32,
+    temperature: f32,
+    top_p: f32,
+) -> Result<String, String> {
+    local_chat(
+        base_url,
+        model,
+        api_key,
+        prompt,
+        None,
+        character,
+        None,
+        Some(false),
+        Some(LocalChatGenerationSettings {
+            max_tokens: Some(max_tokens.clamp(64, 256)),
+            temperature: Some(temperature.clamp(0.0, 1.2)),
+            top_p: Some(top_p.clamp(0.1, 1.0)),
+            enable_thinking: Some(false),
+            reasoning_effort: Some("none".to_string()),
+            reasoning_budget_tokens: Some(0),
+        }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn local_chat_stream(
     app: AppHandle,

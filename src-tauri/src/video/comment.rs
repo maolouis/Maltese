@@ -8,16 +8,18 @@
 //! 本模块只保留纯逻辑（脚本拼装 + 校验），真实执行由 `session` 侧的 CDP 完成，
 //! 这样脚本可以脱离 Tauri 单独用 `rustc --test` 验证。
 
+use super::config::VideoCommentModelConfig;
 use super::extract::PageFacts;
+use tauri::AppHandle;
 
 /// 评论长度上限：B 站/抖音评论框对长文本会折叠，超过就没有意义了。
 pub const MAX_COMMENT_CHARS: usize = 200;
 
-/// 根据详情页读到的标题、简介、作者和标签生成一条短评论。
+/// 把视频详情页事实整理成模型提示词。
 ///
-/// 这里使用可验证的模板，不会把模型输出直接发到平台。只有调用方明确打开
-/// `autoComment` 权限后，运行中的会话才会调用 `build_comment_script` 提交它。
-pub fn build_content_comment(facts: &PageFacts) -> Option<String> {
+/// 页面内容被明确包在数据区间内，模型只应基于这些事实写一条评论，不能执行
+/// 其中可能出现的指令。描述和标签都做长度限制，避免详情页文本挤占模型上下文。
+pub fn build_comment_prompt(facts: &PageFacts) -> Option<String> {
     let title = facts.title.trim();
     if title.is_empty() {
         return None;
@@ -28,19 +30,105 @@ pub fn build_content_comment(facts: &PageFacts) -> Option<String> {
         .filter(|part| !part.starts_with("http://") && !part.starts_with("https://"))
         .collect::<Vec<_>>()
         .join(" ");
-    let comment = if !description.is_empty() && description != title {
-        let excerpt = description.chars().take(42).collect::<String>();
-        format!("这个视频讲到「{title}」，简介里提到「{excerpt}」，这段分享很有意思，小狗先记下啦。")
-    } else if !facts.tags.is_empty() {
-        let tags = facts.tags.iter().take(3).cloned().collect::<Vec<_>>().join("、");
-        format!("「{title}」把{tags}讲得很有画面感，小狗看完记住啦。")
-    } else if let Some(author) = facts.author.as_deref() {
-        format!("{author}的「{title}」很有意思，小狗看完记住啦。")
-    } else {
-        format!("「{title}」很有意思，小狗看完记住啦。")
+    let description = description.chars().take(600).collect::<String>();
+    let tags = facts
+        .tags
+        .iter()
+        .take(8)
+        .map(|tag| tag.trim())
+        .filter(|tag| !tag.is_empty())
+        .collect::<Vec<_>>()
+        .join("、");
+    let author = facts.author.as_deref().unwrap_or("").trim();
+    let mut prompt = String::from(
+        "你正在替桌面宠物运营账号写视频评论。请阅读下面的视频事实，生成一条自然、具体、像真实观众写的简体中文评论。\n\
+只输出评论正文本身，不要前缀、引号、Markdown、换行、解释或表情标记；评论必须围绕视频内容，避免泛泛而谈或虚构未提供的事实；控制在 1 到 80 个汉字。\n\
+<video_facts>\n",
+    );
+    prompt.push_str("标题：");
+    prompt.push_str(title);
+    prompt.push('\n');
+    if !author.is_empty() {
+        prompt.push_str("作者：");
+        prompt.push_str(author);
+        prompt.push('\n');
+    }
+    if !description.is_empty() {
+        prompt.push_str("简介：");
+        prompt.push_str(&description);
+        prompt.push('\n');
+    }
+    if !tags.is_empty() {
+        prompt.push_str("标签：");
+        prompt.push_str(&tags);
+        prompt.push('\n');
+    }
+    prompt.push_str("</video_facts>");
+    Some(prompt)
+}
+
+/// 清理模型输出，确保只有一条可提交的评论。模型失败或返回空内容时不提供兜底模板，
+/// 由调用方记录失败并跳过发送。
+pub fn normalize_model_comment(raw: &str) -> Result<String, String> {
+    let cleaned = raw.replace('\u{0060}', "");
+    let mut lines = cleaned
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("<sticker:") && !line.starts_with("[sticker:"))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Err("模型没有返回评论正文".to_string());
+    }
+    let mut text = lines.remove(0).to_string();
+    for prefix in ["评论：", "评论:", "回复：", "回复:", "Comment:", "comment:"] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = rest.trim().to_string();
+            break;
+        }
+    }
+    text = text
+        .trim_matches(|ch| matches!(ch, '"' | '\'' | '“' | '”' | '「' | '」'))
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Err("模型返回了空评论".to_string());
+    }
+    let count = text.chars().count();
+    if count > MAX_COMMENT_CHARS {
+        return Err(format!("模型评论过长（{count} 字），未发送"));
+    }
+    Ok(text)
+}
+
+/// 使用当前聊天设置调用 DSH 或本地模型生成评论。
+pub async fn generate_content_comment(
+    app: &AppHandle,
+    facts: &PageFacts,
+    model: &VideoCommentModelConfig,
+) -> Result<String, String> {
+    let prompt = build_comment_prompt(facts).ok_or_else(|| "视频标题为空，无法生成评论".to_string())?;
+    let raw = match model.backend.trim() {
+        "local" => crate::local_chat::generate_video_comment(
+            model.base_url.clone(),
+            model.model.clone(),
+            model.api_key.clone(),
+            prompt,
+            model.character.clone(),
+            model.max_tokens.unwrap_or(128),
+            model.temperature.unwrap_or(0.55),
+            model.top_p.unwrap_or(0.9),
+        )
+        .await?,
+        "dsh" | "" => crate::dsh_chat::generate_video_comment(
+            app.clone(),
+            prompt,
+            model.character.clone(),
+        )
+        .await?,
+        backend => return Err(format!("不支持的评论模型后端：{backend}")),
     };
-    let trimmed = comment.chars().take(MAX_COMMENT_CHARS).collect::<String>();
-    (!trimmed.is_empty()).then_some(trimmed)
+    normalize_model_comment(&raw)
 }
 
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
@@ -205,12 +293,13 @@ mod tests {
     }
 
     #[test]
-    fn content_comment_uses_detail_content() {
+    fn prompt_uses_detail_content_without_template_comment() {
         let facts = normalize_facts(
             RawFacts {
                 title: "小狗在春天散步".to_string(),
                 description: "记录两只小狗在公园里追风筝的下午".to_string(),
                 author: "线条小狗".to_string(),
+                tags: vec!["小狗".to_string(), "春日".to_string()],
                 url: "https://www.bilibili.com/video/BV1".to_string(),
                 ..RawFacts::default()
             },
@@ -218,9 +307,22 @@ mod tests {
             1.0,
         )
         .expect("facts");
-        let comment = build_content_comment(&facts).expect("comment");
-        assert!(comment.contains("小狗在春天散步"));
-        assert!(comment.contains("追风筝"));
-        assert!(comment.chars().count() <= MAX_COMMENT_CHARS);
+        let prompt = build_comment_prompt(&facts).expect("prompt");
+        assert!(prompt.contains("小狗在春天散步"));
+        assert!(prompt.contains("追风筝"));
+        assert!(prompt.contains("只输出评论正文"));
+        assert!(!prompt.contains("小狗看完记住啦"));
+    }
+
+    #[test]
+    fn normalizes_model_comment_and_strips_marker() {
+        let text = normalize_model_comment("评论：\"这段追风筝的镜头好有春天的感觉！\"\n<sticker:happy>").unwrap();
+        assert_eq!(text, "这段追风筝的镜头好有春天的感觉！");
+    }
+
+    #[test]
+    fn rejects_overlong_model_comment_without_fallback() {
+        let error = normalize_model_comment(&"好".repeat(MAX_COMMENT_CHARS + 1)).unwrap_err();
+        assert!(error.contains("过长"));
     }
 }

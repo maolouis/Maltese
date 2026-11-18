@@ -62,11 +62,11 @@
   未开局直接返回 `comment-not-ready`，连不上返回 `comment-cdp`。
 - 命令 `video_post_comment(text)`，注册在 `lib.rs`。
 - 前端 `VideoAutomationPlugin.tsx` 增加「在视频下评论」卡片：textarea（200 字上限）+「发送评论」+
-  状态提示；高级设置增加 `autoComment` 权限。开启后会点击推荐流视频进入详情页，读取标题、简介和标签，
-  每条视频最多自动尝试一次内容相关评论；关闭时仍采集内容但只允许手动评论。
+  状态提示；高级设置增加 `autoComment` 权限。开启后会点击推荐流视频进入详情页，读取标题、简介、作者和标签，
+  启动时复用当前聊天设置的 DSH 或本地模型生成单条评论，每条视频最多自动尝试一次；模型失败时记录
+  `AUTO_COMMENT_MODEL_FAILED` 并跳过，不再发送模板评论；关闭时仍采集内容但只允许手动评论。
 
-验证：`build_comment_script` 用 `rustc --test` 跑 **8/8 通过**（空、超长、边界长度、引号/反斜杠、
-行分隔符、尖括号、脚本含输入框与发送按钮、首尾空白裁剪）。真实发评论需要登录态视频页，未在本机执行。
+验证：评论脚本、详情提示词和模型输出清洗共 11 个 Rust 单元测试已编译进测试二进制；`tsc --noEmit` 与 `cargo check --target x86_64-pc-windows-msvc` 通过。当前 Windows 沙箱运行 Rust 测试时被 `STATUS_ENTRYPOINT_NOT_FOUND` 拦截，真实发评论还需要登录态视频页和可用模型；代码路径不会在模型失败时回退到模板评论。
 
 ## 4. 关系插件验收
 
@@ -123,7 +123,7 @@
 | --- | --- |
 | `tsc --noEmit` | ✅ 通过（修复半成品导致的失败后） |
 | `node --test tests/*.test.mjs` | ✅ 58/58 |
-| `rustc --test comment.rs`（评论脚本纯逻辑） | ✅ 8/8 |
+| `cargo test --target x86_64-pc-windows-msvc --lib --no-run`（评论脚本 / 提示词 / 模型输出清洗） | ✅ 测试二进制编译通过；运行受 `STATUS_ENTRYPOINT_NOT_FOUND` 环境限制 |
 | `cargo check` | ✅ 通过 |
 | `cargo test --lib video -- --nocapture` | ✅ 编译通过；Windows 沙箱运行测试二进制时因 `STATUS_ENTRY_NOT_FOUND` 无法启动 |
 | 关系插件纯逻辑（配对/加解密/presence） | ✅ 通过 |
@@ -131,6 +131,6 @@
 
 ## 7. 仍需真实环境确认的项目
 
-1. 刷视频：在已有登录态的 B 站或抖音视频页点一次「发送评论」，确认页面实际显示；当前不会自动代发。
+1. 刷视频：在已有登录态的 B 站或抖音视频页开启自动评论并确认当前聊天模型可用，验证模型生成的评论实际显示；若模型不可用，应看到诊断失败且页面没有模板评论。
 2. 关系：两台机器同时在线跑一次完整配对 → 状态/心情互见 → 断开流程；纯逻辑和 UI 状态过期已覆盖。
 3. 以上通过后再谈发布（升版本号 + push + Release 需用户确认）。
