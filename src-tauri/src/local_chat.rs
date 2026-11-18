@@ -587,6 +587,81 @@ fn models_loaded(parsed: &Value) -> bool {
         .unwrap_or(false)
 }
 
+
+/// 本机模型状态：`loaded`（权重是否就绪）+ `processing`（单槽位是否在跑别的请求）。
+/// 前端用它区分「排队中」和「真的没响应」：排队不中止、只显示排队提示。
+#[derive(Clone, Debug, Serialize)]
+pub struct LocalModelStatus {
+    pub loaded: bool,
+    pub processing: bool,
+}
+
+#[tauri::command]
+pub async fn local_model_status(base_url: String) -> Result<LocalModelStatus, String> {
+    let endpoint = Url::parse(&base_url).map_err(|error| error.to_string())?;
+    let host = endpoint.host_str().unwrap_or("");
+    let port = endpoint.port_or_known_default().unwrap_or(0);
+    if !(host == "127.0.0.1" || host == "localhost") {
+        return Ok(LocalModelStatus { loaded: true, processing: false });
+    }
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let models = match client
+        .get(format!("{}://{host}:{port}/v1/models", endpoint.scheme()))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+    let loaded = models
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .map(|value| {
+            value
+                .get("data")
+                .and_then(|data| data.as_array())
+                .map(|items| {
+                    items.iter().any(|item| {
+                        item.pointer("/status/value")
+                            .and_then(|value| value.as_str())
+                            .map(|value| value == "loaded")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let processing = match client
+        .get(format!("{}://{host}:{port}/slots", endpoint.scheme()))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response
+            .json::<Value>()
+            .await
+            .ok()
+            .map(|value| {
+                value
+                    .as_array()
+                    .map(|slots| {
+                        slots.iter().any(|slot| {
+                            slot.get("is_processing")
+                                .and_then(|flag| flag.as_bool())
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
+    Ok(LocalModelStatus { loaded, processing })
+}
+
 /// 确保本机模型（F:\Strata 里的 Strata 服务）已经在跑。
 /// 主动聊天、聊天发送前调用：服务没起来就顺手拉起，避免一路退化成模板台词。
 #[tauri::command]
