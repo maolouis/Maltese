@@ -370,3 +370,23 @@ UI 显示：`模型响应超时，已停止。首次加载会比较慢，稍后�
   从白名单里挑一个安静表情（`avoid` 最近 3 条，避免重复）；其他状态不自说自话补表情。
 - 调试：`localStorage["maltese-chat-sticker-debug"]` 记录最近 10 次解析（id + 模型原文末尾），
   用来确认标记确实来自模型。
+
+## 状态栏显示条件与默认值（2026-11-18）
+
+PetStateBar（聊天头部下方「体力 · 情绪 · 亲密 · 专注」）之前有概率整行不渲染，原因是
+**没有 vitals 数据时直接隐藏**：新装/清缓存/从未互动的用户根本没有
+localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarVisible=false。
+
+现在的规则：
+- **数据缺失/损坏 → 用默认值兜底并写回**：energy 70 / mood 70 / bond 50 / focus 0，
+  首次读取（loadVitalsSummary(storage, { writeDefault: true })）就落盘成 petVitals 能读回的完整结构；
+- **只有 ocusd-island-settings.petVitalsEnabled === false 才隐藏**；旧版本没有该字段默认显示；
+- 数据来源：mount 先同步读一次 + 订阅 maltese-pet-vitals-changed/storage + **2s 轮询兜底**
+  （跨窗口事件收不到时也能更新）；
+- usePetVitals 挂载时立即结算一次（含衰减）并落盘，避免「打开聊天时还没有第一次写入」；
+- 渲染条件清单：PetChat 里 <PetStateBar bus={busy} waitSeconds thinkingOn /> 无条件渲染；
+  组件内部只判断 stateBarVisible(vitals, enabled)（enabled=false 才隐藏）；
+  折叠只影响文案（保留小圆点），不会整行消失；CSS 固定一行 24–28px，不参与 flex 压缩。
+
+单测：	ests/pet-context.test.mjs 缺数据→默认值+写回；	ests/pet-state-bar.test.mjs
+默认值可见/开关关闭隐藏/文案格式。

@@ -8,6 +8,9 @@
 // 纯函数 + 同步读取，node --test 可直接跑（没有 window 时安全返回 null）。
 
 export const PET_VITALS_STORAGE_KEY = "maltese-pet-vitals";
+/** 没有任何 vitals 数据时的默认值（与 petVitals.VITALS_INITIAL 对齐，focus 默认 0）。
+ * 新装/清缓存/从未互动的用户也能看到状态栏，而不是整行消失。 */
+export const DEFAULT_VITALS = { energy: 70, mood: 70, bond: 50, focus: 0 } as const;
 /** 注入聊天的上下文总长度上限（字符），避免拖慢首字。 */
 export const CHAT_CONTEXT_MAX_CHARS = 120;
 /** 最多描述几条近期互动。 */
@@ -89,8 +92,36 @@ export function summarizeVitalsFrom(raw: Record<string, unknown> | null): Vitals
   };
 }
 
-export function loadVitalsSummary(storage: Storage | null = safeStorage()): VitalsSummary | null {
-  return summarizeVitalsFrom(readVitalsRaw(storage));
+/** 把默认 vitals 写成 petVitals 能读回的完整结构（首次读取时调用）。 */
+export function writeDefaultVitals(storage: Storage | null = safeStorage(), now: number = Date.now()): VitalsSummary {
+  const summary: VitalsSummary = { ...DEFAULT_VITALS };
+  if (!storage) return summary;
+  try {
+    const payload = {
+      ...summary,
+      updatedAt: now,
+      lastAt: {},
+      today: { date: new Date(now).toISOString().slice(0, 10), gained: { energy: 0, mood: 0, bond: 0, focus: 0 }, count: {} },
+    };
+    storage.setItem(PET_VITALS_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // 存储不可用也不影响显示（调用方拿默认值）。
+  }
+  return summary;
+}
+
+/**
+ * 读当前 vitals 摘要；`writeDefault` 为 true 时（状态栏用）：
+ * 数据缺失/损坏 → 立即写入默认值并返回，保证「一定有值可显示」。
+ */
+export function loadVitalsSummary(
+  storage: Storage | null = safeStorage(),
+  options?: { writeDefault?: boolean; now?: number },
+): VitalsSummary | null {
+  const summary = summarizeVitalsFrom(readVitalsRaw(storage));
+  if (summary) return summary;
+  if (!options?.writeDefault) return null;
+  return writeDefaultVitals(storage, options.now ?? Date.now());
 }
 
 /** 分档文案：只用于让模型理解强度，不写死台词。 */

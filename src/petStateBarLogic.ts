@@ -18,6 +18,8 @@ export const STATE_NOTICE_THROTTLE_MS = 10 * 60_000;
 export const STATE_ENERGY_LOW = 35;
 /** 情绪超过该值算「心情好」。 */
 export const STATE_MOOD_HIGH = 75;
+/** 没有 vitals 数据时的展示默认值（与 petContext.DEFAULT_VITALS 一致）。 */
+export const DEFAULT_STATE_VITALS: StateVitals = { energy: 70, mood: 70, bond: 50, focus: 0 };
 
 function clamp(value: number): number {
   if (!Number.isFinite(value)) return 0;

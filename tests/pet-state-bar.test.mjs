@@ -8,6 +8,7 @@ import {
   shouldShowNotice,
   stateBarVisible,
   STATE_NOTICE_THROTTLE_MS,
+  DEFAULT_STATE_VITALS,
   writeCollapsed,
 } from "../src/petStateBarLogic.ts";
 
@@ -80,4 +81,10 @@ test("忙碌态文案：3s 后切成「加载模型或思考」，带秒数", ()
   assert.equal(busyStateText(true, 0, false), "小狗在想…");
   assert.equal(busyStateText(true, 2, true), "小狗正在思考… 2s");
   assert.equal(busyStateText(true, 5, false), "小狗在加载模型或思考… 5s");
+});
+
+test("默认值是可见状态：只有开关关闭才隐藏", () => {
+  assert.equal(stateBarVisible(DEFAULT_STATE_VITALS), true);
+  assert.equal(stateBarVisible(DEFAULT_STATE_VITALS, false), false);
+  assert.equal(formatStateBar(DEFAULT_STATE_VITALS), "体力 70 · 情绪 70 · 亲密 50 · 专注 0");
 });

@@ -38,13 +38,16 @@ export function PetStateBar({
   waitSeconds: number;
   thinkingOn: boolean;
 }) {
-  const [vitals, setVitals] = useState<VitalsSummary | null>(() => loadVitalsSummary());
+  // 首次读取就写回默认值：新装/清缓存用户也有数据可显示（只有开关关闭才隐藏）。
+  const [vitals, setVitals] = useState<VitalsSummary | null>(() =>
+    loadVitalsSummary(window.localStorage, { writeDefault: true }),
+  );
   const [enabled, setEnabled] = useState(readVitalsEnabled);
   const [collapsed, setCollapsed] = useState(() => readCollapsed(window.localStorage));
 
   useEffect(() => {
     const refresh = () => {
-      setVitals(loadVitalsSummary());
+      setVitals(loadVitalsSummary(window.localStorage, { writeDefault: true }));
       setEnabled(readVitalsEnabled());
     };
     window.addEventListener("storage", refresh);

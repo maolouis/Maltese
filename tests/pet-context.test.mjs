@@ -7,6 +7,7 @@ import {
   formatVitalsLine,
   loadVitalsSummary,
   PET_VITALS_STORAGE_KEY,
+  DEFAULT_VITALS,
   summarizeVitalsFrom,
   vitalsBehaviorHint,
 } from "../src/petContext.ts";
@@ -95,4 +96,17 @@ test("体力低时主动消息会选到「累/困/趴」类台词与安静角度
   assert.ok(["care", "empathy", "self"].includes(angle), "低体力应选安静角度，实际：" + angle);
   // 没有 vitals 时 pickAngle 仍可能选任意角度（保持旧行为，不强制）
   assert.ok(typeof pickAngle([], null) === "string");
+});
+
+test("缺数据时状态栏用默认值兜底并写回（新装/清缓存用户也能显示）", () => {
+  const storage = memoryStorage();
+  assert.equal(loadVitalsSummary(storage), null, "不要求兜底时不写");
+  const summary = loadVitalsSummary(storage, { writeDefault: true, now: 1_000_000 });
+  assert.deepEqual(summary, DEFAULT_VITALS);
+  const written = JSON.parse(storage.getItem(PET_VITALS_STORAGE_KEY));
+  assert.equal(written.energy, 70);
+  assert.equal(written.bond, 50);
+  assert.ok(typeof written.updatedAt === "number");
+  // 已经写回后再次读到的就是真实值
+  assert.deepEqual(loadVitalsSummary(storage), DEFAULT_VITALS);
 });

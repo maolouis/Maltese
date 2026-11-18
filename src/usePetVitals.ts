@@ -74,6 +74,13 @@ export function usePetVitals(options: {
     setVitals((previous) => tickVitals(previous, now, { focusActive: focusRef.current }));
   }, []);
 
+  // 挂载时立即结算一次并落盘：避免「刚打开聊天时还没有第一次写入」导致状态栏没数据。
+  useEffect(() => {
+    if (!enabled) return;
+    const now = Date.now();
+    setVitals((previous) => tickVitals(previous, now, { focusActive: focusRef.current }));
+  }, [enabled]);
+
   // 60s 结算 + 切回前台时补一次（合盖/休眠后避免一次算太多）。
   useEffect(() => {
     if (!enabled) return;
