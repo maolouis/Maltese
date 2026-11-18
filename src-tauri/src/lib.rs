@@ -58,9 +58,10 @@ use windows::Win32::{
     Graphics::Gdi::SetWindowRgn,
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
     UI::WindowsAndMessaging::{
-        FindWindowExW, FindWindowW, GetCursorPos, GetWindowRect, IsWindowVisible, SetWindowPos,
-        ShowWindow, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-        SW_SHOWNORMAL,
+        FindWindowExW, FindWindowW, GetCursorPos, GetWindowLongPtrW, GetWindowRect,
+        IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE,
+        SWP_NOOWNERZORDER, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, WS_EX_APPWINDOW,
+        WS_EX_TOOLWINDOW,
     },
 };
 use windows::core::{w, PCWSTR};
@@ -300,6 +301,8 @@ fn start_monitor_watch(app: AppHandle) {
                 }
                 last = current;
                 eprintln!("[monitor] display layout changed: {last}");
+                // pinned 不依赖主岛几何（主岛最小化时 apply 会冻结），这里单独摆一次。
+                let _ = place_pinned_window(&app);
                 if !has_monitor_preference() {
                     continue;
                 }
@@ -343,6 +346,10 @@ fn set_monitor_preferences(
         *state
     });
     let result = apply_stage_geometry(&window, state, false);
+    // 固定在桌面的标签页跟随同一块屏：显示中就立刻移动，隐藏中也只更新下次显示的位置。
+    if let Err(error) = place_pinned_window(&app) {
+        eprintln!("failed to move pinned window after monitor change: {error}");
+    }
     // Bongo / 陪玩狗也按同样的屏重排一次。
     if let Some(config) = desktop_extras::last_config() {
         let _ = desktop_extras::sync_extras_now(&app, &config);
@@ -1875,6 +1882,143 @@ async fn open_billiards_window(app: AppHandle) -> Result<(), String> {
 // 2) 窗口已存在但被最小化/隐藏时先 `unminimize()` 再 `show()`，否则点按钮没反应；
 // 3) `set_always_on_top(true)` 放在 show 之后再做一次，保证重新固定后仍然置顶。
 static PINNED_PAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// 用户拖动过 pinned 窗口后的物理坐标（切屏时夹进目标屏，不丢位置）。
+static PINNED_MANUAL_POSITION: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+/// 我们自己在摆放 pinned 窗口时置位，避免把程序位移记成「用户拖动」。
+static PINNED_AUTO_POSITIONING: AtomicBool = AtomicBool::new(false);
+/// 最近一次由程序写入的坐标：`Moved` 收到同一个坐标说明是程序位移，不算用户拖动。
+static PINNED_LAST_SET: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+/// pinned 默认逻辑尺寸（与 window_factory 的 420×560 一致，用于按目标屏 scale 换算物理尺寸）。
+const PINNED_LOGICAL_WIDTH: f64 = 420.0;
+const PINNED_LOGICAL_HEIGHT: f64 = 560.0;
+/// pinned 默认贴边距（目标屏右下角，与建议的 24px 一致）。
+const PINNED_MARGIN: i32 = 24;
+
+/// pinned 默认位置：目标屏工作区右下角，留 `margin` 边距。
+fn pinned_anchor(work: (i32, i32, u32, u32), size: (u32, u32), margin: i32) -> (i32, i32) {
+    let (left, top, width, height) = work;
+    let margin = margin.max(0);
+    let x = left + width as i32 - size.0 as i32 - margin;
+    let y = top + height as i32 - size.1 as i32 - margin;
+    (x.max(left), y.max(top))
+}
+
+/// 把坐标夹进工作区（换屏后旧位置可能属于另一个屏，不能把它留在屏外）。
+fn clamp_to_work_area(
+    position: (i32, i32),
+    size: (u32, u32),
+    work: (i32, i32, u32, u32),
+) -> (i32, i32) {
+    let (left, top, width, height) = work;
+    let max_x = left + width as i32 - size.0 as i32;
+    let max_y = top + height as i32 - size.1 as i32;
+    (
+        position.0.clamp(left, max_x.max(left)),
+        position.1.clamp(top, max_y.max(top)),
+    )
+}
+
+/// 目标屏工作区（物理像素）。跟随主岛同一份「小狗屏幕」偏好；匹配不到回主屏。
+fn pinned_target_monitor(app: &AppHandle) -> Option<(Monitor, (i32, i32, u32, u32), f64)> {
+    let preferred = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    let monitor = preferred
+        .as_deref()
+        .and_then(|key| find_monitor_by_key(app, key))
+        .or_else(|| app.primary_monitor().ok().flatten())?;
+    let area = monitor.work_area();
+    Some((
+        monitor.clone(),
+        (
+            area.position.x,
+            area.position.y,
+            area.size.width,
+            area.size.height,
+        ),
+        monitor.scale_factor(),
+    ))
+}
+
+/// 把 pinned 窗口从任务栏 / Alt+Tab 里摘掉：`WS_EX_TOOLWINDOW` 打开、`WS_EX_APPWINDOW` 关掉。
+/// 幂等；失败只记日志（窗口样式不影响窗口本身可用）。
+fn apply_pinned_taskbar_style(window: &WebviewWindow) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        let handle = HWND(hwnd.0);
+        let before = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+        let next = (before | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+        if next != before {
+            SetWindowLongPtrW(handle, GWL_EXSTYLE, next);
+        }
+        let after = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+        eprintln!(
+            "[monitor] pinned ex-style 0x{before:X} -> 0x{after:X} (TOOLWINDOW={}, APPWINDOW={})",
+            after & WS_EX_TOOLWINDOW.0 as isize != 0,
+            after & WS_EX_APPWINDOW.0 as isize != 0
+        );
+    }
+}
+
+/// 把 pinned 窗口摆到「小狗所在屏」：右下角 24px，或沿用用户拖动过的位置（夹进该屏）。
+/// 尺寸按**目标屏自己的 scale_factor** 从逻辑尺寸换算，150% 副屏也不会错位。
+fn place_pinned_window(app: &AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("pinned") else {
+        return Ok(());
+    };
+    let preferred_key = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    let Some((_monitor, work, scale)) = pinned_target_monitor(app) else {
+        return Ok(());
+    };
+    // 用户可能手动缩放过：先用当前屏 scale 把物理尺寸换成逻辑尺寸，再按目标屏 scale 还原。
+    let current_scale = window.scale_factor().unwrap_or(1.0).max(0.1);
+    let current = window.outer_size().ok();
+    let logical_w = current
+        .map(|size| size.width as f64 / current_scale)
+        .filter(|value| *value > 1.0)
+        .unwrap_or(PINNED_LOGICAL_WIDTH);
+    let logical_h = current
+        .map(|size| size.height as f64 / current_scale)
+        .filter(|value| *value > 1.0)
+        .unwrap_or(PINNED_LOGICAL_HEIGHT);
+    let physical = (
+        (logical_w * scale).round().max(1.0) as u32,
+        (logical_h * scale).round().max(1.0) as u32,
+    );
+    if current != Some(tauri::PhysicalSize::new(physical.0, physical.1)) {
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+            physical.0, physical.1,
+        )));
+    }
+    let manual = PINNED_MANUAL_POSITION.lock().ok().and_then(|slot| *slot);
+    let position = match manual {
+        // 拖动过的窗口：换屏时夹进目标屏工作区，尽量保留相对位置。
+        Some(position) => clamp_to_work_area(position, physical, work),
+        None => pinned_anchor(work, physical, (PINNED_MARGIN as f64 * scale).round() as i32),
+    };
+    PINNED_AUTO_POSITIONING.store(true, Ordering::SeqCst);
+    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+        position.0, position.1,
+    )));
+    if let Ok(mut slot) = PINNED_LAST_SET.lock() {
+        *slot = Some(position);
+    }
+    PINNED_AUTO_POSITIONING.store(false, Ordering::SeqCst);
+    if manual.is_some() {
+        if let Ok(mut slot) = PINNED_MANUAL_POSITION.lock() {
+            *slot = Some(position);
+        }
+    }
+    eprintln!(
+        "[monitor] pinned placed at ({}, {}) on {} (scale {:.2}, manual={})",
+        position.0,
+        position.1,
+        preferred_key.as_deref().unwrap_or("primary"),
+        scale,
+        manual.is_some()
+    );
+    Ok(())
+}
 
 #[tauri::command]
 async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String> {
@@ -1882,21 +2026,18 @@ async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String>
         *current = Some(page.clone());
     }
     let window = window_factory::ensure(&app, "pinned")?;
-    // 第一次固定时放在右下角，避免挡住桌宠和面板。
-    if let Ok(position) = window.outer_position() {
-        if position.x == 0 && position.y == 0 {
-            if let Ok(Some(monitor)) = window.current_monitor() {
-                let area = monitor.work_area();
-                let size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(420, 560));
-                let x = area.position.x + area.size.width as i32 - size.width as i32 - 32;
-                let y = area.position.y + area.size.height as i32 - size.height as i32 - 48;
-                let _ = window.set_position(tauri::PhysicalPosition::new(x.max(0), y.max(0)));
-            }
-        }
+    // 跟随「小狗屏幕」：右下角 24px（或夹取用户拖动过的位置），尺寸按目标屏 scale 换算。
+    if let Err(error) = place_pinned_window(&app) {
+        eprintln!("failed to place pinned window: {error}");
     }
     let _ = window.unminimize();
     window.show().map_err(|error| error.to_string())?;
     let _ = window.set_always_on_top(true);
+    // 任务栏灰框（用户反馈 P1）：无边框透明窗口会以 WS_EX_APPWINDOW 出现在任务栏，
+    // 渲染成一个没标题/没图标的灰块。`skip_taskbar` 在创建时生效，但 Windows 在窗口
+    // 第一次 show 之后可能重新加上 APPWINDOW，所以这里在 show / 置顶之后再强制一次：
+    // 打 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW（同时移出 Alt+Tab 列表）。
+    apply_pinned_taskbar_style(&window);
     window.set_focus().map_err(|error| error.to_string())?;
     let _ = window.emit(
         "maltese-pinned-page",
@@ -3673,12 +3814,16 @@ fn apply_stage_geometry(
             // 云朵气泡会占用 overlay 快照，几何会被 apply_stage_geometry 的 overlay 分支挡掉；
             // 气泡收起前反复重试（幂等；start==target 时直接返回），保证一定回到主屏工作区。
             if let Some(window) = window.app_handle().get_webview_window(WINDOW_LABEL) {
+                // pinned 窗口也跟着回主屏（它不在主岛几何链路里）。
+                let _ = place_pinned_window(window.app_handle());
+                let app_handle = window.app_handle().clone();
                 thread::spawn(move || {
                     for _ in 0..10 {
                         thread::sleep(Duration::from_millis(800));
                         if let Err(error) = apply_stage_geometry(&window, fallback_state, false) {
                             eprintln!("failed to fall back to primary monitor: {error}");
                         }
+                        let _ = place_pinned_window(&app_handle);
                     }
                 });
             }
@@ -4650,6 +4795,36 @@ mod tests {
         assert_eq!(sane_window_rect(WindowRect { x: 1560, y: 880, width: 0, height: 0 }), None);
         assert_eq!(sane_window_rect(WindowRect { x: 1560, y: 880, width: 259, height: 28 }), None);
     }
+
+    // —— 固定在桌面的标签页（pinned）跟随副屏 ——
+
+    #[test]
+    fn pinned_anchor_sits_bottom_right_of_the_target_work_area() {
+        // 副屏在左：工作区 x = -1920，窗口 420×560，边距 24
+        let work = (-1920, 0, 1920u32, 1080u32);
+        let position = pinned_anchor(work, (420, 560), 24);
+        assert_eq!(position, (-1920 + 1920 - 420 - 24, 1080 - 560 - 24));
+        assert!(position.0 < 0, "副屏上的 pinned 仍在负 x 区域");
+        assert!(position.0 + 420 <= 0, "整个窗口落在副屏内");
+        // 主屏同样规则
+        assert_eq!(pinned_anchor((0, 0, 2560, 1440), (420, 560), 24), (2116, 856));
+        // 工作区比窗口还小时贴左上角，不出现负坐标
+        assert_eq!(pinned_anchor((0, 0, 300, 300), (420, 560), 24), (0, 0));
+    }
+
+    #[test]
+    fn pinned_clamp_keeps_window_inside_after_screen_switch() {
+        let work = (-1920, 0, 1920u32, 1080u32);
+        // 用户在主屏拖动过 (2285,1203)，切到副屏必须夹进副屏
+        let clamped = clamp_to_work_area((2285, 1203), (420, 560), work);
+        assert_eq!(clamped, (-1920 + 1920 - 420, 1080 - 560));
+        assert!(clamped.0 >= -1920 && clamped.0 + 420 <= 0);
+        assert!(clamped.1 >= 0 && clamped.1 + 560 <= 1080);
+        // 已在屏内则原样保留（尊重拖动记忆）
+        assert_eq!(clamp_to_work_area((-800, 200), (420, 560), work), (-800, 200));
+        // 越过左上角也被拉回
+        assert_eq!(clamp_to_work_area((-9999, -9999), (420, 560), work), (-1920, 0));
+    }
 }
 
 fn build_tray(app: &App) -> tauri::Result<()> {
@@ -4759,6 +4934,25 @@ pub fn run() {
                 return;
             }
             if window.label() != WINDOW_LABEL {
+                // 「固定在桌面的标签页」：记住用户拖动后的位置（换屏时夹进目标屏）。
+                if window.label() == "pinned" {
+                    if let WindowEvent::Moved(position) = event {
+                        let auto = PINNED_AUTO_POSITIONING.load(Ordering::SeqCst);
+                        let minimized = window.is_minimized().unwrap_or(false);
+                        let junk = (position.x == 0 && position.y == 0)
+                            || is_sentinel_window_position(position.x, position.y);
+                        let programmatic = PINNED_LAST_SET
+                            .lock()
+                            .ok()
+                            .and_then(|slot| *slot)
+                            == Some((position.x, position.y));
+                        if !auto && !minimized && !junk && !programmatic {
+                            if let Ok(mut slot) = PINNED_MANUAL_POSITION.lock() {
+                                *slot = Some((position.x, position.y));
+                            }
+                        }
+                    }
+                }
                 return;
             }
 

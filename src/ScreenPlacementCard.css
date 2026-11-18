@@ -61,3 +61,10 @@
   font-size: 11px;
   color: #a97b1f;
 }
+/* 「固定在桌面的标签页会跟随小狗屏幕」一行说明。 */
+.screen-placement__pinned {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #8a909d;
+}

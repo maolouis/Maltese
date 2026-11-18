@@ -755,6 +755,7 @@ const en: Translations = {
     onlyOne: "Only one screen",
     missing: "Secondary screen disconnected, back to primary",
     resolution: (width, height, scale) => `${width}×${height} @${scale}%`,
+    pinnedFollows: "Pinned desktop tabs follow the pet screen and move along when you switch or unplug a monitor.",
   },
   petVitals: {
     title: "Pet status",

@@ -6485,20 +6485,24 @@ function IslandApp({
 
   // 多屏放置：设置变化时把「小狗屏幕 / Bongo 屏幕」的指纹交给 Rust，由它按目标屏的
   // 工作区与 scale_factor 重排几何（锁角/贴边/自定义位置都在该屏内部生效）。
+  // 串行化 + 只认最后一次选择：连续改下拉（比如先用键盘 HOME 再 DOWN 两次）时，
+  // 三次 IPC 的返回顺序没有保证，旧选择晚到会把偏好覆盖回去（实测 pinned 因此留在主屏）。
+  const monitorApplyRef = useRef({ generation: 0, queue: Promise.resolve() as Promise<unknown> });
   useEffect(() => {
     if (!isTauri()) return;
-    let cancelled = false;
-    void invoke<MonitorFingerprint[]>("list_monitors")
-      .then((monitors) => {
-        if (cancelled || !Array.isArray(monitors)) return undefined;
+    const state = monitorApplyRef.current;
+    const generation = ++state.generation;
+    state.queue = state.queue
+      .catch(() => undefined)
+      .then(async () => {
+        if (generation !== state.generation) return; // 已被更新的选择取代
+        const monitors = await invoke<MonitorFingerprint[]>("list_monitors");
+        if (generation !== state.generation || !Array.isArray(monitors)) return;
         const island = resolveMonitorPreference(settings.islandScreen, monitors, true);
         const bongo = resolveBongoPreference(settings.bongoScreen, monitors, island);
-        return invoke("set_monitor_preferences", { island, bongo });
+        await invoke("set_monitor_preferences", { island, bongo });
       })
       .catch((error) => console.error("set_monitor_preferences failed", error));
-    return () => {
-      cancelled = true;
-    };
   }, [settings.bongoScreen, settings.islandScreen]);
 
   const collapsedTodoCount = settings.showIdleTodoCount && !collapsedTaskTitle

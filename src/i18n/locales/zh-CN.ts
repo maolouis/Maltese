@@ -765,6 +765,7 @@ const zhCN: Translations = {
     onlyOne: "只有一块屏幕",
     missing: "副屏已断开，已回到主屏",
     resolution: (width, height, scale) => `${width}×${height} @${scale}%`,
+    pinnedFollows: "固定在桌面的标签页会跟随「小狗屏幕」；换屏或拔屏时一起移动。",
   },
   petVitals: {
     title: "小狗的状态",

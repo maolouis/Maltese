@@ -196,6 +196,10 @@ fn pinned() -> WindowSpec {
     window_spec.transparent = true;
     window_spec.always_on_top = true;
     window_spec.shadow = false;
+    // 「固定在桌面」= 悬浮小窗，不该进任务栏：否则无边框透明窗口会在任务栏渲染成一个
+    // 没有标题/图标的灰框（用户反馈 P1）。skip_taskbar 会让 Windows 打上
+    // WS_EX_TOOLWINDOW，同时从 Alt+Tab 列表里移除。
+    window_spec.skip_taskbar = true;
     window_spec
 }
 

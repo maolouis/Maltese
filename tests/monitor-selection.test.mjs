@@ -4,12 +4,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  clampPinnedPosition,
   clampRectToWorkArea,
   cornerRectOnMonitor,
   matchMonitor,
   monitorKey,
+  pinnedDefaultPosition,
+  pinnedPhysicalSize,
   resolveBongoPreference,
   resolveMonitorPreference,
+  resolvePinnedWorkArea,
   screenSelectOptions,
   toPhysical,
 } from "../src/monitorSelection.ts";
@@ -142,4 +146,54 @@ test("偏好解析：跟随上次=null、主屏=主屏指纹、副屏=指纹 key
   assert.equal(resolveBongoPreference("follow", list, list[1].key), list[1].key);
   assert.equal(resolveBongoPreference("follow", list, null), null);
   assert.equal(resolveBongoPreference(list[1].key, list, null), list[1].key);
+});
+// —— 「固定在桌面的标签页」(pinned) 跟随小狗屏幕 ——
+
+test("pinned 目标屏：跟随 islandScreen 偏好的副屏；偏好为空/屏被拔 → 回主屏", () => {
+  const list = monitors();
+  const secondaryKey = list[1].key;
+  // 跟随副屏
+  const pinnedOnSecondary = resolvePinnedWorkArea(secondaryKey, list);
+  assert.equal(pinnedOnSecondary?.monitor.name, "\\\\.\\DISPLAY1");
+  assert.deepEqual(pinnedOnSecondary?.work, { x: -1920, y: 0, width: 1920, height: 1080 });
+  // 「跟随上次位置」/空偏好 → 主屏
+  assert.equal(resolvePinnedWorkArea("last", list)?.monitor.primary, true);
+  assert.equal(resolvePinnedWorkArea(null, list)?.monitor.primary, true);
+  // 显式主屏
+  assert.equal(resolvePinnedWorkArea("primary", list)?.monitor.primary, true);
+  // 副屏被拔（指纹不在列表里）→ 主屏
+  assert.equal(resolvePinnedWorkArea(secondaryKey, [list[0]])?.monitor.primary, true);
+  // 空列表 → null（调用方保持原位）
+  assert.equal(resolvePinnedWorkArea(secondaryKey, []), null);
+});
+
+test("pinned 默认位置：目标屏右下角留 24px（副屏 x 为负也不越界）", () => {
+  const secondaryWork = { x: -1920, y: 0, width: 1920, height: 1080 };
+  const size = { width: 420, height: 560 };
+  const position = pinnedDefaultPosition(secondaryWork, size);
+  assert.deepEqual(position, { x: -1920 + 1920 - 420 - 24, y: 1080 - 560 - 24 });
+  assert.ok(position.x < 0, "副屏右下角仍在负 x 区域");
+  assert.ok(position.x + size.width <= 0, "整个窗口都在副屏内");
+  // 工作区比窗口还小时贴左上角，不出现负坐标
+  const tiny = { x: 0, y: 0, width: 300, height: 300 };
+  assert.deepEqual(pinnedDefaultPosition(tiny, size), { x: 0, y: 0 });
+});
+
+test("pinned 换屏夹取：旧位置属于主屏时夹进副屏工作区，不会甩到屏外", () => {
+  const secondaryWork = { x: -1920, y: 0, width: 1920, height: 1080 };
+  const size = { width: 420, height: 560 };
+  // 用户在主屏拖动过 (2285,1203)，切到副屏后必须夹到副屏内
+  const clamped = clampPinnedPosition({ x: 2285, y: 1203 }, size, secondaryWork);
+  assert.ok(clamped.x >= -1920 && clamped.x + size.width <= 0, `x 越界：${clamped.x}`);
+  assert.ok(clamped.y >= 0 && clamped.y + size.height <= 1080, `y 越界：${clamped.y}`);
+  assert.deepEqual(clamped, { x: -1920 + 1920 - 420, y: 1080 - 560 });
+  // 已在屏内则原样保留（尊重拖动记忆）
+  const inside = { x: -800, y: 200 };
+  assert.deepEqual(clampPinnedPosition(inside, size, secondaryWork), inside);
+});
+
+test("pinned DPI：物理尺寸按目标屏 scale 换算（100% vs 150%）", () => {
+  assert.deepEqual(pinnedPhysicalSize({ width: 420, height: 560 }, 1), { width: 420, height: 560 });
+  assert.deepEqual(pinnedPhysicalSize({ width: 420, height: 560 }, 1.5), { width: 630, height: 840 });
+  assert.deepEqual(pinnedPhysicalSize(undefined, 1.25), { width: 525, height: 700 });
 });

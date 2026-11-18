@@ -393,6 +393,8 @@ export type Translations = {
     onlyOne: string;
     missing: string;
     resolution: (width: number, height: number, scale: number) => string;
+    /** 「固定在桌面的标签页」会跟随小狗所在屏幕。 */
+    pinnedFollows: string;
   };
 
 /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重。 */

@@ -161,3 +161,85 @@ export function resolveBongoPreference(
   if (choice === "follow") return islandPreference;
   return resolveMonitorPreference(choice, monitors, true);
 }
+// ---------------------------------------------------------------------------
+// 「固定在桌面的标签页」(pinned) 的多屏行为：与主岛共用同一份「小狗屏幕」偏好。
+// ---------------------------------------------------------------------------
+
+export type PinnedSize = { width: number; height: number };
+export type PinnedPoint = { x: number; y: number };
+
+/** pinned 窗口默认贴边距（目标屏右下角）。 */
+export const PINNED_MARGIN = 24;
+
+/** pinned 逻辑尺寸（与 Rust window_factory 的 420×560 一致）。 */
+export const PINNED_LOGICAL_SIZE: PinnedSize = { width: 420, height: 560 };
+
+/**
+ * 解析 pinned 的目标屏工作区：跟随主岛的 `islandScreen` 偏好（指纹匹配），
+ * 偏好为空（跟随上次位置）或匹配不到（副屏被拔）→ 回主屏。
+ */
+export function resolvePinnedWorkArea(
+  islandScreen: string | null | undefined,
+  monitors: MonitorFingerprint[],
+): { monitor: MonitorFingerprint; work: WorkArea } | null {
+  const primary = monitors.find((monitor) => monitor.primary) ?? monitors[0];
+  if (!primary) return null;
+  if (!islandScreen || islandScreen === "last" || islandScreen === "follow") {
+    return { monitor: primary, work: toWorkArea(primary) };
+  }
+  const target =
+    islandScreen === "primary"
+      ? primary
+      : monitors.find((monitor) => monitor.key === islandScreen) ??
+        matchMonitor({ key: islandScreen, name: islandScreen, width: 0, height: 0 }, monitors).monitor ??
+        primary;
+  return { monitor: target, work: toWorkArea(target) };
+}
+
+export function toWorkArea(monitor: MonitorFingerprint): WorkArea {
+  return { x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height };
+}
+
+/**
+ * pinned 默认位置：目标屏工作区右下角，留 `margin` 物理像素（默认 24）。
+ * 小于工作区时贴左边/上边，不会出现负坐标。
+ */
+export function pinnedDefaultPosition(
+  work: WorkArea,
+  size: PinnedSize,
+  margin: number = PINNED_MARGIN,
+): PinnedPoint {
+  const safeMargin = Number.isFinite(margin) ? Math.max(0, margin) : PINNED_MARGIN;
+  return {
+    x: Math.max(work.x, work.x + work.width - size.width - safeMargin),
+    y: Math.max(work.y, work.y + work.height - size.height - safeMargin),
+  };
+}
+
+/** 换屏后把 pinned 的旧位置夹进目标屏工作区（用户拖动过的位置尽量保留）。 */
+export function clampPinnedPosition(
+  position: PinnedPoint,
+  size: PinnedSize,
+  work: WorkArea,
+): PinnedPoint {
+  const maxX = work.x + work.width - size.width;
+  const maxY = work.y + work.height - size.height;
+  return {
+    x: Math.min(Math.max(position.x, work.x), Math.max(work.x, maxX)),
+    y: Math.min(Math.max(position.y, work.y), Math.max(work.y, maxY)),
+  };
+}
+
+/**
+ * pinned 的物理尺寸：逻辑尺寸 × **目标屏自己的 scale_factor**（与主岛一致）。
+ * 100% 副屏 → 420×560；150% 副屏 → 630×840。
+ */
+export function pinnedPhysicalSize(
+  size: PinnedSize = PINNED_LOGICAL_SIZE,
+  targetScale: number,
+): PinnedSize {
+  return {
+    width: toPhysical(size.width, targetScale),
+    height: toPhysical(size.height, targetScale),
+  };
+}

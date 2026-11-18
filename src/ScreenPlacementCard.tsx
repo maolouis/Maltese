@@ -109,6 +109,7 @@ export default function ScreenPlacementCard({
           ))}
         </ul>
       )}
+      <p className="screen-placement__pinned">{copy.pinnedFollows}</p>
     </div>
   );
 }

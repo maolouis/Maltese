@@ -120,15 +120,64 @@ export function cornerRect(monitor, logicalWidth, logicalHeight, corner: "tl" | 
 - 只提示一次：同一块屏断开着期间不反复弹（`MONITOR_MISSING_NOTIFIED` 记住上次提示的 key）。
 - 兜底重试：云朵气泡会占用 overlay 快照把几何挡掉，所以降级路径在 8s 内重试 10 次（幂等），保证一定落回主屏工作区。
 
-## 8. 测试与改动文件
+## 8. 固定标签页（📌 pinned）的多屏行为
 
-- 单测 `tests/monitor-selection.test.mjs`（6 条）：指纹匹配（完整一致 / 同名不同分辨率 / 索引顺序变化 /
+「固定在桌面的标签页」和主岛共用**同一份**「小狗屏幕」偏好，不再永远待在主屏：
+
+1. **跟随屏幕**：`pin_page_to_desktop` 每次显示前都会调 `place_pinned_window`：
+   目标屏 = `ISLAND_MONITOR_PREF` 指纹匹配到的显示器，匹配不到回主屏；
+   默认落在**目标屏工作区右下角、留 24px 边距**（pinned 窗口 420×560 逻辑尺寸）。
+2. **DPI**：先把窗口物理尺寸按「当前屏 scale」还原成逻辑尺寸，再乘**目标屏自己的 `scale_factor`** 设回物理尺寸——
+   150% 副屏上不会变成半个窗口或溢出屏幕。
+3. **切屏立即跟随**：`set_monitor_preferences`（设置里改「小狗屏幕」）会同时重排主岛、Bongo 和 pinned；
+   pinned **正在显示就立刻移动，隐藏中只更新位置**（再点 📌 时直接出现在新屏）。
+4. **拔屏 / 插回**：走同一条 `maltese-monitor-missing` 降级链路（主岛几何降级时同步 `place_pinned_window`，
+   并在 8s 重试里重复摆位）；副屏消失 → pinned 回主屏，插回 → 一起回副屏。
+5. **位置记忆**：用户拖动过 pinned 后记录物理坐标（`PINNED_MANUAL_POSITION`；程序自己的 `set_position`
+   用 `PINNED_AUTO_POSITIONING` 标记，不会被当成拖动）。换屏时把这个坐标**夹进目标屏工作区**（`clamp_to_work_area`），
+   尽量保留相对位置、绝不甩到屏幕外；没拖动过则用目标屏右下角默认位。
+6. **UI**：设置页「所在屏幕」卡底部一行说明「固定在桌面的标签页会跟随「小狗屏幕」；换屏或拔屏时一起移动。」
+7. **不进任务栏（2026-11-18 修 P1 灰框）**：pinned 是无边框透明悬浮窗口，如果被当成普通窗口，
+   任务栏会渲染成一个没有标题/图标的灰块。修法是创建时 `skipTaskbar: true`（Windows 上等价于
+   `WS_EX_TOOLWINDOW`，同时从 Alt+Tab 列表移除），并对已存在的窗口在每次固定时再显式
+   `SetWindowLongPtrW(GWL_EXSTYLE, … | WS_EX_TOOLWINDOW & !WS_EX_APPWINDOW)` 做双保险。
+   **怎么关掉固定窗口**：固定窗口右上角「×（关闭这个窗口）」或左上角「取消固定」按钮；
+   也可以在主岛面板再点一次 📌 重新固定别的标签页。
+   托盘图标、主岛、Bongo 都不受影响（它们本来就是隐藏/悬浮窗口）。
+
+纯函数（`src/monitorSelection.ts`，均有单测）：`resolvePinnedWorkArea`（跟随偏好 / 拔屏回主屏）、
+`pinnedDefaultPosition`（右下角 24px）、`clampPinnedPosition`（换屏夹取）、`pinnedPhysicalSize`（目标屏 DPI）。
+
+### 8.1 实机验证（2026-11-18，本机双屏）
+
+| 步骤 | 实测 | 结论 |
+| --- | --- | --- |
+| 小狗屏幕=主屏 → 点 📌 | pinned `2116,856,420,560` | ✅ 主屏右下角：`2560-420-24=2116`、`1440-560-24=856` |
+| 设置里切到副屏（**不重新点 📌**） | pinned `-444,496,420,560` | ✅ 立即跟到副屏：`-1920+1920-420-24=-444`、`1080-560-24=496` |
+| `DisplaySwitch /external`（副屏消失） | pinned `2116,856,420,560` | ✅ 回主屏右下角，不越界、不留 `-32000` |
+| `DisplaySwitch /extend`（插回副屏） | pinned `-444,496,420,560` | ✅ 自动回副屏 |
+| 点「关闭这个窗口」 | pinned `hidden` | ✅ 取消固定正常 |
+| 任务栏样式位（`GWL_EXSTYLE`） | `0x40118 → 0x198`，`WS_EX_TOOLWINDOW=true` / `WS_EX_APPWINDOW=false` | ✅ 不再出现在任务栏 / Alt+Tab |
+| 主岛 / Bongo / 托盘 | 不受影响（主岛切屏正常、托盘图标仍在） | ✅ |
+
+- 顺带修了一个竞态：连续改下拉时三次 `set_monitor_preferences` 的返回顺序没有保证，旧选择晚到会覆盖偏好
+  （实测 pinned 因此留在主屏）。现在前端用 generation + 串行队列，只让最后一次选择生效。
+- 拔屏时如果主岛窗口被系统最小化（`DisplaySwitch` 会这样），主岛几何会冻结，但 pinned 由 30s 显示器轮询
+  单独摆位（不依赖主岛几何），所以 `GetWindowRect` 里 pinned 仍能正确回主屏。
+
+## 9. 测试与改动文件
+
+- 单测 `tests/monitor-selection.test.mjs`（10 条）：指纹匹配（完整一致 / 同名不同分辨率 / 索引顺序变化 /
   换接口同几何 / 拔屏 `none`）、锁角锚点（副屏在左时 x 为负）、跨屏裁剪、DPI 换算（100% vs 150%）、
-  下拉选项（只有一块屏时禁用）、偏好解析（`last`→null、`primary`→主屏指纹、Bongo 跟随小狗）。
+  下拉选项（只有一块屏时禁用）、偏好解析（`last`→null、`primary`→主屏指纹、Bongo 跟随小狗）、
+  **pinned 目标屏解析 / 右下角默认位 / 换屏夹取 / 目标屏 DPI**。
+- Rust 单测（`lib.rs` tests）：`pinned_anchor_sits_bottom_right_of_the_target_work_area`、
+  `pinned_clamp_keeps_window_inside_after_screen_switch`。
 - 改动：
   - `src-tauri/src/lib.rs`：`list_monitors` / `set_monitor_preferences` 命令、显示器指纹
     （`name|WxH@x,y`，四层匹配）、`apply_stage_geometry` 用目标屏工作区与 **目标屏 scale_factor**、
-    `lock_island_corner` 按目标屏锁角、`maltese-monitor-missing` 事件、30s 热插拔轮询；
+    `lock_island_corner` 按目标屏锁角、`maltese-monitor-missing` 事件、30s 热插拔轮询、
+    **pinned 跟随屏幕（`place_pinned_window` / `PINNED_MANUAL_POSITION` / DPI 换算）**；
   - `src-tauri/src/desktop_extras.rs`：Bongo / 陪玩狗 / 跟随宠按所选屏工作区落位（Bongo 默认跟随小狗所在屏）；
   - `src/monitorSelection.ts`（纯函数）+ `tests/monitor-selection.test.mjs`；
   - `src/ScreenPlacementCard.tsx` / `.css`（两处设置共用，只有一块屏时禁用）、
