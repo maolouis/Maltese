@@ -1648,8 +1648,9 @@ export function IslandShell({
     systemIdleSeconds >= sleepAfterSeconds &&
     nowTick > wakeUntil;
   // 主狗按设置页里的顺序轮播当前表情；睡觉/缩边时固定趴睡帧。
-  // 桌宠自我状态只在 `petState === "idle"` 时介入：按 4 个指标给「状态 + 帧」加权抽 24 张，
-  // 动作 / 通知 / 音乐 / Agent 等状态的优先级完全不变（usePetGifRotation 也不改）。
+  // 桌宠自我状态只改「待机轮播」：按 4 个指标给 25 个可轮播状态加权后抽 24 张，
+  // 权重表在 petVitals.weightsForVitals（每个状态都有基线，不留「纯随机兜底」）。
+  // 动作 / 通知 / 音乐 / Agent 指定的表情优先级完全不变（usePetGifRotation 也不改）。
   const vitalsBucket = petVitals && petVitalsEnabled ? vitalsBucketKey(petVitals) : "";
   const carouselFrames = useMemo(() => {
     if (petState === "idle" && petVitals && petVitalsEnabled) {

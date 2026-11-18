@@ -41,7 +41,6 @@ import {
 } from "./petGifTrash";
 import {
   characterAllFrames,
-  PET_ASSET_DEDUPE,
   PET_ASSET_GROUP_LABELS,
   PET_CHARACTER_LABELS,
   PET_ROTATION_FRAMES_PER_STATE,
@@ -603,8 +602,7 @@ export function PetGifRotationSettings() {
             </button>
           </div>
 
-          {/* 素材库总览：回答「素材库应该不止这么一点」——把 1172 个物理文件 /
-              789 条去重清单 / 当前表情可选 / 轮播抽样 四个口径一次说清。 */}
+          {/* 素材库总览：只留数字口径 + 一行说明指针（长解释在 docs/pet-characters.md）。 */}
           <div className="pet-gif-settings__library">
             <div className="pet-gif-settings__library-head">
               <span className="pet-gif-settings__library-title">{t.petGifs.libraryTitle}</span>
@@ -619,14 +617,10 @@ export function PetGifRotationSettings() {
                 </span>
               ))}
             </div>
-            <p className="pet-gif-settings__library-sampled">
+            <p className="pet-gif-settings__library-line">
               {t.petGifs.librarySampled(Math.min(PET_ROTATION_FRAMES_PER_STATE, availableItems.length), availableItems.length)}
             </p>
-            <p className="pet-gif-settings__library-shared">{t.petGifs.librarySharedOnly}</p>
-            <p className="pet-gif-settings__library-deduped">
-              {t.petGifs.libraryDeduped(PET_ASSET_DEDUPE.removedFiles, PET_ASSET_DEDUPE.removedMB)}
-            </p>
-            <p className="pet-gif-settings__library-note">{t.petGifs.libraryNote}</p>
+            <p className="pet-gif-settings__library-line">{t.petGifs.librarySharedOnly}</p>
           </div>
 
           {error && <p className="pet-gif-settings__error">{error}</p>}

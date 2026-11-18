@@ -352,16 +352,13 @@ export type Translations = {
     trashRestore: string;
     trashMeta: (character: string, state: string) => string;
     states: Record<string, string>;
-    /** 素材库总览（设置页）：总数 / 分组 / 去重与同框规则说明。 */
+    /** 素材库总览（设置页）：只保留数字口径，详细说明在 docs/pet-characters.md。 */
     libraryTitle: string;
     libraryTotal: (count: number) => string;
     libraryGroup: (name: string, count: number) => string;
-    libraryNote: string;
     librarySampled: (visible: number, pool: number) => string;
-    /** 同框素材只在 duo 形象下可选（避免用户以为丢了）。 */
+    /** 同框素材只在 duo 形象下可选（一行短注）。 */
     librarySharedOnly: string;
-    /** 已删除多少张与 chars 完全重复的副本（体积收益）。 */
-    libraryDeduped: (count: number, mb: number) => string;
   };
 
   petLink: {

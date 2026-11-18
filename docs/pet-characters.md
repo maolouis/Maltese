@@ -44,9 +44,48 @@ node scripts/build-pet-manifest.mjs
 - `stickers` 的 9 张与 `legacy` 的 `rest.gif` 都并入了**单角色**（小白 / 小鸡毛）的素材池（`petCharacters.extraPoolFrames`），
   duo 只播同框池；微博表情包小动作按语义对齐：`sleep→sleeping`、`eat→eating`、`work→working`、`nervous→scared`、
   `hop→celebrate`、`paper→attention`、`walk→chase`。
-- 设置页「表情轮播」里有**素材库总览**：789 条清单的分组计数、「同框只在 duo 可选」、「已清理 383 张重复副本（-31 MB）」、
-  「轮播每个表情随机抽 30 张」四条说明一次讲清。测试见 `tests/pet-asset-inventory.test.mjs`
-  （清单无失效路径、磁盘无未收录素材、磁盘无 chars 重复副本、物理数 = 清单数 = 789）。
+- 设置页「表情轮播」里的**素材库总览**只放数字口径（总数、五个分组计数、本表情可选/轮播抽 30 张、同框 duo-only 一行短注），
+  **详细解释统一放在本文档**（见下面「素材库说明」与「轮播权重随状态变化」两节）。
+  测试见 `tests/pet-asset-inventory.test.mjs`（清单无失效路径、磁盘无未收录素材、磁盘无 chars 重复副本、物理数 = 清单数 = 789）。
+
+## 素材库说明（为什么设置里看到的数量是这样）
+
+1. **总清单 789 条 = 磁盘上的 789 个 GIF**（`chars` 779 + `stickers` 9 + `legacy` 1），一一对应；设置页顶部「共 789 张」就是它。
+2. **双狗同框 152 张只在「小白和小鸡毛」形象下可选**：小白 / 小鸡毛各自只播自己的素材，同框池是 duo 专用（产品决定）；
+   所以单独选一个角色时，格子墙里看不到那 152 张，但总览里仍然会计数。
+3. **同一张图只保留一份**：原先 `stickers/weibo` 287 张、根级旧兜底 96 张与 `chars` 内容完全相同（sha256），
+   2026-11-17 已从磁盘删除（88.1 MB → 57.5 MB），所以「物理文件数」比历史版本少了 383 张，但**内容没少**。
+4. **单个表情的可选张数** = 当前形象 + 当前表情的素材池；轮播每次只从池里随机抽 **30 张**上屏（`MAX_FRAMES_PER_STATE`），
+   所以「本表情可选 86 张 / 轮播随机抽 30 张」这两个数字本来就不同：池子更大的表情不会全部出现在轮播里，但都能在格子墙里勾选。
+5. **轮播默认包含全部 25 个表情**（设置页「轮播范围」可改）；只勾少数几个时，轮播就只在勾选的表情里换。
+6. 详细来源、动作映射、同框规则见上文各节；素材版权归 ©MALTESE / 线条小狗官方。
+
+## 轮播权重随状态变化（桌宠自我状态）
+
+待机轮播不再等概率换表情，而是按「体力 / 情绪 / 亲密 / 专注」四个指标的权重表取样：
+
+| 指标 | 权重变化（相对倍率） |
+| --- | --- |
+| 体力 < 25 | `sleeping ×5`、`relax ×3`、`resting ×2.5`、`chin ×2`；`happy/play ×0.2`、`celebrate/chase/spin ×0.3` |
+| 体力 25–50 | `relax ×2`、`idle ×2`、`sleeping/resting ×1.4`、`play ×0.6` |
+| 体力 > 80 | `play ×1.6`、`happy ×1.3`、`chase ×1.3` |
+| 情绪 > 75 | `happy ×3`、`celebrate ×1.8`、`love ×2`、`spin/play ×1.2` |
+| 情绪 < 35 | `relax ×2`、`chin ×1.5`、`pet ×1.6`、`peek ×1.6`；`happy ×0.3`、`celebrate ×0.2`；**情绪 < 25 时 `cry` 才抬到 0.3（小概率）** |
+| 亲密 > 80 | `love ×3`、`pet ×2`、`peek ×1.5`、`happy/chin ×1.2` |
+| 亲密 < 35 | `idle ×2`、`peek ×1`、`pet ×0.6`、`love ×0.2`、`chin ×0.8` |
+| 专注 > 60 | `working ×2.4`、`attention ×1.6`、`listening ×1.2`；`sleeping ×0.4`、`relax ×0.8` |
+| 专注 30–60 | `working ×1.4`、`attention ×1.15` |
+
+- **覆盖全部 25 个可轮播状态**：每个状态都有基线权重（`VITALS_BASE_WEIGHTS`），不会出现「没配到权重就等概率」的情况。
+  负面表情基线压得很低（`angry 0.3`、`cry 0.05`），数值再差也不会变成「哭脸/生气惩罚」。
+- **只影响待机轮播**：动作、通知、音乐、Agent 指定的表情优先级不变；总开关关掉后完全回到原来的等概率轮播。
+- 实现：`src/petVitals.ts` 的 `VITALS_ROTATION_STATES` / `VITALS_BASE_WEIGHTS` / `weightsForVitals()` /
+  `buildIdlePlaylist()`；`src/App.tsx` 的 `carouselFrames` 按 `vitalsBucketKey` 分桶重建（数值小幅变化不重排播表）。
+- **聊天表情包兜底**：`pickStickerForVitals(vitals, pool, { rng?, avoid? })` 用同一张权重表从候选中挑一个
+  （例如累了更容易挑 `sleeping` 表情包、开心更容易挑 `happy`/`celebrate`），供聊天「表情包信使」在模型没给标记、
+  或需要从库里挑代表帧时使用；`avoid` 用来跳过最近发过的 id。
+- 单测：`tests/pet-vitals.test.mjs`（25 个状态全覆盖、低体力 sleeping 远多于 happy、专注/亲密/情绪档位、
+  cry 只在极低情绪小概率、`pickStickerForVitals` 的权重/avoid/空池）。
 
 ## 三个形象
 

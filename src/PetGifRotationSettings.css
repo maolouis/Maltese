@@ -572,12 +572,8 @@
   color: #2f8d57;
 }
 
-.pet-gif-settings__library-sampled,
-.pet-gif-settings__library-note {
+.pet-gif-settings__library-line {
   margin: 0;
-  line-height: 1.5;
-}
-
-.pet-gif-settings__library-note {
+  line-height: 1.45;
   color: #8a909d;
 }

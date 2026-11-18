@@ -242,31 +242,84 @@ export function applyVitalsEvent(
 }
 
 // ---------------------------------------------------------------------------
-// 指标 → 待机轮播权重（只影响 petState === "idle"，不碰任何其它状态）
+// 指标 → 待机轮播权重
+//
+// 覆盖**全部 25 个可轮播状态**（与 petGifRotation.PET_STATE_LABELS 对齐）：
+// 只给其中一部分状态配权重会让其余状态落到兜底 0.5，看起来仍是「纯随机」。
+// 权重只决定「待机轮播时哪些表情更常出现」；动作 / 通知 / 音乐 / Agent 指定的表情不受影响。
 // ---------------------------------------------------------------------------
 
+/** 可轮播状态全集（顺序与设置页一致，便于人工核对）。 */
+export const VITALS_ROTATION_STATES = [
+  "idle",
+  "resting",
+  "listening",
+  "working",
+  "attention",
+  "pet",
+  "eating",
+  "pickup",
+  "scared",
+  "sleeping",
+  "celebrate",
+  "happy",
+  "relax",
+  "chin",
+  "spin",
+  "play",
+  "hide",
+  "chase",
+  "peek",
+  "angry",
+  "cry",
+  "love",
+  "ride",
+  "bath",
+  "costume",
+] as const;
+
+/** 基线权重：常见表情高、剧烈/负面表情低（cry/angry 永远只是背景噪声级别）。 */
 export const VITALS_BASE_WEIGHTS: Record<string, number> = {
   idle: 3,
-  happy: 1.5,
-  relax: 1.2,
-  play: 1,
-  peek: 0.5,
-  pet: 1,
-  chin: 0.6,
-  love: 1,
-  // 下面几个原本靠「倍率作用于未定义值」隐式出现，这里显式给基线，权重表才完整可断言。
-  sleeping: 1,
+  resting: 1.2,
+  listening: 0.8,
   working: 1,
   attention: 1,
+  pet: 1,
+  eating: 0.8,
+  pickup: 0.5,
+  scared: 0.6,
+  sleeping: 1,
   celebrate: 1,
-  spin: 1,
+  happy: 1.5,
+  relax: 1.2,
+  chin: 0.6,
+  spin: 0.8,
+  play: 1,
+  hide: 0.5,
+  chase: 0.6,
+  peek: 0.5,
+  // 负面表情压到很低：数值差也不会「摆烂惩罚」用户。
+  angry: 0.3,
+  cry: 0.05,
+  love: 1,
+  ride: 0.4,
+  bath: 0.4,
+  costume: 0.4,
 };
 
 /**
- * 四个指标 → 状态权重（相对值）。没有列出的状态用基线 1（或调用方给的缺省）。
- * 原则：数值低只会「更安静/更想睡」，不会自动播 cry/angry 惩罚用户。
+ * 四个指标 → 状态权重（相对值，全部 25 个状态都有条目）。
+ * 规则（都可在下面按需调）：
+ * - 体力低 → sleeping / relax / resting ↑，happy / play / celebrate / chase ↓；体力高 → play / happy ↑
+ * - 情绪高 → happy / celebrate / love / spin / play ↑
+ * - 情绪低 → pet / peek / relax / chin ↑，happy / celebrate ↓；情绪极低（<20）cry 才有小概率
+ * - 亲密高 → love / pet / peek / chin ↑；亲密低 → idle / peek ↑，love / pet ↓
+ * - 专注高 → working / attention / listening ↑，sleeping / relax ↓
  */
-export function weightsForVitals(vitals: PetVitals): Record<string, number> {
+export function weightsForVitals(
+  vitals: Pick<PetVitals, "energy" | "mood" | "bond" | "focus">,
+): Record<string, number> {
   const weights: Record<string, number> = { ...VITALS_BASE_WEIGHTS };
   const scale = (state: string, factor: number) => {
     weights[state] = (weights[state] ?? 1) * factor;
@@ -277,30 +330,42 @@ export function weightsForVitals(vitals: PetVitals): Record<string, number> {
   if (energy < 25) {
     scale("sleeping", 5);
     scale("relax", 3);
+    scale("resting", 2.5);
     scale("chin", 2);
     scale("happy", 0.2);
     scale("play", 0.2);
     scale("celebrate", 0.3);
+    scale("chase", 0.3);
+    scale("spin", 0.3);
   } else if (energy < 50) {
     scale("relax", 2);
     scale("idle", 2);
-    scale("sleeping", 1);
+    scale("sleeping", 1.4);
+    scale("resting", 1.4);
     scale("play", 0.6);
   } else if (energy > 80) {
     scale("play", 1.6);
     scale("happy", 1.3);
+    scale("chase", 1.3);
   }
 
   // 情绪
   if (mood > 75) {
     scale("happy", 3);
-    scale("celebrate", 1.5);
+    scale("celebrate", 1.8);
     scale("love", 2);
     scale("spin", 1.2);
+    scale("play", 1.2);
   } else if (mood < 35) {
     scale("relax", 2);
     scale("chin", 1.5);
+    scale("pet", 1.6);
+    scale("peek", 1.6);
     scale("happy", 0.3);
+    scale("celebrate", 0.2);
+    // 情绪极低（含下限 20 那一档）：只给 cry 一点小概率（0.05 × 6 = 0.3，仍是背景噪声级别），
+    // 不升级成「哭脸惩罚」：正常/高兴时 cry 权重只有 0.05。
+    if (mood < 25) scale("cry", 6);
   }
 
   // 亲密
@@ -309,28 +374,92 @@ export function weightsForVitals(vitals: PetVitals): Record<string, number> {
     scale("pet", 2);
     scale("peek", 1.5);
     scale("happy", 1.2);
+    scale("chin", 1.2);
   } else if (bond < 35) {
     scale("idle", 2);
     scale("peek", 1);
     scale("pet", 0.6);
     scale("love", 0.2);
+    scale("chin", 0.8);
   }
 
   // 专注（第 4 指标）：高专注更「陪你做事」，睡意变少
   if (focus > 60) {
-    scale("working", 2);
-    scale("attention", 1.4);
+    scale("working", 2.4);
+    scale("attention", 1.6);
+    scale("listening", 1.2);
     scale("sleeping", 0.4);
+    scale("relax", 0.8);
   } else if (focus > 30) {
     scale("working", 1.4);
-    scale("attention", 1.1);
+    scale("attention", 1.15);
   }
 
   // 下限：任何状态都有机会出现（避免长时间只播一张）。
-  for (const [state, weight] of Object.entries(weights)) {
-    weights[state] = Math.max(0.05, weight);
+  for (const state of VITALS_ROTATION_STATES) {
+    weights[state] = Math.max(0.05, weights[state] ?? 1);
   }
   return weights;
+}
+
+// ---------------------------------------------------------------------------
+// 聊天表情包（sticker）兜底选择：同一张权重表，按当前状态挑代表帧
+// ---------------------------------------------------------------------------
+
+/** sticker id → 轮播状态名（目前同名；celebrate 也是同名状态）。 */
+export const STICKER_VITALS_STATE: Record<string, string> = {
+  happy: "happy",
+  celebrate: "celebrate",
+  love: "love",
+  pet: "pet",
+  play: "play",
+  sleeping: "sleeping",
+  eating: "eating",
+  chin: "chin",
+  peek: "peek",
+  cry: "cry",
+  angry: "angry",
+  relax: "relax",
+};
+
+export type StickerCandidate = string | { id: string; state?: string; weight?: number };
+
+/**
+ * 从表情包候选池里按当前自我状态挑一个（纯函数，供聊天表情包信使兜底用）。
+ *
+ * - `vitals` 只需 4 个数值（`readPetVitals()` 的返回值可直接传）；
+ * - `pool` 可传 id 字符串或 `{ id, state?, weight? }`；state 默认按 `STICKER_VITALS_STATE` 推断；
+ * - `avoid` 里的 id 会先从池里去掉（比如最近 3 条已经发过的），池里只剩这些时仍会返回其中一个；
+ * - 空池返回 `null`，调用方按「不发表情包」处理。
+ */
+export function pickStickerForVitals(
+  vitals: Pick<PetVitals, "energy" | "mood" | "bond" | "focus">,
+  pool: ReadonlyArray<StickerCandidate>,
+  options?: { rng?: () => number; avoid?: ReadonlyArray<string> },
+): string | null {
+  if (!pool || pool.length === 0) return null;
+  const rng = options?.rng ?? Math.random;
+  const weights = weightsForVitals(vitals);
+  const avoid = new Set(options?.avoid ?? []);
+  const normalize = (candidate: StickerCandidate) =>
+    typeof candidate === "string"
+      ? { id: candidate, state: STICKER_VITALS_STATE[candidate] ?? candidate, weight: 1 }
+      : {
+          id: candidate.id,
+          state: candidate.state ?? STICKER_VITALS_STATE[candidate.id] ?? candidate.id,
+          weight: Math.max(0.01, candidate.weight ?? 1),
+        };
+  const all = pool.map(normalize);
+  const filtered = all.filter((entry) => !avoid.has(entry.id));
+  const candidates = filtered.length > 0 ? filtered : all;
+  const total = candidates.reduce((sum, entry) => sum + (weights[entry.state] ?? 0.5) * entry.weight, 0);
+  if (total <= 0) return candidates[0]?.id ?? null;
+  let roll = rng() * total;
+  for (const entry of candidates) {
+    roll -= (weights[entry.state] ?? 0.5) * entry.weight;
+    if (roll <= 0) return entry.id;
+  }
+  return candidates[candidates.length - 1]?.id ?? null;
 }
 
 /** 一句话状态（UI 用 i18n 文案；这里只给等级 + 主导指标）。 */

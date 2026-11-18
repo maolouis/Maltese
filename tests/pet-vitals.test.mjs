@@ -13,16 +13,19 @@ import {
   describeRecentInteractions,
   loadVitals,
   loadVitalsLog,
+  pickStickerForVitals,
   readPetVitals,
   saveVitals,
   summarizePetVitals,
   tickVitals,
+  VITALS_BASE_WEIGHTS,
   VITALS_DAILY_GAIN_CAP,
   VITALS_EVENTS,
   VITALS_FLOOR,
   VITALS_HALF_LIFE_MS,
   VITALS_LOG_KEY,
   VITALS_LOG_LIMIT,
+  VITALS_ROTATION_STATES,
   VITALS_STORAGE_KEY,
   vitalsBucketKey,
   vitalsEventForPetAction,
@@ -167,8 +170,13 @@ test("权重：久不互动也不会自动播 cry/angry 惩罚", () => {
     bond: VITALS_FLOOR.bond,
     focus: 0,
   });
-  assert.equal(bottom.cry, undefined);
-  assert.equal(bottom.angry, undefined);
+  // 负面表情只保留背景噪声权重（cry 极低情绪 0.3、正常 0.05；angry 只有基线 0.3），
+  // 不会因为数值低就变成「哭脸/生气」惩罚；正常状态更不会升级。
+  assert.ok(bottom.cry <= 0.4, `cry 权重应保持很低：${bottom.cry}`);
+  assert.ok(bottom.angry <= 0.4, `angry 权重应保持很低：${bottom.angry}`);
+  const normal = weightsForVitals({ energy: 70, mood: 70, bond: 60, focus: 0 });
+  assert.equal(normal.angry, bottom.angry, "数值低不应抬高 angry");
+  assert.ok(normal.cry < bottom.cry, "正常情绪时 cry 比极低情绪更低");
 });
 
 // —— 待机播放列表 ——
@@ -295,4 +303,126 @@ test("describeRecentInteractions：最多 3 条、空数据不崩、不带聊天
   for (let i = 0; i < 60; i += 1) appendVitalsLog(storage, { kind: "pet", at: now + i });
   assert.ok(loadVitalsLog(storage).length <= VITALS_LOG_LIMIT);
   assert.ok(storage.getItem(VITALS_LOG_KEY));
+});
+// —— 权重表扩展到全部可轮播状态 + sticker 兜底选择 ——
+
+function drawStates(weights, states, rng, slots = 400) {
+  const playlist = buildIdlePlaylist({
+    states,
+    weights,
+    framesFor: (state) => [`${state}-frame`],
+    rng,
+    slots,
+  });
+  const counts = {};
+  for (const frame of playlist) {
+    const state = frame.replace(/-frame$/, "");
+    counts[state] = (counts[state] ?? 0) + 1;
+  }
+  return counts;
+}
+
+test("权重表覆盖全部 25 个可轮播状态（不再有状态落到兜底 0.5）", () => {
+  assert.equal(VITALS_ROTATION_STATES.length, 25);
+  for (const state of VITALS_ROTATION_STATES) {
+    assert.ok(Number.isFinite(VITALS_BASE_WEIGHTS[state]), `基线权重缺 ${state}`);
+    const weights = weightsForVitals({ energy: 70, mood: 70, bond: 60, focus: 20 });
+    assert.ok(weights[state] > 0, `${state} 权重必须 > 0`);
+  }
+  // 未列出的状态名不应该出现在结果里（避免拼写错误悄悄加条目）
+  const weights = weightsForVitals({ energy: 70, mood: 70, bond: 60, focus: 20 });
+  assert.deepEqual(
+    Object.keys(weights).sort(),
+    [...VITALS_ROTATION_STATES].sort(),
+  );
+});
+
+test("体力低 → 轮播里 sleeping/relax 显著多于 happy（固定随机种子，确定性断言）", () => {
+  const states = ["sleeping", "relax", "happy", "play", "celebrate", "idle"];
+  const tired = drawStates(weightsForVitals({ energy: 12, mood: 60, bond: 50, focus: 0 }), states, seeded(11));
+  const fresh = drawStates(weightsForVitals({ energy: 90, mood: 60, bond: 50, focus: 0 }), states, seeded(11));
+  assert.ok(
+    (tired.sleeping ?? 0) >= (tired.happy ?? 0) * 10,
+    `累时 sleeping 应远多于 happy：${JSON.stringify(tired)}`,
+  );
+  assert.ok(
+    (tired.sleeping ?? 0) + (tired.relax ?? 0) > (fresh.sleeping ?? 0) + (fresh.relax ?? 0),
+    "累的时候比精神的时候更容易睡/休息",
+  );
+  assert.ok((fresh.happy ?? 0) > (tired.happy ?? 0), "精神时更常开心");
+});
+
+test("专注高 → working/attention 变多、sleeping 变少；亲密高 → love/pet 变多", () => {
+  const states = ["working", "attention", "sleeping", "relax", "love", "pet", "happy"];
+  const focused = drawStates(weightsForVitals({ energy: 70, mood: 60, bond: 50, focus: 85 }), states, seeded(21));
+  const chill = drawStates(weightsForVitals({ energy: 70, mood: 60, bond: 50, focus: 0 }), states, seeded(21));
+  assert.ok((focused.working ?? 0) > (chill.working ?? 0));
+  assert.ok((focused.sleeping ?? 0) < (chill.sleeping ?? 0));
+
+  const bonded = drawStates(weightsForVitals({ energy: 70, mood: 60, bond: 95, focus: 0 }), states, seeded(21));
+  const distant = drawStates(weightsForVitals({ energy: 70, mood: 60, bond: 20, focus: 0 }), states, seeded(21));
+  assert.ok((bonded.love ?? 0) > (distant.love ?? 0));
+  assert.ok((bonded.pet ?? 0) > (distant.pet ?? 0));
+});
+
+test("情绪低 → pet/peek 升；cry 只在极低情绪时小概率出现，正常情绪几乎不出现", () => {
+  const states = ["happy", "celebrate", "pet", "peek", "relax", "chin", "cry", "idle"];
+  const normalWeights = weightsForVitals({ energy: 70, mood: 65, bond: 50, focus: 0 });
+  const lowWeights = weightsForVitals({ energy: 70, mood: 25, bond: 50, focus: 0 });
+  const veryLowWeights = weightsForVitals({ energy: 70, mood: 10, bond: 50, focus: 0 });
+  const low = drawStates(lowWeights, states, seeded(31), 400);
+  const normal = drawStates(normalWeights, states, seeded(31), 400);
+  assert.ok((low.pet ?? 0) > (normal.pet ?? 0), "情绪低时更常求摸摸");
+  assert.ok((low.peek ?? 0) > (normal.peek ?? 0), "情绪低时更常探头看你");
+  // cry：正常情绪只是背景噪声（≤0.05），极低情绪抬到 0.3（仍远小于正常表情）
+  assert.ok(normalWeights.cry <= 0.05, `正常情绪 cry 权重应 ≤0.05：${normalWeights.cry}`);
+  assert.ok(veryLowWeights.cry >= normalWeights.cry * 3, "极低情绪 cry 权重明显抬高");
+  assert.ok(veryLowWeights.cry < 1, `极低情绪 cry 仍应是低权重：${veryLowWeights.cry}`);
+  // 播放列表里极低情绪的 cry 出现次数应少于 happy/pet（不会变成"哭脸惩罚"）
+  const veryLow = drawStates(veryLowWeights, states, seeded(41), 400);
+  assert.ok((veryLow.cry ?? 0) < (veryLow.happy ?? 0) + (veryLow.pet ?? 0) + 1);
+  assert.equal(veryLowWeights.angry, normalWeights.angry, "不会自动抬高 angry 惩罚用户");
+});
+
+test("pickStickerForVitals：低体力优先挑 sleeping 类表情包，高情绪优先 happy/celebrate", () => {
+  const pool = ["sleeping", "happy", "celebrate", "play", "love"];
+  const tired = { energy: 10, mood: 60, bond: 50, focus: 0 };
+  const cheerful = { energy: 80, mood: 90, bond: 60, focus: 0 };
+  let tiredSleeping = 0;
+  let cheerfulHappy = 0;
+  let cheerfulSleeping = 0;
+  for (let i = 0; i < 200; i += 1) {
+    const rng = seeded(1000 + i);
+    if (pickStickerForVitals(tired, pool, { rng }) === "sleeping") tiredSleeping += 1;
+    const cheerfulPick = pickStickerForVitals(cheerful, pool, { rng: seeded(1000 + i) });
+    if (cheerfulPick === "happy" || cheerfulPick === "celebrate") cheerfulHappy += 1;
+    if (cheerfulPick === "sleeping") cheerfulSleeping += 1;
+  }
+  assert.ok(tiredSleeping > 200 * 0.6, `累的时候 60% 以上应挑 sleeping，实际 ${tiredSleeping}/200`);
+  assert.ok(cheerfulHappy > 200 * 0.5, `开心时多半挑 happy/celebrate，实际 ${cheerfulHappy}/200`);
+  assert.ok(cheerfulSleeping < tiredSleeping, "精神时不会像累的时候那样挑睡觉表情包");
+});
+
+test("pickStickerForVitals：支持对象池 / avoid 去重 / 空池返回 null", () => {
+  const vitals = { energy: 70, mood: 60, bond: 50, focus: 0 };
+  assert.equal(pickStickerForVitals(vitals, []), null);
+  // 对象形式 + 自定义权重：只给 cry 极大权重时一定会挑它
+  const pick = pickStickerForVitals(vitals, [
+    { id: "happy" },
+    { id: "cry", state: "cry", weight: 1000 },
+  ], { rng: () => 0.5 });
+  assert.equal(pick, "cry");
+  // avoid：唯一候选被避开后，仍会返回池里的另一个（不会返回 null 卡死）
+  const avoided = pickStickerForVitals(vitals, ["sleeping", "happy"], {
+    avoid: ["sleeping", "happy"],
+    rng: () => 0.9,
+  });
+  assert.ok(["sleeping", "happy"].includes(avoided));
+  // avoid 只去掉被点名的那一个
+  const onlyHappy = pickStickerForVitals(
+    { energy: 10, mood: 60, bond: 50, focus: 0 },
+    ["sleeping", "happy"],
+    { avoid: ["sleeping"], rng: () => 0.5 },
+  );
+  assert.equal(onlyHappy, "happy");
 });

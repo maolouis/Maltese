@@ -67,7 +67,21 @@ export function describeRecentInteractions(
 // 只含「事件类型 + 相对时间 + 待办标题」，不含任何聊天正文。
 
 export const VITALS_CHANGED_EVENT = "maltese-pet-vitals-changed"; // 写入后派发，detail = { energy, mood, bond, focus }
+
+/** 聊天表情包兜底：按当前状态从候选池挑一个（与待机轮播用同一张权重表）。 */
+export function pickStickerForVitals(
+  vitals: { energy: number; mood: number; bond: number; focus: number },
+  pool: ReadonlyArray<string | { id: string; state?: string; weight?: number }>,
+  options?: { rng?: () => number; avoid?: ReadonlyArray<string> },
+): string | null;
+// 例：累了更容易挑 sleeping 表情包、开心更容易挑 happy/celebrate；
+// avoid 用来跳过最近 3 条发过的 id；空池返回 null（调用方按「不发表情包」处理）。
 ```
+
+- **待机轮播与聊天表情包共用同一张权重表**：`weightsForVitals()` 覆盖全部 25 个可轮播状态
+  （体力低 → sleeping/relax/resting ↑、happy ↓；情绪高 → happy/celebrate/love ↑；情绪低 → pet/peek ↑、
+  cry 仅在情绪 <25 时抬到 0.3 的小概率；专注高 → working/attention ↑；亲密高 → love/pet ↑），
+  规则表见 [`docs/pet-characters.md`](pet-characters.md) 的「轮播权重随状态变化」一节。
 
 - 聊天把状态作为 **system 消息**注入（≤120 字），主动消息上下文可选带 `vitals` / `recentInteractions`
   （由 `src/petContext.ts` 防御式读取，无数据时提示词逐字不变）。
