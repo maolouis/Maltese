@@ -567,3 +567,94 @@
 .agent-console-advanced .agent-console-agents {
   margin-bottom: 8px;
 }
+
+/* 任务列表（状态机） */
+.agent-console-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agent-console-task-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  border-radius: 9px;
+  border: 1px solid rgba(120, 205, 150, 0.22);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.agent-console-task-row--executing,
+.agent-console-task-row--delivering {
+  border-color: rgba(120, 205, 150, 0.55);
+}
+
+.agent-console-task-row--waiting_confirm {
+  border-color: rgba(240, 178, 96, 0.6);
+  background: rgba(240, 178, 96, 0.12);
+}
+
+.agent-console-task-row--failed,
+.agent-console-task-row--stalled {
+  border-color: rgba(220, 76, 76, 0.45);
+  background: rgba(220, 76, 76, 0.08);
+}
+
+.agent-console-task-row--done {
+  opacity: 0.78;
+}
+
+.agent-console-task-row--cancelled {
+  opacity: 0.6;
+}
+
+.agent-console-task-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.agent-console-task-row__head strong {
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-console-task-row__stage {
+  margin-left: auto;
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(120, 205, 150, 0.16);
+  font-size: 10px;
+}
+
+.agent-console-task-row--waiting_confirm .agent-console-task-row__stage {
+  background: rgba(240, 178, 96, 0.22);
+}
+
+.agent-console-task-row--failed .agent-console-task-row__stage,
+.agent-console-task-row--stalled .agent-console-task-row__stage {
+  background: rgba(220, 76, 76, 0.16);
+  color: #b23b3b;
+}
+
+.agent-console-task-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-console-task-row__error {
+  color: #b23b3b;
+  opacity: 1;
+}

@@ -15,6 +15,7 @@ import {
   skillsPrompt,
 } from "./petSkills";
 import { usePetCharacter, PET_CHARACTER_LABELS } from "./petCharacters";
+import { maybeInferTaskProgress } from "./taskProgressInference";
 import { PET_CHARACTER_ASSETS } from "./petCharacterAssets.generated";
 import { petAssetUrl } from "./petAssetBase";
 import { petAvatarUrl } from "./petAvatars";
@@ -729,6 +730,8 @@ export function PetChat() {
           promise.catch(() => null),
           new Promise<null>((resolve) => window.setTimeout(() => resolve(null), ms)),
         ]);
+      // 命中技能时由技能自己上报确定性任务，不再跑兜底模型推断。
+      let skillHandled = false;
       if (agentEnabled && sendImages.length === 0 && SKILL_HINT.test(text)) {
         const askAgent = async (prompt: string, maxTokens: number, temperature: number) => {
           if (chatConfig.backend === "local") {
@@ -750,6 +753,7 @@ export function PetChat() {
           )) ?? "";
         const call = parseSkillCall(decision);
         if (call) {
+          skillHandled = true;
           const result = await runSkill(call.action, call.args);
           const toolNote = result.ok ? result.message : `没做成：${result.message}`;
           const summary =
@@ -884,6 +888,10 @@ export function PetChat() {
         });
       }
       persist([...next, ...appended]);
+      if (!skillHandled) {
+        // 兜底：未命中技能时才异步分类（≤100 token，不阻塞首字，不覆盖确定性状态）。
+        void maybeInferTaskProgress(text, replyText ?? "");
+      }
       // 记忆维护：只在 idle ≥30s 且没有请求在跑时执行；任何失败都静默放弃。
       scheduleMemoryMaintenance({
         messages: [...next, ...appended].map((item) => ({ role: item.role, text: item.text })),

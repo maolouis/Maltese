@@ -327,6 +327,31 @@ export type Translations = {
     internalIdle: string;
     advancedTitle: string;
     advancedHint: string;
+    taskEmpty: string;
+    taskKinds: {
+      chat: string;
+      search: string;
+      settings: string;
+      todo: string;
+      video: string;
+      daily: string;
+      agent: string;
+      other: string;
+    };
+    taskStages: {
+      requested: string;
+      planning: string;
+      executing: string;
+      "waiting_confirm": string;
+      delivering: string;
+      done: string;
+      failed: string;
+      cancelled: string;
+      stalled: string;
+    };
+    taskProgressText: (current: number, total: number) => string;
+    taskElapsed: (elapsed: string) => string;
+    taskInferred: string;
   };
 
   agent: {

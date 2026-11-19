@@ -365,7 +365,7 @@ function createId(): string {
 }
 
 /** 执行模型给出的动作。任何异常都收敛成 ok=false，不打断对话。 */
-export async function runSkill(
+async function runSkillCore(
   action: string,
   args: Record<string, unknown>,
 ): Promise<SkillResult> {
@@ -727,6 +727,61 @@ ${text}` };
   } catch (error) {
     return { ok: false, message: `执行失败：${String(error)}` };
   }
+}
+
+/** 技能 → 任务类型映射：确定性上报，覆盖待办 / 搜索 / 设置类快任务。 */
+const SKILL_TASK_KINDS: Record<string, string> = {
+  todo_add: "todo",
+  todo_list: "todo",
+  todo_done: "todo",
+  todo_start: "todo",
+  todo_pause: "todo",
+  web_search: "search",
+  pet_settings: "settings",
+  open_app: "settings",
+  open_url: "settings",
+  media_control: "settings",
+  music_play: "settings",
+};
+
+/**
+ * 技能入口：执行前后把任务进度上报给 Rust 状态机（失败不影响技能本身）。
+ * 任务卡片的 1s 轮询会看到这些确定性任务。
+ */
+export async function runSkill(
+  action: string,
+  args: Record<string, unknown>,
+): Promise<SkillResult> {
+  const kind = SKILL_TASK_KINDS[action];
+  const taskId = kind ? `skill-${action}-${Date.now()}` : null;
+  if (taskId) {
+    const title = SKILLS.find((skill) => skill.action === action)?.title ?? action;
+    try {
+      await invoke("task_begin", {
+        kind,
+        title,
+        id: taskId,
+        expectedSecs: kind === "search" ? 120 : 60,
+      });
+      await invoke("task_advance", { id: taskId, stage: "executing" });
+    } catch {
+      // 任务状态机不可用时不影响技能
+    }
+  }
+  const result = await runSkillCore(action, args);
+  if (taskId) {
+    try {
+      await invoke("task_end", {
+        id: taskId,
+        stage: result.ok ? "done" : "failed",
+        error: result.ok ? null : result.message,
+        detail: result.message.slice(0, 120),
+      });
+    } catch {
+      // 忽略上报失败
+    }
+  }
+  return result;
 }
 
 /** 从模型回复里解析出动作 JSON；没有就返回 null。 */

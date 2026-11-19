@@ -374,3 +374,55 @@ cargo test --lib agent_hub::tests::real_pipeline_codex_then_claude -- --ignored 
 - `SLOW_COMMAND`：命令入口耗时 >200ms 才写日志，格式
   `{"event":"SLOW_COMMAND","command":"desktop_agents_status","durationMs":123}`；
   正常枚举 2–3ms 不会触发，缓存命中路径更不会触发。
+
+## 14. 对话任务进度状态机（MVP，2026-11-19）
+
+实现依据：[research-task-progress-tokens.md](research-task-progress-tokens.md)（B 节）。新增
+`src-tauri/src/task_progress.rs`，控制台「任务进度」卡改为任务列表。
+
+### 14.1 状态机
+
+- 类型：`chat / search / settings / todo / video / daily / agent / other`
+- 阶段：`requested → planning → executing → waiting_confirm → delivering → done / failed / cancelled / stalled`
+- 只允许合法前进（`valid_transition`）；终态只能经 `task_end` 落地；同一阶段可用 `task_advance`
+  更新进度/详情。
+- 超时：超过预期时长 **2×** 无更新 → `stalled`。默认 search 120s、agent 300s、daily 600s、
+  video 按 `maxMinutes×60`（由快照带入）、settings/todo 60s、其它 120s。
+- 内存表保留最近 20 条（优先淘汰终态）；按天落盘
+  `<agent-hub>/logs/tasks-YYYY-MM-DD.jsonl`（`begin/advance/end/stalled` 各一行，含 tasksId/kind/stage/
+  title/source/progress/detail/error/startedAt/updatedAt/expectedSecs）。
+
+### 14.2 上报点（确定性优先，零额外模型调用）
+
+| 来源 | 上报方式 |
+| --- | --- |
+| 视频 | `task_list_snapshot` 内部读 `video_get_snapshot`：running → video 任务 executing（digesting→delivering、awaitingLogin→waiting_confirm），progress=`itemCount/steps`；停止/结束 → done（有采集）或 cancelled；blocked → failed |
+| Agent 单跑 | `agent_run` 在 spawn 前 `begin(agent,"运行 <name>")` → executing，结束后按结果 done/failed/cancelled，detail 带时长/首行 |
+| Agent 流水线 | `agent_pipeline` 开始时建任务，每步 `advance(progress i/n, detail "第 i 步 · agent")`，结束 done/failed（`agent-pipeline-step` 事件照旧推给前端折叠面板） |
+| 技能快任务 | 前端 `runSkill` 包装：todo→todo、web_search→search、pet_settings/open_app/open_url/media_control/music_play→settings；begin→executing→done/failed，失败不影响技能本身 |
+| 兜底推断 | `task_infer`（≤100 token JSON）：只在 PetChat「未命中技能」的回复后异步调用（30s 节流、页面隐藏不跑）；confidence<0.6/非法类型返回 None；命中则建一条 `source:"inferred"` 任务并立即 done，detail 记「推断阶段 x · 置信度 y」，**不覆盖**技能/视频/agent 状态 |
+
+### 14.3 命令与前端
+
+| 命令 | 说明 |
+| --- | --- |
+| `task_begin(kind,title,id?,expectedSecs?)` | 建任务（requested） |
+| `task_advance(id,stage,progressCurrent?,progressTotal?,detail?)` | 推进阶段/进度 |
+| `task_end(id,stage,error?,detail?)` | 结束到终态 |
+| `task_list_snapshot(limit?)` | 任务列表（含视频同步、stalled 清理），返回 `tasks/revision/now/activeCount` |
+| `task_infer(text,reply?)` | 兜底推断（低置信度返回 null） |
+
+前端 `src/taskProgressView.ts` 提供纯逻辑：`taskProgressPercent / formatTaskElapsed / diffTaskRows /
+taskRowChanged`；`AgentConsole` 每 **1s** 拉 `task_list_snapshot`，只把 diff 里新增/变化的行写入
+`Record<id, Task>`（未变化行保持原对象，`memo` 的任务行不重渲染），行内自己每秒 tick 耗时；
+空态显示「当前没有进行中的任务」；阶段颜色：执行中绿、等待确认橙、失败/停滞红、完成灰。
+
+### 14.4 单测与验证
+
+- Rust：`stage_transitions_are_validated`（合法/非法流转）、`timeout_marks_task_stalled`、
+  `jsonl_log_rotates_by_day`、`snapshot_is_sorted_and_limited`、`video_snapshot_drives_video_task`、
+  `infer_parser_rejects_low_confidence_and_bad_kind`。
+- Node：`tests/task-progress-view.test.mjs`（diff 只返回变化行、进度百分比、耗时格式、推断 30s 节流）。
+- 实机：`cargo test --lib agent_hub::tests::real_three_tasks -- --ignored --nocapture` 跑
+  「视频开始/停止（快照映射）+ 加待办 + claude 真跑一次」，打印控制台任务列表与 tasks jsonl。
+  本 DSH 会话无法启动 GUI（%APPDATA% 无写权限，os error 5），UI 上的列表/1s 刷新需人工点验。

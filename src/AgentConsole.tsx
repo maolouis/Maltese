@@ -6,10 +6,18 @@
 // - 高级：原本的 codex / claude CLI 串行流水线，默认收起。
 //
 // 页面只在岛内可见时挂载，轮询随卸载停止；所有 Tauri 命令都是 async + spawn_blocking。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useTranslation } from "./i18n";
+import {
+  diffTaskRows,
+  formatTaskElapsed,
+  isTerminalStage,
+  taskProgressPercent,
+  type TaskListSnapshot,
+  type TaskProgress,
+} from "./taskProgressView";
 import "./AgentConsole.css";
 
 type AgentInfo = {
@@ -149,32 +157,8 @@ type VideoSnapshotLite = {
 type StreamEvent = { streamId: string; agentId: string; line: string };
 type PipelineStepEvent = { runId: string; pipelineId: string; index: number; agentId: string; streamId: string };
 
-const TODOS_KEY = "focusd-island-todos";
-const ACTIVE_TODO_KEY = "focusd-island-active-todo";
 const PROACTIVE_LEVEL_KEY = "maltese-proactive-level";
 const MAX_LINES = 400;
-
-type StoredTodo = {
-  id: string;
-  title: string;
-  completed: boolean;
-  activeSince?: number | null;
-  elapsedMs?: number;
-};
-
-function readActiveTodo(): { title: string; elapsedMs: number } | null {
-  try {
-    const raw = window.localStorage.getItem(TODOS_KEY);
-    const todos = raw ? (JSON.parse(raw) as StoredTodo[]) : [];
-    const activeId = window.localStorage.getItem(ACTIVE_TODO_KEY);
-    const active = activeId ? todos.find((todo) => todo.id === activeId) : todos.find((todo) => todo.activeSince);
-    if (!active) return null;
-    const elapsed = (active.elapsedMs ?? 0) + (active.activeSince ? Date.now() - active.activeSince : 0);
-    return { title: active.title, elapsedMs: Math.max(0, elapsed) };
-  } catch {
-    return null;
-  }
-}
 
 function readProactiveLevel(): number {
   try {
@@ -208,6 +192,47 @@ function formatCount(value: number): string {
 
 const tauri = isTauri();
 
+/** 任务行：只有被 diff 判定为变化的行才会拿到新 task 对象；耗时由行内自己每秒 tick。 */
+const TaskRow = memo(function TaskRow({
+  task,
+  t,
+}: {
+  task: TaskProgress;
+  t: ReturnType<typeof useTranslation>;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (isTerminalStage(task.stage)) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [task.stage]);
+  const percent = taskProgressPercent(task);
+  const kind = t.agentHub.taskKinds[task.kind] ?? task.kind;
+  const stage = t.agentHub.taskStages[task.stage] ?? task.stage;
+  return (
+    <li className={`agent-console-task-row agent-console-task-row--${task.stage}`}>
+      <div className="agent-console-task-row__head">
+        <strong>
+          {kind} · {task.title}
+        </strong>
+        <span className="agent-console-task-row__stage">{stage}</span>
+      </div>
+      {percent !== null && (
+        <div className="agent-console-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+          <span style={{ width: `${percent}%` }} />
+        </div>
+      )}
+      <div className="agent-console-task-row__meta">
+        <span>{t.agentHub.taskElapsed(formatTaskElapsed(task.startedAt, now))}</span>
+        {task.progress && <span>{t.agentHub.taskProgressText(task.progress.current, task.progress.total)}</span>}
+        {task.source === "inferred" && <span>{t.agentHub.taskInferred}</span>}
+        {task.detail && <span>{task.detail}</span>}
+        {task.error && <span className="agent-console-task-row__error">{task.error}</span>}
+      </div>
+    </li>
+  );
+});
+
 export function AgentConsole() {
   const t = useTranslation();
   const [registry, setRegistry] = useState<RegistrySnapshot | null>(null);
@@ -231,7 +256,9 @@ export function AgentConsole() {
   }, [refreshTokenUsage]);
   const [video, setVideo] = useState<VideoSnapshotLite | null>(null);
   const [desktop, setDesktop] = useState<DesktopAgentsSnapshot | null>(null);
-  const [activeTodo, setActiveTodo] = useState<{ title: string; elapsedMs: number } | null>(null);
+  const [tasks, setTasks] = useState<Record<string, TaskProgress>>({});
+  const [taskOrder, setTaskOrder] = useState<string[]>([]);
+  const [taskActiveCount, setTaskActiveCount] = useState(0);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(0);
   const [lines, setLines] = useState<Record<string, string[]>>({});
@@ -276,7 +303,6 @@ export function AgentConsole() {
       if (statusResult.status === "fulfilled") setStatus(statusResult.value);
       if (usageResult.status === "fulfilled") setUsage(usageResult.value);
       if (videoResult.status === "fulfilled") setVideo(videoResult.value);
-      setActiveTodo(readActiveTodo());
       setLastUpdated(Date.now());
       setError("");
     } catch (cause) {
@@ -297,6 +323,42 @@ export function AgentConsole() {
       window.clearInterval(timer);
     };
   }, [load]);
+
+  // 任务列表：1s 轮询 + 只把 diff 里变化的行写进 state（未变化的行保持原对象，memo 不重渲染）。
+  useEffect(() => {
+    if (!tauri) return;
+    let disposed = false;
+    let previous: TaskProgress[] = [];
+    const poll = async () => {
+      try {
+        const snapshot = await invoke<TaskListSnapshot>("task_list_snapshot", { limit: 20 });
+        if (disposed) return;
+        const diff = diffTaskRows(previous, snapshot.tasks);
+        previous = snapshot.tasks;
+        if (diff.changedIds.length > 0 || diff.removedIds.length > 0) {
+          const changed = [...diff.added, ...diff.changed];
+          setTasks((current) => {
+            const next = { ...current };
+            for (const task of changed) next[task.id] = task;
+            for (const id of diff.removedIds) delete next[id];
+            return next;
+          });
+          setTaskOrder(snapshot.tasks.map((task) => task.id));
+        }
+        setTaskActiveCount(snapshot.activeCount);
+      } catch {
+        // 单次轮询失败不影响其它卡片
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      if (!disposed) void poll();
+    }, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!tauri) return;
@@ -491,11 +553,6 @@ export function AgentConsole() {
   const agents = registry?.agents ?? [];
   const running = runningByAgent;
   const firstLine = usage?.avgFirstLineMs ?? null;
-  const videoPercent = (() => {
-    if (!video || !video.running || !video.startedAt || video.maxMinutes <= 0) return null;
-    const elapsedMinutes = (Date.now() - video.startedAt) / 60_000;
-    return Math.min(100, Math.max(0, Math.round((elapsedMinutes / video.maxMinutes) * 100)));
-  })();
 
   const desktopAgents = desktop?.agents ?? [];
   const proactiveLevel = readProactiveLevel();
@@ -608,38 +665,24 @@ export function AgentConsole() {
           {usage && usage.runs === 0 && <p className="agent-console-card__empty">{t.agentHub.noUsage}</p>}
         </article>
 
-        {/* ② 任务进度 */}
-        <article className="agent-console-card" aria-label={t.agentHub.tasksTitle}>
+        {/* ② 任务进度：状态机任务列表（1s 轮询 + diff 更新） */}
+        <article className="agent-console-card agent-console-card--wide" aria-label={t.agentHub.tasksTitle}>
           <div className="agent-console-card__head">
             <strong>{t.agentHub.tasksTitle}</strong>
+            <span className="agent-console-card__tag">
+              {taskActiveCount > 0 ? `${taskActiveCount} 进行中` : "空闲"}
+            </span>
           </div>
-          <div className="agent-console-task">
-            <span className="agent-console-task__label">视频采集</span>
-            {video?.running && videoPercent !== null ? (
-              <>
-                <div className="agent-console-progress" role="progressbar" aria-valuenow={videoPercent} aria-valuemin={0} aria-valuemax={100}>
-                  <span style={{ width: `${videoPercent}%` }} />
-                </div>
-                <span className="agent-console-task__meta">
-                  {t.agentHub.videoProgress(videoPercent)} · {t.agentHub.videoItems(video.itemCount)} ·{" "}
-                  {t.agentHub.videoPending(video.pendingCount)}
-                </span>
-              </>
-            ) : (
-              <span className="agent-console-task__meta">{t.agentHub.videoIdle}</span>
-            )}
-          </div>
-          <div className="agent-console-task">
-            <span className="agent-console-task__label">待办</span>
-            {activeTodo ? (
-              <span className="agent-console-task__meta">
-                {t.agentHub.todoRunning(activeTodo.title)} · {formatDuration(activeTodo.elapsedMs)}
-              </span>
-            ) : (
-              <span className="agent-console-task__meta">{t.agentHub.todoNone}</span>
-            )}
-          </div>
-          {!video?.running && !activeTodo && <p className="agent-console-card__empty">{t.agentHub.noTasks}</p>}
+          {taskOrder.length === 0 ? (
+            <p className="agent-console-card__empty">{t.agentHub.taskEmpty}</p>
+          ) : (
+            <ul className="agent-console-task-list">
+              {taskOrder.map((id) => {
+                const task = tasks[id];
+                return task ? <TaskRow key={id} task={task} t={t} /> : null;
+              })}
+            </ul>
+          )}
         </article>
 
         {/* ③ 工作分配：桌面 Agent + 内部模块 */}

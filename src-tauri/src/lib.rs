@@ -35,6 +35,7 @@ mod window_factory;
 mod actions;
 mod agent_hub;
 mod desktop_agents;
+mod task_progress;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5908,6 +5909,11 @@ pub fn run() {
             agent_hub::agent_pipeline_run,
             desktop_agents::desktop_agents_status,
             desktop_agents::desktop_agent_focus,
+            task_progress::task_begin,
+            task_progress::task_advance,
+            task_progress::task_end,
+            task_progress::task_list_snapshot,
+            task_progress::task_infer,
         ])
         .build(context)
         .expect("error while building Maltese")

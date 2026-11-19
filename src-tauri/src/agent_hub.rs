@@ -36,7 +36,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 /// 单次运行上限：300s（需求硬约束）。
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -268,7 +268,7 @@ fn per_agent_semaphore(agent_id: &str) -> Arc<tokio::sync::Semaphore> {
         .clone()
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -279,7 +279,7 @@ fn now_ms() -> u64 {
 // 配置加载 / 权限校验 / 可执行文件探测
 // ---------------------------------------------------------------------------
 
-pub(crate) fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn config_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     Ok::<std::path::PathBuf, String>(crate::paths::data_root().join(CONFIG_DIR))
 }
 
@@ -634,7 +634,7 @@ fn find_agent(dir: &Path, agent_id: &str) -> Result<(AgentSpec, PathBuf), String
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-fn local_parts() -> (String, String) {
+pub(crate) fn local_parts() -> (String, String) {
     use windows::Win32::System::SystemInformation::GetLocalTime;
     // SAFETY: GetLocalTime 只读取当前时区时间，没有其它前提。
     let st = unsafe { GetLocalTime() };
@@ -645,7 +645,7 @@ fn local_parts() -> (String, String) {
 }
 
 #[cfg(not(windows))]
-fn local_parts() -> (String, String) {
+pub(crate) fn local_parts() -> (String, String) {
     let secs = now_ms() / 1000;
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -1516,6 +1516,17 @@ pub async fn agent_run(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| auto_stream_id(&spec.id));
     let log_dir = dir.join(LOG_DIR);
+    // 确定性任务上报：agent 单跑也进任务列表（300s 预期，与 RUN_TIMEOUT 一致）。
+    let task_id = format!("agent-task-{stream}");
+    let _ = crate::task_progress::begin(
+        &log_dir,
+        "agent",
+        &format!("运行 {}", spec.display_name),
+        Some(task_id.clone()),
+        Some(RUN_TIMEOUT.as_secs()),
+        "agent-cli",
+    );
+    let _ = crate::task_progress::advance(&log_dir, &task_id, "executing", None, Some("agent 执行中"));
     let (_permit, _global) = acquire_slot(&spec.id).await?;
     let emit_app = Some(app.clone());
     let spec_for_task = spec.clone();
@@ -1534,6 +1545,31 @@ pub async fn agent_run(
     })
     .await
     .map_err(|error| format!("agent 运行线程失败：{error}"));
+    match &result {
+        Ok(run) => {
+            let stage = if run.ok {
+                "done"
+            } else if run.cancelled {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            let detail = format!(
+                "{} · {}ms{}",
+                spec.display_name,
+                run.duration_ms,
+                if run.first_line_ms.is_some() {
+                    format!(" · 首行 {}ms", run.first_line_ms.unwrap_or(0))
+                } else {
+                    String::new()
+                }
+            );
+            let _ = crate::task_progress::end(&log_dir, &task_id, stage, run.error.as_deref(), Some(&detail));
+        }
+        Err(error) => {
+            let _ = crate::task_progress::end(&log_dir, &task_id, "failed", Some(error), None);
+        }
+    }
     log_slow_command(&app, "agent_run", started.elapsed().as_millis());
     result
 }
@@ -1610,6 +1646,17 @@ pub async fn agent_pipeline(
     let dir = config_dir(&app)?;
     let run = pipeline_run_id(run_id);
     let pipeline_label = pipeline_id.unwrap_or_else(|| "custom".into());
+    let task_log_dir = dir.join(LOG_DIR);
+    let task_id = format!("pipeline-task-{run}");
+    let _ = crate::task_progress::begin(
+        &task_log_dir,
+        "agent",
+        &format!("流水线 {pipeline_label}"),
+        Some(task_id.clone()),
+        Some((steps.len() as u64).saturating_mul(RUN_TIMEOUT.as_secs())),
+        "agent-pipeline",
+    );
+    let _ = crate::task_progress::advance(&task_log_dir, &task_id, "executing", None, Some("流水线启动"));
     let mut results = Vec::new();
     let mut prev = input.clone();
     let mut first_error = None;
@@ -1643,6 +1690,16 @@ pub async fn agent_pipeline(
             first_error = Some(format!("第 {} 步的 prompt 是空的。", index + 1));
             break;
         }
+        let _ = crate::task_progress::advance(
+            &task_log_dir,
+            &task_id,
+            "executing",
+            Some(crate::task_progress::TaskProgressCount {
+                current: index as u32,
+                total: steps.len() as u32,
+            }),
+            Some(&format!("第 {} 步 · {}", index + 1, spec.display_name)),
+        );
         let log_dir = dir.join(LOG_DIR);
         let _permit = match acquire_slot(&spec.id).await {
             Ok(value) => value,
@@ -1707,6 +1764,16 @@ pub async fn agent_pipeline(
             ));
             break;
         }
+        let _ = crate::task_progress::advance(
+            &task_log_dir,
+            &task_id,
+            "executing",
+            Some(crate::task_progress::TaskProgressCount {
+                current: (index + 1) as u32,
+                total: steps.len() as u32,
+            }),
+            Some(&format!("完成第 {} 步 · {agent_name}", index + 1)),
+        );
         prev = result.output;
     }
     let output = PipelineResult {
@@ -1715,6 +1782,21 @@ pub async fn agent_pipeline(
         steps: results,
         error: first_error,
     };
+    {
+        let stage = if output.ok { "done" } else { "failed" };
+        let detail = if output.ok {
+            format!("流水线 {pipeline_label} 完成")
+        } else {
+            format!("流水线 {pipeline_label} 中断")
+        };
+        let _ = crate::task_progress::end(
+            &dir.join(LOG_DIR),
+            &task_id,
+            stage,
+            output.error.as_deref(),
+            Some(&detail),
+        );
+    }
     log_slow_command(&app, "agent_pipeline", started.elapsed().as_millis());
     Ok(output)
 }
@@ -1990,5 +2072,76 @@ mod tests {
             println!("--- log contents ---\n{text}");
         }
         assert!(!result.output.is_empty(), "claude 应该有输出");
+    }
+
+    /// 实机：跑 3 个任务（视频开始/停止、加待办、agent 真跑一次），打印控制台任务列表看到的内容。
+    /// `cargo test --lib agent_hub::tests::real_three_tasks -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_three_tasks() {
+        use crate::task_progress;
+        let dir = test_dir("three-tasks");
+        let log_dir = dir.join(LOG_DIR);
+        // ① 视频开始 → 停止（快照字段与 video_get_snapshot 一致；本机未启动采集时用注入快照验证映射）
+        let mut video = crate::video::session::VideoSnapshot::default();
+        video.session_id = "real-three-video".into();
+        video.running = true;
+        video.phase = crate::video::model::Phase::Collecting;
+        video.started_at = Some(now_ms());
+        video.item_count = 12;
+        video.steps = 14;
+        video.max_minutes = 30;
+        task_progress::snapshot_with_video(&log_dir, 20, &video);
+        video.running = false;
+        video.phase = crate::video::model::Phase::Stopped;
+        task_progress::snapshot_with_video(&log_dir, 20, &video);
+        // ② 加个待办（与前端 runSkill 的 todo 上报一致）
+        if let Ok(task) = task_progress::begin(&log_dir, "todo", "加个待办", None, Some(60), "frontend") {
+            let _ = task_progress::advance(&log_dir, &task.id, "executing", None, None);
+            let _ = task_progress::end(&log_dir, &task.id, "done", None, Some("已记下待办：下午三点开会"));
+        }
+        // ③ agent 真跑一次（与 agent_run 命令里的任务钩子一致）
+        let (spec, resolved) = find_agent(&dir, "claude").expect("claude should be available");
+        let agent_task = "agent-task-real-three";
+        let _ = task_progress::begin(
+            &log_dir,
+            "agent",
+            &format!("运行 {}", spec.display_name),
+            Some(agent_task.into()),
+            Some(RUN_TIMEOUT.as_secs()),
+            "agent-cli",
+        );
+        let _ = task_progress::advance(&log_dir, agent_task, "executing", None, Some("agent 执行中"));
+        let result = run_one_blocking(
+            None,
+            &log_dir,
+            &spec,
+            &resolved,
+            "只回答两个字母：OK",
+            "real-three-agent",
+        );
+        let stage = if result.ok { "done" } else { "failed" };
+        let _ = task_progress::end(
+            &log_dir,
+            agent_task,
+            stage,
+            result.error.as_deref(),
+            Some(&format!("{} · {}ms", spec.display_name, result.duration_ms)),
+        );
+        let snapshot = task_progress::snapshot(&log_dir, 20);
+        println!("task list ({} tasks):", snapshot.tasks.len());
+        for task in &snapshot.tasks {
+            println!(
+                "- [{}] {} | {} | detail={:?} | error={:?}",
+                task.kind, task.stage, task.title, task.detail, task.error
+            );
+        }
+        let (date, _) = local_parts();
+        let task_log = task_progress::task_log_path(&log_dir, &date);
+        println!("task log: {}", task_log.display());
+        if let Ok(text) = std::fs::read_to_string(&task_log) {
+            println!("--- tasks jsonl ---\n{text}");
+        }
+        assert!(snapshot.tasks.len() >= 3, "应该至少有 3 个任务");
     }
 }
