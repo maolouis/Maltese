@@ -333,3 +333,55 @@ export function errorMessageForCode(code: string | null, fallback: string): stri
       return fallback;
   }
 }
+  /** 本轮评论数；旧数据没有这个字段。 */
+  commentCount?: number;
+  /** 是否已生成摘要。 */
+  hasDigest?: boolean;
+  /** 是否还有待投递小结。 */
+  hasPending?: boolean;
+/** 本轮的一条自动评论记录（历史详情里展示）。 */
+export type SessionComment = {
+  text: string;
+  url: string;
+  title: string;
+  dryRun: boolean;
+  verified: boolean;
+  at: number;
+};
+
+/** 历史详情里的一条视频条目（后端 ContentItem 的子集）。 */
+export type SessionDetailItem = {
+  itemKey: string;
+  title: string;
+  author: string | null;
+  canonicalUrl: string | null;
+  durationSeconds: number | null;
+  watchedSeconds: number;
+  completionPercent: number | null;
+  verdict: { level: "strong" | "weak" | "skip" | null } | null;
+};
+
+/** 历史详情（`video_get_session` 的返回）。 */
+export type VideoSessionDetail = {
+  sessionId: string;
+  platform: Platform;
+  accountId: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason: StopReason | null;
+  itemCount: number;
+  strongCount: number;
+  filteredCount: number;
+  errorCode: string | null;
+  items: SessionDetailItem[];
+  digest: { themeLine: string | null; generator: DigestGenerator; items: DigestItem[] } | null;
+  comments: SessionComment[];
+};
+
+    typeof value.commentDryRun === "boolean" &&
+    isNumber(value.commentCount) &&
+    isNumber(value.commentDryRunCount) &&
+    typeof value.lastCommentText === "string" &&
+    typeof value.lastCommentDryRun === "boolean" &&
+    typeof value.lastCommentVerified === "boolean" &&
+    isNumber(value.lastCommentAt) &&

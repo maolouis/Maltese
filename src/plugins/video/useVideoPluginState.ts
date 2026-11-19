@@ -359,3 +359,6 @@ export function useVideoPluginState(): VideoPluginState {
     clearData,
   };
 }
+  /** 历史加载失败时的可见原因（null = 正常）。 */
+  sessionsError: string | null;
+  latestDigest: DigestDraft | null;

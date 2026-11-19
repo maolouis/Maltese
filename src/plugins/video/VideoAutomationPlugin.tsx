@@ -470,3 +470,4 @@ export function VideoAutomationPanel({ onNotice }: Props) {
 
 /** 账号状态徽标文案（下拉与「登录：」共用；QA D3 已统一成中文）。 */
 export { accountStatusLabel };
+        latestDigest={video.latestDigest}

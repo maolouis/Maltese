@@ -760,3 +760,103 @@
   color: #761c14 !important;
   font-size: 13px !important;
 }
+
+/* 历史会话：每条可展开，0 条也要显示原因（不能白屏） */
+.video-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.video-history__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-history__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.video-history__entry {
+  border: 1px solid rgba(76, 107, 96, 0.18);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.video-history__summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  color: #2f4a3f;
+}
+
+.video-history__detail {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+  color: #2f4a3f;
+}
+
+.video-history__items {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+
+.video-history__title {
+  color: #1d3a2e;
+  font-weight: 600;
+}
+
+.video-history__verdict {
+  color: #3f7a5f;
+}
+
+.video-history__digest {
+  margin: 0;
+  color: #3f5a4d;
+}
+
+.video-history__comments ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}
+
+.video-history__error {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(214, 92, 92, 0.12);
+  color: #8c2f2f;
+  font-size: 11px;
+}
+
+.island__expanded .video-history__entry {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.island__expanded .video-history__summary,
+.island__expanded .video-history__detail,
+.island__expanded .video-history__title,
+.island__expanded .video-history__digest {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.island__expanded .video-history__error {
+  background: rgba(255, 120, 120, 0.16);
+  color: #ffd7d7;
+}
