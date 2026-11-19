@@ -631,12 +631,35 @@ fn set_island_interaction(
     let window = main_window(&app)?;
     let mode = IslandMode::from_value(&mode)?;
     let previous_state = read_window_state();
-    let restored_custom_position = previous_state.custom_position.or_else(|| {
-        custom_position.filter(|position| {
-            monitor_for_island_position(&window, *position, previous_state.collapsed_scale)
-                .ok()
-                .flatten()
-                .is_some()
+    // 右键/点气泡从收起态直接展开时，锚点必须是「小狗当前真正所在的位置」：
+    // 前端传上来的 custom_position 可能是很久以前的（浮层打开/回位、闲逛之后都不更新），
+    // 用它当锚点会把窗口算到别的屏/别的 x 上（用户看到「右键气泡往右跳」）。
+    // 这里直接用最近一次几何落定的真实矩形（最小化漂移那套缓存）当锚点；
+    // 位移动画还没落定时先等最多 150ms，避免把过渡帧当锚点。
+    let mut settled_anchor = None;
+    if matches!(mode, IslandMode::Expanded) && matches!(previous_state.mode, IslandMode::Collapsed)
+    {
+        let deadline = Instant::now() + Duration::from_millis(150);
+        while POSITION_ANIMATING.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        settled_anchor = LAST_SETTLED_ISLAND_RECT
+            .lock()
+            .ok()
+            .and_then(|slot| *slot)
+            .map(|rect| IslandPosition {
+                x: rect.x,
+                y: rect.y,
+            });
+    }
+    let restored_custom_position = settled_anchor.or_else(|| {
+        previous_state.custom_position.or_else(|| {
+            custom_position.filter(|position| {
+                monitor_for_island_position(&window, *position, previous_state.collapsed_scale)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
         })
     });
     if previous_state.mode != mode {
