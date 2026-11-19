@@ -713,7 +713,6 @@ pub async fn ensure_local_model(
         return Ok(true);
     }
     log_model_event(&format!("ensure: call base_url={base_url} model={model:?}"));
-    let load_started = std::time::Instant::now();
     let cancel_key = cancel_token
         .as_deref()
         .map(str::trim)

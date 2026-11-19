@@ -245,6 +245,21 @@ fn find_monitor_by_key(app: &AppHandle, key: &str) -> Option<Monitor> {
 }
 
 /// Bongo / 陪玩狗的落点：优先 Bongo 指定屏，否则跟随主岛指定屏，再否则主屏。
+
+static TRAY_HANDLE: std::sync::OnceLock<tauri::tray::TrayIcon> = std::sync::OnceLock::new();
+
+/// 托盘图标作为「面板收起时也能看到采集状态」的出口（N4）。
+pub(crate) fn set_tray_status(_app: &tauri::AppHandle, text: &str) {
+    if let Some(tray) = TRAY_HANDLE.get() {
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
+/// 恢复默认托盘提示。
+pub(crate) fn reset_tray_status(app: &tauri::AppHandle) {
+    set_tray_status(app, "Maltese 线条小狗");
+}
+
 pub(crate) fn extras_target_monitor_key(app: &AppHandle) -> Option<String> {
     let bongo = BONGO_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
     if bongo.is_some() {
@@ -4875,7 +4890,8 @@ fn build_tray(app: &App) -> tauri::Result<()> {
         tray = tray.icon(icon.clone());
     }
 
-    tray.build(app)?;
+    let tray_icon = tray.build(app)?;
+    let _ = TRAY_HANDLE.set(tray_icon);
     Ok(())
 }
 

@@ -13,7 +13,7 @@ use super::CommentReport;
 use super::config::{apply_patch, validate_config, VideoCommentModelConfig, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
 use super::digest::build_digest;
-use super::extract::{normalize_value, ExtractIssue, PageFacts, PageKind, RawFacts};
+use super::extract::{is_video_page, normalize_value, ExtractIssue, PageFacts, PageKind, RawFacts};
 use super::guard::Guard;
 use super::interest::score;
 use super::model::*;
@@ -180,6 +180,12 @@ fn upsert_signal(item: &mut ContentItem, kind: SignalKind, at: u64) {
 pub fn merge_facts(items: &mut Vec<ContentItem>, facts: &PageFacts, now: u64) -> MergeOutcome {
     if facts.filtered {
         return MergeOutcome::Filtered;
+    }
+    // N1 第二道：已经有 canonicalUrl 但不是具体视频页（例如站点首页）→ 丢弃。
+    if let Some(url) = facts.canonical_url.as_deref() {
+        if !is_video_page(url, facts.platform) {
+            return MergeOutcome::Filtered;
+        }
     }
     if let Some(item) = items.iter_mut().find(|item| item.item_key == facts.item_key) {
         let previous_position = item.position_seconds;
@@ -702,9 +708,18 @@ impl SessionEngine {
             try_transition(&mut state.phase, Phase::Collecting, &mut diagnostics);
             state.diagnostics = diagnostics;
 
-            let mut session = VideoSession::new(session_id, provider, started_at);
+            let mut session = VideoSession::new(session_id.clone(), provider, started_at);
             session.account_id = account_id.clone();
             self.store.save_session(&session);
+            // N3：每次运行开始必须落日志（启动事件）。
+            self.store.log(DiagnosticEntry {
+                at: started_at,
+                session_id: Some(session_id.clone()),
+                channel: None,
+                level: "info".to_string(),
+                code: "SESSION_STARTED".to_string(),
+                message: format!("provider={} interval={}s max={}min", provider.as_str(), config.page_interval_seconds, config.max_minutes),
+            });
         }
 
         let run_id = self.run_id.fetch_add(1, Ordering::SeqCst) + 1;
@@ -838,13 +853,49 @@ impl SessionEngine {
             )
         };
         if running {
+            // N3：每次运行结束必须落日志（停止事件 + 原因）。
+            {
+                let state = lock_state(&self.state);
+                self.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(state.session_id.clone()),
+                    channel: None,
+                    level: "info".to_string(),
+                    code: "SESSION_STOPPED".to_string(),
+                    message: format!("reason={:?} items={} filtered={}", stop_reason, state.items.len(), state.filtered_count),
+                });
+            }
             self.finish(app, stop_reason, false);
             {
                 let mut state = lock_state(&self.state);
                 state.phase = Phase::Stopped;
                 state.stop_reason = Some(stop_reason);
             }
-            let _ = app.emit("video-session-updated", self.snapshot());
+            let snapshot = self.snapshot();
+            // N4：面板收起后仍能看到采集状态（托盘提示）。
+            if snapshot.running {
+                crate::set_tray_status(
+                    app,
+                    &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
+                );
+            } else {
+                crate::reset_tray_status(app);
+            }
+            // N4：面板收起后仍能看到采集状态（托盘提示）。
+        if snapshot.running {
+            crate::set_tray_status(
+                app,
+                &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
+            );
+        }
+        // N4：面板收起后仍能看到采集状态（托盘提示）。
+        if snapshot.running {
+            crate::set_tray_status(
+                app,
+                &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
+            );
+        }
+        let _ = app.emit("video-session-updated", snapshot);
         } else {
             {
                 let mut state = lock_state(&self.state);
@@ -1073,7 +1124,21 @@ impl SessionEngine {
                             }
                             match merge_facts(&mut state.items, &facts, now) {
                                 MergeOutcome::Filtered => {
-                                    state.filtered_count = state.filtered_count.saturating_add(1)
+                                    state.filtered_count = state.filtered_count.saturating_add(1);
+                                    // N3：丢弃原因必须落到 video/logs/video-<date>.jsonl
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(state.session_id.clone()),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "info".to_string(),
+                                        code: "ITEM_DISCARDED".to_string(),
+                                        message: format!(
+                                            "{} | reason={} | url={}",
+                                            facts.title,
+                                            facts.filter_reason.clone().unwrap_or_else(|| "not_video_page".to_string()),
+                                            facts.canonical_url.clone().unwrap_or_default()
+                                        ),
+                                    });
                                 }
                                 _ => {}
                             }

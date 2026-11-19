@@ -197,3 +197,16 @@ pid / 调试端口 / profile 路径。应用重启后靠它认出上次留下的
 - 「停下」后该浏览器被自动关闭、实例标记清理，历史里这一轮记 `手动停止 · 条目 1`；
 - 人为占满 9333–9338 再开始：返回中文「本机调试端口被占用」，
   诊断日志与 `/api/video/diagnostics` 都有 `PORT_BUSY`，历史记「浏览器没准备好」。
+
+## 伪条目过滤 / 采集日志 / 状态可见性（2026-11-19 修复 N1–N4）
+
+- **N1 只收具体视频页**：canonical_url 现在校验路径——B 站只接受 /video/BVxxx、/video/av123，
+  抖音只接受 /video/<数字>；首页/搜索/排行榜等一律丢弃（extract::is_video_page），
+  session::merge_facts 里还有第二道防御性校验。
+- **N2 伪条目过滤**：pseudo_item_reason 统一判定——整页 Feed、站点标题（含「哔哩哔哩 / 干杯 /
+  记录美好生活」）、时长 < 8s 且无作者、空标题、非视频页 URL；命中即 iltered=true 并带原因。
+- **N3 日志**：每次运行开始/结束都会写 ideo/logs/video-<date>.jsonl
+  （SESSION_STARTED / SESSION_STOPPED），每个被丢弃的条目写 ITEM_DISCARDED
+  （含 title、reason、url）；snapshot 的 ilteredCount 即丢弃计数，面板可直接显示。
+- **N4 收起后可见**：采集运行时托盘图标 tooltip 显示「正在刷视频 N 条（已丢弃 M 条伪条目）」，
+  停止后恢复默认提示（crate::set_tray_status）。

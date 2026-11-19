@@ -1,5 +1,2 @@
 //! 旧规则模块的兼容转发；新实现位于 `video::rules`。
-
-pub use crate::video::rules::{
-    is_browser_process, normalize_provider, page_key, title_matches, validate_config,
-};
+//! 目前没有调用方，保留空模块避免 lib.rs 的 `mod video_rules;` 断链。

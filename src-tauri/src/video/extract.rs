@@ -216,7 +216,74 @@ pub fn canonical_url(value: &str, platform: Platform) -> Option<String> {
     if !platform.matches_url(without_query) {
         return None;
     }
+    if !is_video_page(without_query, platform) {
+        return None;
+    }
     Some(without_query.to_string())
+}
+
+/// 判断 URL 是否落在「具体视频页」路径：B 站 /video/BVxxx 或 /video/av123，抖音 /video/<数字>。
+pub fn is_video_page(url: &str, platform: Platform) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let path = lower
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .map(|(_, path)| format!("/{path}"))
+        .unwrap_or_default();
+    let path = path.split(['?', '#']).next().unwrap_or("").to_string();
+    match platform {
+        Platform::Bilibili => {
+            let Some(rest) = path.strip_prefix("/video/") else {
+                return false;
+            };
+            let id = rest.split('/').next().unwrap_or("");
+            if let Some(bv) = id.strip_prefix("bv") {
+                return bv.len() >= 6 && bv.chars().all(|ch| ch.is_ascii_alphanumeric());
+            }
+            if let Some(av) = id.strip_prefix("av") {
+                return !av.is_empty() && av.chars().all(|ch| ch.is_ascii_digit());
+            }
+            false
+        }
+        Platform::Douyin => {
+            let Some(rest) = path.strip_prefix("/video/") else {
+                return false;
+            };
+            let id = rest.split('/').next().unwrap_or("");
+            !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit())
+        }
+    }
+}
+
+/// 伪条目判定（N2）：站点首页/整页 Feed、站点标题、短时长无作者、非视频页 URL。
+pub fn pseudo_item_reason(
+    title: &str,
+    author: Option<&str>,
+    duration_seconds: Option<u64>,
+    canonical: Option<&str>,
+    on_feed: bool,
+) -> Option<&'static str> {
+    if on_feed {
+        return Some("page_feed");
+    }
+    if canonical.is_none() {
+        return Some("not_video_page");
+    }
+    let normalized = title.trim();
+    if normalized.is_empty() {
+        return Some("empty_title");
+    }
+    if normalized.contains("哔哩哔哩")
+        || normalized.contains("干杯")
+        || normalized.contains("抖音-记录美好生活")
+    {
+        return Some("site_title");
+    }
+    let has_author = author.map(|value| !value.trim().is_empty()).unwrap_or(false);
+    if duration_seconds.unwrap_or(0) < 8 && !has_author {
+        return Some("short_without_author");
+    }
+    None
 }
 
 fn hash_prefix(input: &str) -> String {
@@ -295,7 +362,16 @@ pub fn normalize_facts(
     let live_or_ad = tags.iter().any(|tag| tag.contains("直播") || tag.contains("广告"))
         || title.contains("直播")
         || title.contains("广告");
-    let (filtered, filter_reason) = if live_or_ad && duration.is_none() {
+    let pseudo = pseudo_item_reason(
+        &title,
+        author.as_deref(),
+        duration,
+        canonical.as_deref(),
+        raw.on_feed,
+    );
+    let (filtered, filter_reason) = if let Some(reason) = pseudo {
+        (true, Some(reason.to_string()))
+    } else if live_or_ad && duration.is_none() {
         (true, Some("直播或广告，且没有有效时长".to_string()))
     } else {
         (false, None)
@@ -483,5 +559,33 @@ mod tests {
         facts.position_seconds = 999;
         facts.duration_seconds = Some(100);
         assert_eq!(facts.completion_percent(), Some(100));
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::*;
+
+    #[test]
+    fn only_specific_video_pages_are_accepted() {
+        assert!(canonical_url("https://www.bilibili.com/video/BV1xx411c7mD?spm=1", Platform::Bilibili).is_some());
+        assert!(canonical_url("https://www.bilibili.com/video/av170001", Platform::Bilibili).is_some());
+        assert!(canonical_url("https://www.bilibili.com/", Platform::Bilibili).is_none());
+        assert!(canonical_url("https://www.bilibili.com/video/", Platform::Bilibili).is_none());
+        assert!(canonical_url("https://www.bilibili.com/v/popular/all", Platform::Bilibili).is_none());
+        assert!(canonical_url("https://www.douyin.com/video/7300000000000000000", Platform::Douyin).is_some());
+        assert!(canonical_url("https://www.douyin.com/", Platform::Douyin).is_none());
+    }
+
+    #[test]
+    fn pseudo_items_get_reasons() {
+        assert_eq!(
+            pseudo_item_reason("哔哩哔哩 (゜-゜)つロ 干杯~-bilibili", None, Some(6), Some("https://www.bilibili.com/video/BV1xx"), false),
+            Some("site_title")
+        );
+        assert_eq!(pseudo_item_reason("某个视频", None, Some(6), None, false), Some("not_video_page"));
+        assert_eq!(pseudo_item_reason("某个视频", None, Some(6), Some("https://www.bilibili.com/video/BV1xx"), true), Some("page_feed"));
+        assert_eq!(pseudo_item_reason("某个视频", None, Some(6), Some("https://www.bilibili.com/video/BV1xx"), false), Some("short_without_author"));
+        assert_eq!(pseudo_item_reason("正常视频", Some("UP主"), Some(60), Some("https://www.bilibili.com/video/BV1xx"), false), None);
     }
 }
