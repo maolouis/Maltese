@@ -19,6 +19,7 @@ pub fn now_seconds() -> u64 {
 pub enum Platform {
     Bilibili,
     Douyin,
+    Xiaohongshu,
 }
 
 impl Platform {
@@ -26,6 +27,7 @@ impl Platform {
         match self {
             Platform::Bilibili => "bilibili",
             Platform::Douyin => "douyin",
+            Platform::Xiaohongshu => "xiaohongshu",
         }
     }
 
@@ -33,6 +35,7 @@ impl Platform {
         match value.trim().to_lowercase().as_str() {
             "bilibili" => Some(Platform::Bilibili),
             "douyin" => Some(Platform::Douyin),
+            "xiaohongshu" | "xhs" | "redbook" => Some(Platform::Xiaohongshu),
             _ => None,
         }
     }
@@ -41,6 +44,7 @@ impl Platform {
         match self {
             Platform::Bilibili => "https://www.bilibili.com/",
             Platform::Douyin => "https://www.douyin.com/",
+            Platform::Xiaohongshu => "https://www.xiaohongshu.com/explore",
         }
     }
 
@@ -49,6 +53,7 @@ impl Platform {
         match self {
             Platform::Bilibili => lower.contains("bilibili.com"),
             Platform::Douyin => lower.contains("douyin.com"),
+            Platform::Xiaohongshu => lower.contains("xiaohongshu.com"),
         }
     }
 }
@@ -312,6 +317,31 @@ pub struct InterestVerdict {
     pub reasons: Vec<String>,
 }
 
+/// 小红书笔记类型（图文 / 视频）；其它平台为 None。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteType {
+    Image,
+    Video,
+}
+
+impl NoteType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NoteType::Image => "image",
+            NoteType::Video => "video",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "image" | "normal" | "图文" => Some(NoteType::Image),
+            "video" | "视频" => Some(NoteType::Video),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentItem {
@@ -329,6 +359,24 @@ pub struct ContentItem {
     pub completion_percent: Option<u32>,
     pub tags: Vec<String>,
     pub canonical_url: Option<String>,
+    /// 小红书图片直链（仅记录 URL，不下载/不转存；防盗链详情见 docs）。
+    #[serde(default)]
+    pub image_urls: Vec<String>,
+    /// 小红书笔记类型：image / video；其它平台 None。
+    #[serde(default)]
+    pub note_type: Option<NoteType>,
+    #[serde(default)]
+    pub like_count: Option<u64>,
+    #[serde(default)]
+    pub collect_count: Option<u64>,
+    /// 发布时间（unix 秒；页面只能拿到日期时按 0 点估算）。
+    #[serde(default)]
+    pub published_at: Option<u64>,
+    /// 访问该笔记必须带上的 xsec_token（裸链接会 403）。
+    #[serde(default)]
+    pub xsec_token: Option<String>,
+    #[serde(default)]
+    pub cover_url: Option<String>,
     pub source_confidence: f32,
     pub filtered: bool,
     pub filter_reason: Option<String>,

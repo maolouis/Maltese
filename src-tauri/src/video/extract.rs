@@ -2,7 +2,7 @@
 //!
 //! 纯函数、无 I/O；指纹与脱敏都在这里完成。
 
-use super::model::{now_seconds, Platform};
+use super::model::{now_seconds, NoteType, Platform};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -32,6 +32,13 @@ pub const RAW_FIELDS: &[&str] = &[
     "captchaVisible",
     "riskBanner",
     "onFeed",
+    "imageUrls",
+    "noteType",
+    "likeCount",
+    "collectCount",
+    "publishedAt",
+    "xsecToken",
+    "coverUrl",
 ];
 
 /// 适配器脚本返回的宽字段（字段名与页面脚本一致）。
@@ -80,6 +87,21 @@ pub struct RawFacts {
     pub risk_banner: bool,
     #[serde(default)]
     pub on_feed: bool,
+    // ---- 小红书（其它平台留空）----
+    #[serde(default)]
+    pub image_urls: Vec<String>,
+    #[serde(default)]
+    pub note_type: String,
+    #[serde(default)]
+    pub like_count: u64,
+    #[serde(default)]
+    pub collect_count: u64,
+    #[serde(default)]
+    pub published_at: u64,
+    #[serde(default)]
+    pub xsec_token: String,
+    #[serde(default)]
+    pub cover_url: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +162,23 @@ pub struct PageFacts {
     pub seek_back: bool,
     pub visits: u32,
     pub canonical_url: Option<String>,
+    /// 小红书图片直链（只记录，不下载/不转存）。
+    #[serde(default)]
+    pub image_urls: Vec<String>,
+    #[serde(default)]
+    pub note_type: Option<NoteType>,
+    #[serde(default)]
+    pub like_count: Option<u64>,
+    #[serde(default)]
+    pub collect_count: Option<u64>,
+    /// 发布时间（unix 秒；只能拿到日期时按本地 0 点估算）。
+    #[serde(default)]
+    pub published_at: Option<u64>,
+    /// 导航该笔记必须带上的 xsec_token（裸链接会 403）。
+    #[serde(default)]
+    pub xsec_token: Option<String>,
+    #[serde(default)]
+    pub cover_url: Option<String>,
     pub confidence: f32,
     pub hints: PageHints,
     pub filtered: bool,
@@ -205,6 +244,28 @@ pub fn normalize_tags(values: &[String]) -> Vec<String> {
     result
 }
 
+/// 图片直链清洗：只留 http(s)、去重、限制 18 张（小红书 UI 上限附近）。
+pub fn normalize_image_urls(values: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+            continue;
+        }
+        if trimmed.len() > 600 {
+            continue;
+        }
+        if result.iter().any(|existing| existing == trimmed) {
+            continue;
+        }
+        result.push(trimmed.to_string());
+        if result.len() >= 18 {
+            break;
+        }
+    }
+    result
+}
+
 /// 只保留平台 + 路径段，剥掉 query 与 fragment。
 pub fn canonical_url(value: &str, platform: Platform) -> Option<String> {
     let trimmed = value.trim();
@@ -252,6 +313,15 @@ pub fn is_video_page(url: &str, platform: Platform) -> bool {
             let id = rest.split('/').next().unwrap_or("");
             !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit())
         }
+        Platform::Xiaohongshu => {
+            // 笔记详情：/explore/<noteId> 或 /discovery/item/<noteId>；/explore 本身是 feed。
+            let id = path
+                .strip_prefix("/explore/")
+                .or_else(|| path.strip_prefix("/discovery/item/"))
+                .unwrap_or("");
+            let id = id.split('/').next().unwrap_or("");
+            (20..=32).contains(&id.len()) && id.chars().all(|ch| ch.is_ascii_alphanumeric())
+        }
     }
 }
 
@@ -276,6 +346,7 @@ pub fn pseudo_item_reason(
     if normalized.contains("哔哩哔哩")
         || normalized.contains("干杯")
         || normalized.contains("抖音-记录美好生活")
+        || normalized.contains("小红书 - 你的生活兴趣社区")
     {
         return Some("site_title");
     }
@@ -358,10 +429,32 @@ pub fn normalize_facts(
         }
     };
     let canonical = canonical_url(&raw.url, platform);
+    let image_urls = normalize_image_urls(&raw.image_urls);
+    let note_type = NoteType::parse(&raw.note_type);
+    let like_count = if raw.like_count == 0 { None } else { Some(raw.like_count) };
+    let collect_count = if raw.collect_count == 0 { None } else { Some(raw.collect_count) };
+    let published_at = if raw.published_at == 0 { None } else { Some(raw.published_at) };
+    let xsec_token = {
+        let value = raw.xsec_token.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.chars().take(200).collect::<String>())
+        }
+    };
+    let cover_url = {
+        let value = raw.cover_url.trim();
+        if value.starts_with("http://") || value.starts_with("https://") {
+            Some(value.to_string())
+        } else {
+            None
+        }
+    };
 
-    let live_or_ad = tags.iter().any(|tag| tag.contains("直播") || tag.contains("广告"))
-        || title.contains("直播")
-        || title.contains("广告");
+    let live_or_ad = platform != Platform::Xiaohongshu
+        && (tags.iter().any(|tag| tag.contains("直播") || tag.contains("广告"))
+            || title.contains("直播")
+            || title.contains("广告"));
     let pseudo = pseudo_item_reason(
         &title,
         author.as_deref(),
@@ -397,6 +490,13 @@ pub fn normalize_facts(
         seek_back: raw.seek_back,
         visits: raw.visits,
         canonical_url: canonical,
+        image_urls,
+        note_type,
+        like_count,
+        collect_count,
+        published_at,
+        xsec_token,
+        cover_url,
         confidence,
         hints: PageHints {
             login_visible: raw.login_visible,
@@ -543,7 +643,8 @@ mod tests {
             "coverUrl": "https://example.com/a.jpg"
         });
         let (facts, unknown) = normalize_value(&value, Platform::Bilibili, 1.0).expect("facts");
-        assert_eq!(unknown, 2);
+        // coverUrl 现在是小🍠白名单字段，只剩 cookie 一个越界字段。
+        assert_eq!(unknown, 1);
         assert_eq!(facts.title, "标题");
     }
 

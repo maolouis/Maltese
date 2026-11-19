@@ -1,7 +1,7 @@
 // 视频插件状态入口。真正的轮询、事件订阅和跨窗口共享状态位于 videoStateStore.ts。
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import type { AgentAccount, ChannelState, DiagnosticEntry, DigestDraft, SessionSummary, TasteProfile, VideoConfig } from "./types";
+import type { AgentAccount, ChannelState, DiagnosticEntry, DigestDraft, Platform, SessionSummary, TasteProfile, VideoConfig } from "./types";
 import type { BrowserStatus } from "./videoPanelLogic";
 import {
   clearVideoData,
@@ -46,7 +46,7 @@ export type VideoPluginState = {
   refresh: () => Promise<void>;
   loadBrowserStatus: () => Promise<void>;
   closeBrowser: () => Promise<void>;
-  start: (provider: "bilibili" | "douyin", accountId?: string, options?: {
+  start: (provider: Platform, accountId?: string, options?: {
     autoComment?: boolean;
     commentDryRun?: boolean;
     commentModel?: VideoCommentModelOptions;
@@ -54,7 +54,7 @@ export type VideoPluginState = {
   stop: () => Promise<void>;
   updateConfig: (patch: Partial<VideoConfig>) => Promise<void>;
   createAccount: (input: {
-    platform: "bilibili" | "douyin";
+    platform: Platform;
     displayName: string;
     handle: string;
     persona: string;
@@ -81,7 +81,7 @@ export function useVideoPluginState(): VideoPluginState {
   const stop = useCallback(() => stopVideoSession(), []);
   const updateConfig = useCallback((patch: Partial<VideoConfig>) => updateVideoConfig(patch), []);
   const createAccount = useCallback((input: {
-    platform: "bilibili" | "douyin";
+    platform: Platform;
     displayName: string;
     handle: string;
     persona: string;
@@ -96,7 +96,7 @@ export function useVideoPluginState(): VideoPluginState {
   const takePending = useCallback(() => takeVideoPending(), []);
   const clearData = useCallback((includeBrowserProfile: boolean) => clearVideoData(includeBrowserProfile), []);
   const start = useCallback(async (
-    provider: "bilibili" | "douyin",
+    provider: Platform,
     accountId?: string,
     options?: {
       autoComment?: boolean;

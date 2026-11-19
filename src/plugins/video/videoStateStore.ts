@@ -7,6 +7,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   isVideoSnapshot,
+  type Platform,
   type AgentAccount,
   type ChannelState,
   type DiagnosticEntry,
@@ -327,7 +328,7 @@ export function getVideoState() {
 }
 
 export async function startVideoSession(
-  provider: "bilibili" | "douyin",
+  provider: Platform,
   config: VideoConfig,
   accountId?: string,
   commentModel?: VideoCommentModelOptions,
@@ -375,7 +376,7 @@ export async function clearVideoData(includeBrowserProfile: boolean) {
 }
 
 export async function createVideoAccount(input: {
-  platform: "bilibili" | "douyin";
+  platform: Platform;
   displayName: string;
   handle: string;
   persona: string;

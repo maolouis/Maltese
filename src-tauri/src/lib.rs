@@ -5940,3 +5940,8 @@ pub fn run() {
             video::video_get_taste,
             video::video_update_taste,
             video::video_reset_taste,
+            video::video_get_taste,
+            video::video_update_taste,
+            video::video_reset_taste,
+            video::xhs_generate_draft,
+            video::xhs_open_drafts_dir,

@@ -13,7 +13,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const APP_DATA = path.join(process.env.APPDATA || os.homedir(), "com.maolouis.maltese");
+function resolveAppData() {
+  const explicit = process.env.MALTESE_DATA_DIR;
+  if (explicit && fs.existsSync(explicit)) return explicit;
+  const pointer = path.join(
+    process.env.APPDATA || os.homedir(),
+    "com.maolouis.maltese",
+    "data-dir.txt"
+  );
+  try {
+    const configured = fs.readFileSync(pointer, "utf8").trim();
+    if (configured && fs.existsSync(configured)) return configured;
+  } catch {
+    // 旧位置（没有数据目录迁移时）
+  }
+  return path.join(process.env.APPDATA || os.homedir(), "com.maolouis.maltese");
+}
+
+const APP_DATA = resolveAppData();
 const VIDEO_DATA = path.join(APP_DATA, "video");
 const LOG_DIR = path.join(VIDEO_DATA, "logs");
 const TOKEN_FILE = path.join(APP_DATA, "dsh-api-token.txt");
@@ -47,6 +64,7 @@ const KEY_CODES = new Set([
 
 function parseArgs(argv) {
   const options = {
+    provider: "bilibili",
     minutes: 6,
     every: 15,
     pageInterval: 15,
@@ -56,7 +74,8 @@ function parseArgs(argv) {
   };
   for (const raw of argv.slice(2)) {
     const [key, value] = raw.replace(/^--/, "").split("=");
-    if (key === "minutes") options.minutes = Number(value || 6);
+    if (key === "provider") options.provider = value || "bilibili";
+    else if (key === "minutes") options.minutes = Number(value || 6);
     else if (key === "every") options.every = Math.max(3, Number(value || 15));
     else if (key === "page-interval") options.pageInterval = Math.max(15, Number(value || 15));
     else if (key === "max-items") options.maxItems = Number(value || 200);
@@ -268,7 +287,8 @@ async function main() {
   const options = parseArgs(process.argv);
   const port = readPort();
   const token = readToken();
-  const accountId = options.account ? readActiveAccount() : null;
+  const accountId =
+    options.account && options.provider === "bilibili" ? readActiveAccount() : null;
 
   console.log(
     `[probe] API 127.0.0.1:${port} token=${token ? "有" : "无"} account=${accountId || "(默认 profile)"} ` +
@@ -296,7 +316,7 @@ async function main() {
 
   const startedAt = Date.now();
   const startedStatus = await api(port, token, "POST", "/api/video/start", {
-    provider: "bilibili",
+    provider: options.provider,
     ...(accountId ? { accountId } : {}),
     config: {
       pageIntervalSeconds: options.pageInterval,

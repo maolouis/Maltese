@@ -271,6 +271,13 @@ pub fn merge_facts(items: &mut Vec<ContentItem>, facts: &PageFacts, now: u64) ->
         completion_percent: facts.completion_percent(),
         tags: facts.tags.clone(),
         canonical_url: facts.canonical_url.clone(),
+        image_urls: facts.image_urls.clone(),
+        note_type: facts.note_type,
+        like_count: facts.like_count,
+        collect_count: facts.collect_count,
+        published_at: facts.published_at,
+        xsec_token: facts.xsec_token.clone(),
+        cover_url: facts.cover_url.clone(),
         source_confidence: facts.confidence,
         filtered: false,
         filter_reason: None,
@@ -322,6 +329,7 @@ fn new_session_id(platform: Platform) -> String {
     let prefix = match platform {
         Platform::Bilibili => "bili",
         Platform::Douyin => "douyin",
+        Platform::Xiaohongshu => "xhs",
     };
     format!("{prefix}-{date}-{random:06x}")
 }
@@ -2054,7 +2062,7 @@ impl SessionEngine {
                     "info",
                     "ITEM_COLLECTED",
                     format!(
-                        "url={} bvid={} title={}",
+                        "url={} id={} title={}",
                         facts.canonical_url.clone().unwrap_or_else(|| target.url.clone()),
                         target.id,
                         facts.title
@@ -2144,7 +2152,10 @@ impl SessionEngine {
             );
 
             // 评论：异步派发，绝不 await（模型慢/失败都不阻塞刷视频）。
-            if let Some(facts) = final_facts {
+            // 小红书本期只读采集，不做评论（需求明确不做评论/点赞）。
+            if platform == Platform::Xiaohongshu {
+                // skip
+            } else if let Some(facts) = final_facts {
                 let url = facts.canonical_url.clone().unwrap_or_default();
                 let is_login_or_risk = facts.hints.login_visible
                     || facts.hints.captcha_visible
@@ -2243,6 +2254,40 @@ impl SessionEngine {
     /// 当前视频口味（面板展示 / 聊天技能读取）。
     pub fn taste_profile(&self) -> UserProfile {
         self.store.profile()
+    }
+
+    /// 当前聊天模型配置（草稿/感悟生成用；没有就是没接模型）。
+    pub fn comment_model_config(&self) -> Option<VideoCommentModelConfig> {
+        let state = lock_state(&self.state);
+        state.comment_model.clone()
+    }
+
+    /// 取用于总结的笔记条目：指定会话优先；为空则取最近一轮有内容的会话。
+    pub fn draft_items(&self, session_ids: &[String]) -> Vec<ContentItem> {
+        let mut items: Vec<ContentItem> = Vec::new();
+        if session_ids.is_empty() {
+            for summary in self.store.list_sessions(10) {
+                if summary.item_count == 0 {
+                    continue;
+                }
+                if let Some(session) = self.store.get_session(&summary.session_id) {
+                    items = session.items;
+                    break;
+                }
+            }
+        } else {
+            for session_id in session_ids {
+                if let Some(session) = self.store.get_session(session_id) {
+                    items.extend(session.items);
+                }
+            }
+        }
+        items
+    }
+
+    /// 供其它子模块写诊断日志。
+    pub fn log_diagnostic(&self, level: &str, code: &str, message: impl Into<String>) {
+        self.log_event(None, None, level, code, message);
     }
 
     /// 聊天里说一句话 → 解析成口味调整并落库；解析失败返回 TASTE_UNCLEAR（由调用方反问）。

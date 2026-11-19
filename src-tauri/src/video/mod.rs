@@ -24,6 +24,7 @@ pub mod session;
 pub mod store;
 pub mod taste;
 pub mod reflection;
+pub mod xhs_draft;
 pub mod url_guard;
 
 use accounts::AgentAccount;
@@ -361,6 +362,92 @@ pub async fn video_browser_status(app: AppHandle) -> session::BrowserStatus {
 #[tauri::command]
 pub fn video_open_external_url(url: String) -> VideoResult<()> {
     external::open_external_url(&url)
+}
+
+/// 生成小红书图文草稿：只准备文案（标题/正文/tags），配图由平台「文生图」，人工发布。
+#[tauri::command]
+pub async fn xhs_generate_draft(
+    app: AppHandle,
+    session_ids: Option<Vec<String>>,
+) -> VideoResult<xhs_draft::XhsDraft> {
+    let _guard = command_guard(&app, "xhs_generate_draft");
+    let engine = session::engine(&app);
+    let items = engine.draft_items(&session_ids.unwrap_or_default());
+    if items.is_empty() {
+        return Err(VideoError::new(
+            "XHS_NO_ITEMS",
+            "还没有采到小红书笔记：先在「小红书」平台采一轮，再生成草稿。",
+        ));
+    }
+    let model = engine.comment_model_config();
+    let mut draft = match model.as_ref() {
+        Some(model) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                xhs_draft::generate_with_model(&app, &items, model),
+            )
+            .await
+            {
+                Ok(Ok(draft)) => draft,
+                Ok(Err(error)) => {
+                    engine.log_diagnostic(
+                        "warn",
+                        "XHS_DRAFT_FALLBACK",
+                        format!("reason={error} generator=template"),
+                    );
+                    xhs_draft::template_draft(&items)
+                }
+                Err(_) => {
+                    engine.log_diagnostic(
+                        "warn",
+                        "XHS_DRAFT_FALLBACK",
+                        "reason=timeout generator=template",
+                    );
+                    xhs_draft::template_draft(&items)
+                }
+            }
+        }
+        None => {
+            engine.log_diagnostic(
+                "info",
+                "XHS_DRAFT_FALLBACK",
+                "reason=no_model generator=template",
+            );
+            xhs_draft::template_draft(&items)
+        }
+    };
+    let dir = xhs_draft::write_draft(&app, &mut draft)
+        .map_err(|message| VideoError::new("XHS_DRAFT_WRITE_FAILED", message))?;
+    engine.log_diagnostic(
+        "info",
+        "XHS_DRAFT_BUILT",
+        format!(
+            "generator={} title_chars={} body_chars={} tags={} sources={} dir={}",
+            draft.generator,
+            draft.title.chars().count(),
+            draft.body.chars().count(),
+            draft.tags.len(),
+            draft.sources.len(),
+            dir
+        ),
+    );
+    Ok(draft)
+}
+
+/// 打开小红书草稿目录。
+#[tauri::command]
+pub fn xhs_open_drafts_dir(app: AppHandle) -> VideoResult<()> {
+    let _guard = command_guard(&app, "xhs_open_drafts_dir");
+    use tauri_plugin_opener::OpenerExt;
+    let dir = xhs_draft::drafts_root(&app);
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        VideoError::with_detail("XHS_DRAFT_DIR_FAILED", "无法创建草稿目录。", error.to_string())
+    })?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|error| {
+            VideoError::with_detail("XHS_DRAFT_DIR_FAILED", "无法打开草稿目录。", error.to_string())
+        })
 }
 
 /// 打开 `video/logs` 目录（历史加载失败 / 诊断面板的「查看日志」）。

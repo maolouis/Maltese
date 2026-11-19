@@ -25,6 +25,7 @@ pub fn adapter_for(platform: Platform) -> &'static dyn PlatformAdapter {
     match platform {
         Platform::Bilibili => &BILIBILI,
         Platform::Douyin => &DOUYIN,
+        Platform::Xiaohongshu => &XIAOHONGSHU,
     }
 }
 
@@ -178,11 +179,174 @@ const DOUYIN_CANDIDATES: &str = r#"
 })()
 "#;
 
+
+/// 小红书笔记详情页：标题/作者/正文/标签/图片/互动数/发布时间/xsec_token。
+/// 注意：图片只记录直链，不下载、不转存（防盗链与版权见 docs/video-plugin-xiaohongshu.md）。
+const XIAOHONGSHU_EXTRACT: &str = r#"
+(() => {
+  const pick = (sel) => document.querySelector(sel);
+  const text = (sel) => (pick(sel)?.textContent || '').trim();
+  const meta = (name) => (document.querySelector('meta[property="' + name + '"], meta[name="' + name + '"]')?.content || '').trim();
+  const stripSite = (value) => {
+    const cleaned = (value || '').replace(/\s*[-_]\s*小红书.*$/, '').trim();
+    if (!cleaned || /^小红书/.test(cleaned) || /生活兴趣社区/.test(cleaned)) return '';
+    return cleaned;
+  };
+  let title = stripSite(text('#detail-title'))
+    || stripSite(text('.note-content .title'))
+    || stripSite(text('h1'))
+    || stripSite(meta('og:title'))
+    || stripSite(text('[class*="noteTitle"], [class*="note-title"]'))
+    || '';
+  if (!title) {
+    const noteText = ((document.querySelector('#detail-desc, .note-content') || {}).innerText || '').trim();
+    title = noteText.split('\n').map((line) => line.trim()).find((line) => line.length >= 4) || '';
+    title = stripSite(title.slice(0, 40));
+  }
+  if (!title) title = stripSite(document.title);
+  const description = (text('#detail-desc') || text('.note-content .desc') || text('.desc') || meta('og:description') || meta('description')).trim();
+  const author = (text('.author-wrapper .username') || text('.author .name') || text('.username') || meta('author')).trim();
+  const tags = Array.from(document.querySelectorAll('#detail-desc a[href*="search_result"], .note-content a[href*="keyword"], a[href*="search_result?keyword="]'))
+    .map((node) => '#' + (node.textContent || '').trim().replace(/^#/, ''))
+    .filter((tag) => tag.length > 1)
+    .slice(0, 10);
+  const seen = new Set();
+  const imageUrls = [];
+  const looksLikeIcon = (src) => /(avatar|emoji|icon|feeds\/|comment|static|fe-platform|guide|logo|sprite|watermark)/i.test(src);
+  const collectImage = (src) => {
+    if (!/^https?:/.test(src)) return;
+    if (looksLikeIcon(src)) return;
+    if (seen.has(src)) return;
+    seen.add(src);
+    imageUrls.push(src);
+  };
+  for (const image of document.querySelectorAll('.swiper-slide img, .note-slider img, #noteContainer img, .media-container img, .note-content img')) {
+    const src = image.currentSrc || image.src || image.getAttribute('data-src') || '';
+    collectImage(src);
+    if (imageUrls.length >= 18) break;
+  }
+  if (imageUrls.length === 0) {
+    for (const image of document.querySelectorAll('img')) {
+      const src = image.currentSrc || image.src || image.getAttribute('data-src') || '';
+      if (/(sns-webpic|sns-img|xhscdn)/i.test(src)) collectImage(src);
+      if (imageUrls.length >= 18) break;
+    }
+  }
+  if (imageUrls.length === 0) {
+    const og = meta('og:image');
+    if (/^https?:/.test(og)) imageUrls.push(og);
+  }
+  const video = document.querySelector('video');
+  const bodyText = (document.body?.innerText || '').slice(0, 4000);
+  const countText = (selector) => {
+    const node = pick(selector);
+    return node ? (node.textContent || '').trim() : '';
+  };
+  const likeText = countText('.like-wrapper .count') || countText('[class*="like"] .count');
+  const collectText = countText('.collect-wrapper .count') || countText('[class*="collect"] .count');
+  const parseCount = (value) => {
+    if (!value) return 0;
+    const number = parseFloat(value);
+    if (!Number.isFinite(number)) return 0;
+    if (/[wW万]/.test(value)) return Math.round(number * 10000);
+    if (/[kK千]/.test(value)) return Math.round(number * 1000);
+    return Math.round(number);
+  };
+  let publishedAt = 0;
+  const dateMatch = bodyText.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+  if (dateMatch) {
+    const date = new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]));
+    publishedAt = Math.floor(date.getTime() / 1000);
+  }
+  const tokenMatch = location.search.match(/[?&]xsec_token=([^&#]+)/);
+  return {
+    itemId: (location.pathname.match(/\/explore\/([0-9a-zA-Z]+)/) || location.pathname.match(/\/discovery\/item\/([0-9a-zA-Z]+)/) || [])[1] || '',
+    title, description, author,
+    durationSeconds: Number.isFinite(video?.duration) ? Math.round(video.duration) : 0,
+    positionSeconds: Number.isFinite(video?.currentTime) ? Math.round(video.currentTime) : 0,
+    playing: !!video && !video.paused && !video.ended,
+    visible: document.visibilityState === 'visible',
+    tags, liked: false, favorited: false, coinOrShare: false,
+    commentSeconds: 0, authorClicked: false, seekBack: false, visits: 0,
+    url: location.href,
+    imageUrls, noteType: video ? 'video' : 'image',
+    likeCount: parseCount(likeText), collectCount: parseCount(collectText),
+    publishedAt,
+    xsecToken: tokenMatch ? decodeURIComponent(tokenMatch[1]) : '',
+    coverUrl: imageUrls[0] || (/^https?:/.test(meta('og:image')) ? meta('og:image') : ''),
+    loginVisible: !!pick('.login-container, .login-mask, .sign-container') || /登录后查看|请先登录/.test(bodyText.slice(0, 800)),
+    captchaVisible: !!pick('.captcha, [class*="captcha"], .geetest_panel'),
+    riskBanner: /(当前账号存在异常|访问频繁|操作过于频繁|验证|风控)/.test(bodyText.slice(0, 2000)),
+    onFeed: /^\/(explore|discovery)?\/?$/.test(location.pathname)
+  };
+})()
+"#;
+
+/// 小红书 feed 候选：**必须带 xsec_token 的 /explore/<id> 链接**（裸链接会 403）。
+/// 返回 {urls:[完整链接…]}，Rust 侧按 noteId 去重后逐条 Page.navigate。
+const XIAOHONGSHU_CANDIDATES: &str = r#"
+(() => {
+  const out = { urls: [] };
+  const add = (raw) => {
+    if (!raw) return;
+    try {
+      const url = new URL(raw, location.origin);
+      if (!/\/explore\/[0-9a-zA-Z]{20,32}/.test(url.pathname) && !/\/discovery\/item\/[0-9a-zA-Z]{20,32}/.test(url.pathname)) return;
+      if (!/[?&]xsec_token=/.test(url.search)) return; // 没 token 的裸链接会 403，直接丢
+      url.hash = '';
+      const full = url.toString();
+      if (!out.urls.includes(full) && out.urls.length < 60) out.urls.push(full);
+    } catch (e) {}
+  };
+  const feedUrl = (id, token) => '/explore/' + id + '?xsec_token=' + encodeURIComponent(token) + '&xsec_source=pc_feed';
+  try {
+    const state = window.__INITIAL_STATE__ || {};
+    const feeds = (state.feed && (state.feed.feeds || state.feed.value)) || state.feeds || [];
+    if (Array.isArray(feeds)) {
+      for (const item of feeds.slice(0, 80)) {
+        const note = item?.noteCard || item?.note || item;
+        const id = note?.noteId || note?.note_id || item?.id;
+        const token = item?.xsecToken || item?.xsec_token || note?.xsecToken || note?.xsec_token;
+        if (typeof id === 'string' && /^[0-9a-zA-Z]{20,32}$/.test(id) && typeof token === 'string' && token) {
+          add(feedUrl(id, token));
+        }
+      }
+    }
+    // 深度兜底：state 里任意对象同时带 noteId + xsecToken 就收
+    const visited = new Set();
+    let budget = 3000;
+    (function walk(node, depth) {
+      if (!node || typeof node !== 'object' || depth > 6 || budget <= 0) return;
+      if (visited.has(node)) return;
+      visited.add(node);
+      budget -= 1;
+      const id = node.noteId || node.note_id;
+      const token = node.xsecToken || node.xsec_token;
+      if (typeof id === 'string' && /^[0-9a-zA-Z]{20,32}$/.test(id) && typeof token === 'string' && token) {
+        add(feedUrl(id, token));
+      }
+      for (const key in node) {
+        if (key === 'noteCard' || key === 'note' || Array.isArray(node[key]) || typeof node[key] === 'object') {
+          walk(node[key], depth + 1);
+        }
+      }
+    })(state, 0);
+  } catch (e) {}
+  for (const link of document.querySelectorAll('a[href*="/explore/"], a[href*="/discovery/item/"]')) {
+    if (out.urls.length >= 60) break;
+    add(link.getAttribute('href') || '');
+  }
+  return out;
+})()
+"#;
+
 pub struct BilibiliAdapter;
+pub struct XiaohongshuAdapter;
 pub struct DouyinAdapter;
 
 pub static BILIBILI: BilibiliAdapter = BilibiliAdapter;
 pub static DOUYIN: DouyinAdapter = DouyinAdapter;
+pub static XIAOHONGSHU: XiaohongshuAdapter = XiaohongshuAdapter;
 
 impl PlatformAdapter for BilibiliAdapter {
     fn id(&self) -> Platform {
@@ -232,6 +396,34 @@ impl PlatformAdapter for DouyinAdapter {
 
     fn interact_script(&self, action: InteractAction) -> Option<&'static str> {
         // 抖音本期只做采集，不提供自动互动脚本。
+        let _ = action;
+        None
+    }
+
+    fn classify_page(&self, facts: &PageFacts) -> PageKind {
+        classify_hints(facts)
+    }
+}
+
+impl PlatformAdapter for XiaohongshuAdapter {
+    fn id(&self) -> Platform {
+        Platform::Xiaohongshu
+    }
+
+    fn feed_url(&self) -> &'static str {
+        Platform::Xiaohongshu.feed_url()
+    }
+
+    fn extract_script(&self) -> &'static str {
+        XIAOHONGSHU_EXTRACT
+    }
+
+    fn candidate_script(&self) -> &'static str {
+        XIAOHONGSHU_CANDIDATES
+    }
+
+    fn interact_script(&self, action: InteractAction) -> Option<&'static str> {
+        // 小红书本期只读采集，不做点赞/收藏。
         let _ = action;
         None
     }
@@ -299,6 +491,12 @@ mod tests {
             assert!(!adapter.candidate_script().contains("scrollBy"));
             assert!(adapter.candidate_script().contains("hrefs"));
         }
+        let xhs = adapter_for(Platform::Xiaohongshu);
+        assert!(xhs.extract_script().contains("imageUrls"));
+        assert!(xhs.extract_script().contains("xsecToken"));
+        assert!(xhs.candidate_script().contains("xsec_token"));
+        assert!(xhs.candidate_script().len() < 4096);
+        assert!(!xhs.candidate_script().contains(".click("));
     }
 
     #[test]

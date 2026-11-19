@@ -26,7 +26,7 @@ pub struct QueuedCandidate {
     pub url: String,
 }
 
-/// 从任意写法里归一化出视频 id（`BV1xx…` / `av123` / 抖音 `123456`）。
+/// 从任意写法里归一化出内容 id（B 站 `BV1xx…`/`av123`、抖音 `123456`、小红书 24 位 hex）。
 pub fn normalize_video_id(raw: &str) -> Option<String> {
     let value = raw.trim();
     if value.len() < 2 || value.len() > 32 {
@@ -50,16 +50,26 @@ pub fn normalize_video_id(raw: &str) -> Option<String> {
     if value.len() >= 5 && value.chars().all(|ch| ch.is_ascii_digit()) {
         return Some(value.to_string());
     }
+    // 小红书 noteId：24 位左右 hex（也允许字母数字混排，长度 20–32）。
+    if (20..=32).contains(&value.len()) && value.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return Some(value.to_string());
+    }
     None
 }
 
 /// 从 URL（含 `?spm_id_from=…`、`#reply`、相对路径）里取视频 id。
 pub fn video_id_from_url(url: &str) -> Option<String> {
     let lower = url.to_ascii_lowercase();
-    let marker = lower.find("/video/")?;
-    let rest = &url[marker + "/video/".len()..];
-    let segment = rest.split(['/', '?', '#']).next().unwrap_or("");
-    normalize_video_id(segment)
+    for marker in ["/video/", "/explore/", "/discovery/item/"] {
+        if let Some(position) = lower.find(marker) {
+            let rest = &url[position + marker.len()..];
+            let segment = rest.split(['/', '?', '#']).next().unwrap_or("");
+            if let Some(id) = normalize_video_id(segment) {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 /// 归一化成可稳定直接导航的详情页 URL（去掉 query / fragment）。
@@ -68,6 +78,7 @@ pub fn canonical_video_url(id: &str, platform: Platform) -> Option<String> {
     let host = match platform {
         Platform::Bilibili => "https://www.bilibili.com/video/",
         Platform::Douyin => "https://www.douyin.com/video/",
+        Platform::Xiaohongshu => "https://www.xiaohongshu.com/explore/",
     };
     Some(format!("{host}{id}"))
 }
@@ -95,6 +106,7 @@ pub fn is_site_title(title: &str) -> bool {
         return true;
     }
     text == "抖音-记录美好生活" || text == "抖音"
+        || text == "小红书" || text == "小红书 - 你的生活兴趣社区"
 }
 
 /// 页面探针（CDP `Runtime.evaluate` 返回值）。
@@ -127,6 +139,7 @@ pub fn fallback_candidate_pages(platform: Platform) -> &'static [&'static str] {
             "https://www.bilibili.com/v/popular/rank/all",
         ],
         Platform::Douyin => &["https://www.douyin.com/"],
+        Platform::Xiaohongshu => &["https://www.xiaohongshu.com/explore"],
     }
 }
 
@@ -255,16 +268,36 @@ impl CandidateQueue {
 
 /// 把页面脚本返回的 `{state:[bvid…], hrefs:[…]}` 转成有序候选：
 /// `__INITIAL_STATE__` 优先，DOM 链接兜底，最后按 id 去重。
+/// 把页面给的相对链接补成绝对地址（保留 query；去掉 fragment）。
+fn absolute_url(raw: &str, platform: Platform) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
+    if without_fragment.starts_with("http://") || without_fragment.starts_with("https://") {
+        return Some(without_fragment.to_string());
+    }
+    if !without_fragment.starts_with('/') {
+        return None;
+    }
+    let host = match platform {
+        Platform::Bilibili => "https://www.bilibili.com",
+        Platform::Douyin => "https://www.douyin.com",
+        Platform::Xiaohongshu => "https://www.xiaohongshu.com",
+    };
+    Some(format!("{host}{without_fragment}"))
+}
+
+/// 解析页面候选：`state`（裸 id）→ `urls`（带 xsec_token 的完整链接，小红书必须用这个）
+/// → `hrefs`（DOM 链接兜底）。按内容 id 去重。
 pub fn parse_candidates(payload: &Value, platform: Platform) -> Vec<QueuedCandidate> {
     let mut result: Vec<QueuedCandidate> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut push = |id: String| {
+    let mut push = |id: String, url: String| {
         if seen.contains(&id) {
             return;
         }
-        let Some(url) = canonical_video_url(&id, platform) else {
-            return;
-        };
         seen.insert(id.clone());
         result.push(QueuedCandidate { id, url });
     };
@@ -273,7 +306,18 @@ pub fn parse_candidates(payload: &Value, platform: Platform) -> Vec<QueuedCandid
         for value in list {
             if let Some(raw) = value.as_str() {
                 if let Some(id) = normalize_video_id(raw) {
-                    push(id);
+                    if let Some(url) = canonical_video_url(&id, platform) {
+                        push(id, url);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(list) = payload.get("urls").and_then(Value::as_array) {
+        for value in list {
+            if let Some(raw) = value.as_str() {
+                if let (Some(id), Some(url)) = (video_id_from_url(raw), absolute_url(raw, platform)) {
+                    push(id, url);
                 }
             }
         }
@@ -282,7 +326,11 @@ pub fn parse_candidates(payload: &Value, platform: Platform) -> Vec<QueuedCandid
         for value in list {
             if let Some(raw) = value.as_str() {
                 if let Some(id) = video_id_from_url(raw) {
-                    push(id);
+                    let url = absolute_url(raw, platform)
+                        .or_else(|| canonical_video_url(&id, platform));
+                    if let Some(url) = url {
+                        push(id, url);
+                    }
                 }
             }
         }

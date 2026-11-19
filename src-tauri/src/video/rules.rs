@@ -29,6 +29,7 @@ pub fn title_matches(title: &str, platform: Platform) -> bool {
     let keywords: &[&str] = match platform {
         Platform::Douyin => &["抖音", "douyin"],
         Platform::Bilibili => &["bilibili", "哔哩哔哩", "b站"],
+        Platform::Xiaohongshu => &["小红书", "xiaohongshu", "rednote"],
     };
     keywords.iter().any(|keyword| title.contains(keyword))
 }
@@ -42,6 +43,7 @@ pub fn is_browser_process(executable: &str, platform: Platform) -> bool {
     match platform {
         Platform::Douyin => executable == "douyin.exe",
         Platform::Bilibili => executable == "bilibili.exe",
+        Platform::Xiaohongshu => false,
     }
 }
 
@@ -101,6 +103,7 @@ pub fn page_key(platform: Platform) -> &'static str {
     match platform {
         Platform::Douyin => "ArrowDown",
         Platform::Bilibili => "PageDown",
+        Platform::Xiaohongshu => "PageDown",
     }
 }
 

@@ -1,6 +1,6 @@
 // 「小狗自主刷视频」的前端类型。运行时窄化在边界处完成，不使用 any。
 
-export type Platform = "bilibili" | "douyin";
+export type Platform = "bilibili" | "douyin" | "xiaohongshu";
 
 export type AgentAccountStatus = "draft" | "awaitingLogin" | "ready" | "paused";
 
@@ -276,7 +276,7 @@ const PHASES: readonly Phase[] = [
   "stopped",
 ];
 
-const PLATFORMS: readonly Platform[] = ["bilibili", "douyin"];
+const PLATFORMS: readonly Platform[] = ["bilibili", "douyin", "xiaohongshu"];
 
 const CAPABILITIES: readonly Capability[] = ["full", "enhanced", "basic"];
 
