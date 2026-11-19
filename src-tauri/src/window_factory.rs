@@ -313,6 +313,21 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
 mod tests {
     use super::*;
 
+    // P0 防回归：设置窗口与 Bongo 都靠懒创建，配置/参数丢了会出现「设置打不开、Bongo 不出现」。
+    #[test]
+    fn settings_and_bongo_specs_stay_registered() {
+        let settings = spec_for("settings").expect("settings spec");
+        assert_eq!(settings.label, "settings");
+        assert_eq!(settings.title, "Maltese · 桌宠设置");
+        assert_eq!(settings.url, "index.html?window=settings");
+        assert!(settings.width >= 460.0 && settings.height >= 560.0);
+        assert!(settings.center);
+
+        let bongo = spec_for("bongo-pet").expect("bongo spec");
+        assert_eq!(bongo.label, "bongo-pet");
+        assert!(bongo.transparent && bongo.always_on_top && !bongo.decorations);
+    }
+
     #[test]
     fn every_spec_has_matching_label_and_url() {
         for label in LAZY_WINDOW_LABELS {
