@@ -76,6 +76,7 @@ pub struct VideoSnapshot {
     /// 最近一条评论（无头/无 UI 场景也能在面板看到）。
     pub last_comment_text: String,
     pub last_comment_dry_run: bool,
+    pub last_comment_verified: bool,
     pub last_comment_at: u64,
     pub started_at: Option<u64>,
     pub ended_at: Option<u64>,
@@ -111,6 +112,7 @@ impl Default for VideoSnapshot {
             comment_dry_run_count: 0,
             last_comment_text: String::new(),
             last_comment_dry_run: false,
+            last_comment_verified: false,
             last_comment_at: 0,
             started_at: None,
             ended_at: None,
@@ -340,6 +342,7 @@ struct RuntimeState {
     comment_dry_run_count: u32,
     last_comment_text: String,
     last_comment_dry_run: bool,
+    last_comment_verified: bool,
     last_comment_at: u64,
     current_url: String,
     waiting_for_browser: bool,
@@ -380,6 +383,7 @@ impl Default for RuntimeState {
             comment_dry_run_count: 0,
             last_comment_text: String::new(),
             last_comment_dry_run: false,
+            last_comment_verified: false,
             last_comment_at: 0,
             current_url: String::new(),
             waiting_for_browser: false,
@@ -524,6 +528,25 @@ fn sanitize_comment(raw: &str) -> String {
 fn comment_bubble(title: &str, comment: &str) -> String {
     let short: String = title.trim().chars().take(12).collect();
     format!("刚给《{short}》评论了一句：{comment}")
+}
+
+/// 评论回读匹配：去掉空白与标点后做子串匹配（容忍页面截断/换行差异）。
+pub fn comment_in_text(page_text: &str, comment: &str) -> bool {
+    fn normalize(value: &str) -> String {
+        value
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && !ch.is_ascii_punctuation())
+            .filter(|ch| !matches!(ch, '，' | '。' | '！' | '？' | '：' | '；' | '、' | '…' | '“' | '”' | '‘' | '’' | '（' | '）' | '《' | '》'))
+            .collect::<String>()
+    }
+    let page = normalize(page_text);
+    let target = normalize(comment);
+    if target.is_empty() || page.is_empty() {
+        return false;
+    }
+    // 页面可能显示不全：取评论前 60% 做匹配，兼顾短评论。
+    let probe: String = target.chars().take((target.chars().count() * 3 / 5).max(4)).collect();
+    page.contains(&probe)
 }
 
 /// N5：把页面强制带进视频详情页（三段降级）。
@@ -695,6 +718,7 @@ impl SessionEngine {
             let mut state = lock_state(&self.state);
             state.last_comment_text = text.to_string();
             state.last_comment_dry_run = true;
+            state.last_comment_verified = false;
             state.last_comment_at = now;
         }
         let _ = app.emit(
@@ -735,6 +759,7 @@ impl SessionEngine {
             comment_dry_run_count: state.comment_dry_run_count,
             last_comment_text: state.last_comment_text.clone(),
             last_comment_dry_run: state.last_comment_dry_run,
+            last_comment_verified: state.last_comment_verified,
             last_comment_at: state.last_comment_at,
             started_at: if state.started_at == 0 {
                 None
@@ -2828,5 +2853,18 @@ mod tests {
         let id = new_session_id(Platform::Bilibili);
         assert!(id.starts_with("bili-"));
         assert!(id.rsplit('-').next().unwrap_or("").len() == 6);
+    }
+}
+
+#[cfg(test)]
+mod comment_match_tests {
+    use super::comment_in_text;
+
+    #[test]
+    fn comment_in_text_matches() {
+        assert!(comment_in_text("\u{6211}\u{53d1}\u{4e86}\u{ff1a}\u{8fd9}\u{4e2a}\u{8bb2}\u{5f97}\u{633a}\u{7ec6}\u{7684}\u{ff0c}\u{5148}\u{7801}\u{4f4f}\u{3002}", "\u{8fd9}\u{4e2a}\u{8bb2}\u{5f97}\u{633a}\u{7ec6}\u{7684}\u{ff0c}\u{5148}\u{7801}\u{4f4f}\u{3002}"));
+        assert!(comment_in_text("\u{8fd9}\u{4e2a}\u{8bb2}\u{5f97}\u{633a}\u{7ec6}\u{7684}\u{5148}\u{7801}\u{4f4f}", "\u{8fd9}\u{4e2a}\u{8bb2}\u{5f97}\u{633a}\u{7ec6}\u{7684}\u{ff0c}\u{5148}\u{7801}\u{4f4f}\u{3002}"));
+        assert!(!comment_in_text("\u{5b8c}\u{5168}\u{4e0d}\u{540c}\u{7684}\u{8bc4}\u{8bba}", "\u{8fd9}\u{4e2a}\u{8bb2}\u{5f97}\u{633a}\u{7ec6}\u{7684}\u{ff0c}\u{5148}\u{7801}\u{4f4f}\u{3002}"));
+        assert!(!comment_in_text("", "x"));
     }
 }
