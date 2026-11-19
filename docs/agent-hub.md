@@ -235,7 +235,27 @@ AgentConsole.tsx  --invoke--> agent_hub.rs --spawn--> codex / claude / doubao ..
 - 不做 agent 配置的 UI 编辑器：直接改 `config.json` + 刷新。
 - 不做流式增量「打字机」渲染：stdout 按行拼接到 `<pre>`，最后用完整输出替换。
 
-## 10. 验证记录（2026-11-19，本机）
+## 11. P0：主线程阻塞排查（2026-11-19）
+
+用户报「实例卡死（Responding=False、CPU 0.97s）」后对 agent-hub 做的只读排查 + 加固：
+
+**结论：agent-hub 不阻塞 Tauri 主线程。** 依据：
+
+1. **7 个命令全部是 `async fn`**。Tauri 只会把异步命令放到 async runtime；同步命令才会在 main thread 执行。
+   - `agent_run` / `agent_pipeline` / `agent_pipeline_run` 从一开始就是 async；
+   - 本轮把 `get_agent_registry` / `agent_hub_status` / `agent_hub_usage` / `agent_cancel` 从同步命令改成 async，并把 IO/等待放进 `spawn_blocking`。
+2. **阻塞调用全部在 blocking 线程**：`run_one_blocking`（`thread::sleep` 轮询 `try_wait`、`taskkill` 的 `status()`、2s `recv_timeout`）只在 `spawn_blocking` 里执行；`agent_cancel` 的 `taskkill` 也在 `spawn_blocking`；日志读写、PATH 扫描都在 blocking 线程。
+3. **锁清单与顺序**（全为 `std::sync::Mutex`，`MutexGuard` 都不跨 `.await`，也不在持锁时做 IO）：
+   - `RUNNING`（谁在跑）、`QUEUE`（排队数）、`RECENT_ERRORS`（最近错误）、`PROBE_CACHE`（探测缓存）。
+   - 旧代码里 `build_registry` 会同时持有 `RUNNING + QUEUE` 去扫 PATH；本轮改为**先拷快照、立刻释放锁**再探测，避免「主线程拿锁 + 探测慢 IO」把 `agent_run` 的清理线程顶住。
+   - 没有交叉锁等待：`RUNNING → RECENT_ERRORS` 是一致的单向顺序；`PROBE_CACHE` 只在拷贝/插入时短暂持有，解析可执行文件时已释放。
+4. **管道**：`stdout`/`stderr` 在 spawn 后立刻各起一个读取线程逐行消费（`BufReader::read_line` + 事件推送），再 `try_wait` 轮询；不会出现「父进程不读 pipe、子进程写满 64KB 卡住」。
+5. **启动路径**：应用启动 / 托盘 / 岛初始页（`todo`）都不会调用 agent-hub；只有打开「Agent」页签或聊天触发 `agent_registry`/`agent_status` 才访问本模块。因此「开机即卡死」不可能由本模块引起。
+6. `codex` 在本机受限会话里的 `failed to initialize in-process app-server client: 拒绝访问 (os error 5)` 是子进程自身启动失败（1.2s 内返回并写 `end` 日志），**不是卡死**；claude 可正常跑。
+
+如果之后再出现卡死，可按「文件:行」核对：本模块已无同步命令、无持锁 IO、无 `block_on`、无未消费管道。
+
+## 12. 验证记录（2026-11-19，本机）
 
 | 项 | 结果 |
 | --- | --- |
@@ -259,3 +279,98 @@ cargo test --lib agent_hub::tests::real_pipeline_claude_twice -- --ignored --noc
 # 两步流水线（codex → claude，需要 codex 能在当前会话里起 app-server）
 cargo test --lib agent_hub::tests::real_pipeline_codex_then_claude -- --ignored --nocapture
 ```
+## 13. 桌面 Agent 监控（2026-11-19 方向变更：监控桌面端而不是 CLI）
+
+用户明确目标是「**agent 要监控桌面端而不是 CLI**」。因此控制台主视图改为「桌面 Agent 状态」，
+`agent_hub.rs` 的 CLI 适配器保留但降级为「高级：命令行 Agent」折叠区。
+
+### 13.1 探测实现（Rust `src-tauri/src/desktop_agents.rs`）
+
+- 只读枚举：`EnumWindows` → 跳过不可见、`WS_EX_TOOLWINDOW` 工具窗口、有 owner 的弹窗、空标题、
+  本进程窗口；`GetWindowThreadProcessId` 拿 PID，`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` +
+  `QueryFullProcessImageNameW` 拿进程名。
+- 标题用 `GetWindowTextLengthW` + `GetWindowTextW`，上限 200 字符、原始长度超过 4096 直接跳过；
+  顶层窗口最多检查 800 个。
+- 匹配规则：进程名（去 `.exe`、大小写不敏感）**或** 窗口标题包含配置片段（给壳应用兜底）。
+  标题匹配带**词边界**校验（避免 `Qwen` 命中 `monitor-qwen36.ps1 - Notepad` 这类误报）。
+- 输出每个 agent：`running / processCount / pids / windowTitle / matchedProcess / isForeground /
+  foregroundSeconds / lastActiveAgoSeconds`；另外返回当前前台窗口 `foreground`。
+- 活跃时间：进程内静态表记录「上次前台时间 / 本次前台起点」，不落盘；重启后重新计。
+
+### 13.2 白名单配置
+
+`%APPDATA%\com.maolouis.maltese\agent-hub\config.json` 增加 `desktopAgents[]`；**空数组/缺字段时用内置默认表**
+（Claude / ChatGPT / Cursor / 豆包 / 通义 / Copilot / Codex）。自定义示例：
+
+```json
+{
+  "desktopAgents": [
+    {
+      "id": "claude-desktop",
+      "displayName": "Claude",
+      "processNames": ["claude", "claude-desktop"],
+      "windowTitlePatterns": ["Claude"]
+    },
+    {
+      "id": "my-assistant",
+      "displayName": "我的助手",
+      "processNames": ["my-assistant.exe"],
+      "windowTitlePatterns": ["我的助手"]
+    }
+  ]
+}
+```
+
+改完点控制台「刷新」（会强制重新枚举，3s 缓存被绕过）。
+
+### 13.3 聚焦行为（只聚焦，不注入）
+
+`desktop_agent_focus(id)`：找到该 agent 的可见顶层窗口 → 最小化则 `ShowWindow(SW_RESTORE)` →
+`SetForegroundWindow`；被前台锁拒绝时依次尝试 `BringWindowToTop` 再 `SetForegroundWindow`、
+`AttachThreadInput`（临时把自己的输入队列挂到当前前台线程再抢前台）、
+最后 `SwitchToThisWindow`（托盘/启动器兼容入口），然后以 `GetForegroundWindow` 校验。
+**没有 sleep 轮询、没有模拟按键/鼠标、没有 UI 点击**；找不到窗口立即返回中文「未启动」，
+聚焦失败返回「系统拒绝把「X」切到前台（可能被前台锁定）」。
+未运行的应用在卡片上显示「未启动」，点聚焦只提示原因。
+
+### 13.4 性能与 P0（不阻塞 UI）
+
+- 命令全部是 `async fn` + `spawn_blocking`，不在 Tauri main thread 枚举窗口；
+- 结果缓存 3s：`desktop_agents_status(refresh=false)` 命中缓存直接返回（带 `cached:true`）；
+- 每次枚举返回 `enumerationMs`，控制台卡片右上角直接显示；
+- 命令入口用 `Instant` 计时，>200ms 写 `SLOW_COMMAND` 到 `agent-hub/logs/agent-<date>.jsonl`
+  （同时覆盖 CLI 命令：`agent_run`、`agent_pipeline`、`agent_pipeline_run`、`get_agent_registry` 等）；
+- `SetForegroundWindow` 也在 `spawn_blocking`，失败立即返回中文原因。
+
+### 13.5 控制台与对话
+
+- ③ 工作分配：**桌面 Agent**（运行状态/窗口标题/前台时长/最近活跃/PID 数 + 聚焦按钮）+
+  **内部模块**（聊天、主动聊天、视频采集、日报投递、翻译）。
+- 「高级：命令行 Agent」默认收起，里面是原来的 CLI 卡片与流水线，不影响桌面监控首屏。
+- 只读技能新增 `desktop_agents_status`（「现在开了哪些 AI 应用」「我在用哪个」）；
+  `agent_status` 改为汇总「命令行 agent + 桌面 AI 应用」。
+
+### 13.6 为什么不输入注入
+
+桌面 AI 应用的输入框属于用户私有交互面：自动点击/输入会带来误发消息、破坏上下文、
+绕过应用自身权限提示等风险，也无法保证跨应用稳定。需求只要求「状态监控 + 聚焦」，
+所以本模块只做只读枚举与 `SetForegroundWindow`，后续也不计划加入键鼠注入。
+
+### 13.7 实机记录（2026-11-19，本机）
+
+- 枚举结果（`cargo test --lib desktop_agents::tests::real_list_and_focus -- --ignored --nocapture`）：
+  ChatGPT 运行中（PID 26912，窗口「ChatGPT」）、豆包运行中（`Doubao.exe`，PID 41616，窗口「部署 - 豆包」），
+  Claude / Cursor / Copilot / Codex 未启动。单次枚举 **2–3ms**；连续刷新 10 次每次 **0–1ms**
+  （`refresh 1..10: 1/0/0/1/1/1/1/0/1/0 ms`）。
+- 误报修复：最初 `通义` 的白名单标题片段 `Qwen` 命中了记事本窗口 `monitor-qwen36.ps1 - Notepad`；
+  改为词边界匹配后不再误报（另有单测 `title_matching_respects_word_boundaries`）。
+- 聚焦：后台测试进程不是前台进程，`SetForegroundWindow` 被 Windows 前台锁拒绝并返回中文原因
+  （符合「失败立即返回原因」的设计）；真实使用中点卡片上的「聚焦」时本应用是前台进程，
+  走同一条 `ShowWindow/SetForegroundWindow/AttachThreadInput/SwitchToThisWindow` 链路。
+  这一条需要人工在 UI 上点一次确认（见「未验证」）。
+- 应用启动限制：本 DSH 会话对 `%APPDATA%` 没有写权限（`os error 5`），
+  启动 release 包会在 `Failed to setup app: 拒绝访问` 退出，因此**无法在本会话里点 UI**；
+  枚举/聚焦代码用 `cargo test` 直接验证（不依赖 Tauri AppHandle）。正常用户会话不受影响。
+- `SLOW_COMMAND`：命令入口耗时 >200ms 才写日志，格式
+  `{"event":"SLOW_COMMAND","command":"desktop_agents_status","durationMs":123}`；
+  正常枚举 2–3ms 不会触发，缓存命中路径更不会触发。

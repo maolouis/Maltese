@@ -32,6 +32,7 @@ mod video_rules;
 mod window_factory;
 mod actions;
 mod agent_hub;
+mod desktop_agents;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5882,6 +5883,8 @@ pub fn run() {
             agent_hub::agent_cancel,
             agent_hub::agent_pipeline,
             agent_hub::agent_pipeline_run,
+            desktop_agents::desktop_agents_status,
+            desktop_agents::desktop_agent_focus,
         ])
         .build(context)
         .expect("error while building Maltese")

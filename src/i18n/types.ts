@@ -307,6 +307,26 @@ export type Translations = {
     pipelineFailed: string;
     dataSource: (time: string) => string;
     logHint: (path: string) => string;
+    desktopTitle: string;
+    desktopHint: string;
+    desktopEmpty: string;
+    desktopNotRunning: string;
+    desktopFocus: string;
+    desktopFocused: (name: string) => string;
+    desktopWindow: (title: string) => string;
+    desktopForeground: (seconds: number) => string;
+    desktopLastActive: (seconds: number | null) => string;
+    desktopPids: (count: number) => string;
+    internalTitle: string;
+    internalChat: string;
+    internalProactive: (level: number) => string;
+    internalVideo: string;
+    internalDigest: (pending: number) => string;
+    internalTranslate: string;
+    internalReady: string;
+    internalIdle: string;
+    advancedTitle: string;
+    advancedHint: string;
   };
 
   agent: {

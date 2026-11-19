@@ -469,3 +469,101 @@
   line-height: 1.45;
   word-break: break-all;
 }
+/* 桌面 Agent / 内部模块分组 */
+.agent-console-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  margin-top: 6px;
+  border-top: 1px dashed rgba(120, 205, 150, 0.3);
+}
+
+.agent-console-group:first-of-type {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.agent-console-group__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-console-group__head strong {
+  font-size: 12px;
+}
+
+.agent-console-group__hint {
+  font-size: 10px;
+  line-height: 1.45;
+  opacity: 0.6;
+}
+
+.agent-console-internal {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-console-internal li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.4);
+  font-size: 10.5px;
+}
+
+.agent-console-internal li strong {
+  font-weight: 600;
+}
+
+.agent-console-internal li span {
+  margin-left: auto;
+  opacity: 0.78;
+}
+
+.agent-console-internal li em {
+  font-style: normal;
+  opacity: 0.55;
+}
+
+/* 高级 CLI 折叠区 */
+.agent-console-advanced {
+  border-radius: 12px;
+  border: 1px solid rgba(120, 120, 120, 0.26);
+  background: rgba(120, 120, 120, 0.06);
+  padding: 6px 10px 10px;
+}
+
+.agent-console-advanced > summary {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.agent-console-advanced > summary strong {
+  font-size: 12px;
+}
+
+.agent-console-advanced > summary span {
+  font-size: 10px;
+  opacity: 0.6;
+  line-height: 1.45;
+}
+
+.agent-console-advanced[open] > summary {
+  margin-bottom: 6px;
+}
+
+.agent-console-advanced .agent-console-agents {
+  margin-bottom: 8px;
+}

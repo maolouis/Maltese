@@ -27,6 +27,7 @@ export type SkillAction =
   | "clipboard_write"
   | "agent_registry"
   | "agent_status"
+  | "desktop_agents_status"
   | "current_time";
 
 export type SkillDefinition = {
@@ -146,6 +147,13 @@ export const SKILLS: SkillDefinition[] = [
     example: '{"tool":"clipboard_write","args":{"text":"要复制的文字"}}',
   },
   {
+    action: "desktop_agents_status",
+    group: "agent",
+    title: "看开了哪些 AI 应用",
+    description: "列出桌面白名单里正在运行的 AI 助手（Claude/ChatGPT/Cursor/豆包等）、窗口标题，以及你现在正在用哪个",
+    example: '{"tool":"desktop_agents_status","args":{}}',
+  },
+  {
     action: "agent_registry",
     group: "agent",
     title: "看有哪些 agent",
@@ -219,7 +227,7 @@ const NEW_SKILL_ACTIONS: SkillAction[] = [
 
 /** Agent Hub 只读技能：单独一个迁移键，避免影响上面那批老迁移。 */
 const AGENT_SKILLS_MIGRATION_KEY = "maltese-skills-migrated-20261119";
-const AGENT_SKILL_ACTIONS: SkillAction[] = ["agent_registry", "agent_status"];
+const AGENT_SKILL_ACTIONS: SkillAction[] = ["agent_registry", "agent_status", "desktop_agents_status"];
 
 export function loadEnabledSkills(): SkillAction[] {
   const stored = readJson<SkillAction[] | null>(SKILLS_STORAGE_KEY, null);
@@ -559,6 +567,38 @@ ${text}` };
         await invoke("set_clipboard_text", { text });
         return { ok: true, message: "已经放进剪贴板。" };
       }
+      case "desktop_agents_status": {
+        const snapshot = await invoke<{
+          agents: Array<{
+            id: string;
+            displayName: string;
+            running: boolean;
+            windowTitle: string | null;
+            isForeground: boolean;
+            lastActiveAgoSeconds: number | null;
+          }>;
+          foreground: { displayName?: string; title: string; agentId: string | null } | null;
+        }>("desktop_agents_status", { refresh: false });
+        const running = snapshot.agents.filter((agent) => agent.running);
+        if (running.length === 0) {
+          const names = snapshot.agents.map((agent) => agent.displayName).join("、");
+          return { ok: true, message: `现在没有开着白名单里的 AI 应用（${names}）。` };
+        }
+        const lines = [
+          `开着 ${running.length} 个：${running
+            .map((agent) => `${agent.displayName}${agent.windowTitle ? `（${agent.windowTitle}）` : ""}`)
+            .join("、")}。`,
+        ];
+        const foreground = running.find((agent) => agent.isForeground);
+        if (foreground) {
+          lines.push(`你现在正在用：${foreground.displayName}。`);
+        } else if (snapshot.foreground?.title) {
+          lines.push(`当前前台是「${snapshot.foreground.title}」，不在白名单里。`);
+        } else {
+          lines.push("当前没有前台窗口。");
+        }
+        return { ok: true, message: lines.join("") };
+      }
       case "agent_registry": {
         const registry = await invoke<{
           agents: Array<{
@@ -588,22 +628,28 @@ ${text}` };
         return { ok: true, message: lines.join("\n") };
       }
       case "agent_status": {
-        const status = await invoke<{
-          running: Array<{ agentId: string; agentName: string; promptPreview: string; startedAt: number }>;
-          queue: Record<string, number>;
-          recentErrors: Array<{ at: number; agentId: string; message: string }>;
-        }>("agent_hub_status");
+        const [status, desktop] = await Promise.all([
+          invoke<{
+            running: Array<{ agentId: string; agentName: string; promptPreview: string; startedAt: number }>;
+            queue: Record<string, number>;
+            recentErrors: Array<{ at: number; agentId: string; message: string }>;
+          }>("agent_hub_status"),
+          invoke<{
+            agents: Array<{ displayName: string; running: boolean; isForeground: boolean; windowTitle: string | null }>;
+            foreground: { title: string; agentId: string | null } | null;
+          }>("desktop_agents_status", { refresh: false }).catch(() => null),
+        ]);
+        const parts: string[] = [];
         const queueTotal = Object.values(status.queue).reduce((sum, value) => sum + value, 0);
-        if (status.running.length === 0 && queueTotal === 0) {
-          return { ok: true, message: "现在没有 agent 在跑。" };
+        if (status.running.length > 0) {
+          const runningText = status.running
+            .map((entry) => {
+              const startedAt = entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+              return `${entry.agentName}（${startedAt} 开始）`;
+            })
+            .join("、");
+          parts.push(`命令行 agent 正在跑 ${status.running.length} 个：${runningText}`);
         }
-        const runningText = status.running
-          .map((entry) => {
-            const startedAt = entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString("zh-CN", { hour12: false }) : "";
-            return `${entry.agentName}（${startedAt} 开始）`;
-          })
-          .join("、");
-        const parts = [`正在跑 ${status.running.length} 个：${runningText || "—"}`];
         if (queueTotal > 0) {
           const queueText = Object.entries(status.queue)
             .filter(([, count]) => count > 0)
@@ -615,6 +661,20 @@ ${text}` };
           const last = status.recentErrors[status.recentErrors.length - 1];
           parts.push(`最近错误：${last.message}`);
         }
+        if (desktop) {
+          const desktopRunning = desktop.agents.filter((agent) => agent.running);
+          if (desktopRunning.length > 0) {
+            const foreground = desktopRunning.find((agent) => agent.isForeground);
+            parts.push(
+              `桌面 AI 应用开着 ${desktopRunning.length} 个：${desktopRunning.map((agent) => agent.displayName).join("、")}${
+                foreground ? `（前台：${foreground.displayName}）` : ""
+              }`,
+            );
+          } else {
+            parts.push("桌面没有开着白名单里的 AI 应用");
+          }
+        }
+        if (parts.length === 0) return { ok: true, message: "现在没有 agent 在跑，也没有开着的桌面 AI 应用。" };
         return { ok: true, message: parts.join("；") };
       }
       case "current_time": {

@@ -125,11 +125,15 @@ fn default_enabled() -> bool {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct HubConfig {
+pub(crate) struct HubConfig {
     #[serde(default)]
     agents: Vec<AgentSpec>,
     #[serde(default)]
     pipelines: Vec<PipelineSpec>,
+    /// 桌面 AI 助手白名单（Claude / ChatGPT / Cursor / 豆包 …）。
+    /// 空数组 = 使用 desktop_agents 模块的内置默认列表。
+    #[serde(default)]
+    pub(crate) desktop_agents: Vec<crate::desktop_agents::DesktopAgentSpec>,
 }
 
 /// 返回给前端的 agent 卡片数据。
@@ -275,14 +279,14 @@ fn now_ms() -> u64 {
 // 配置加载 / 权限校验 / 可执行文件探测
 // ---------------------------------------------------------------------------
 
-fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|dir| dir.join(CONFIG_DIR))
         .map_err(|error| format!("无法定位应用数据目录：{error}"))
 }
 
-fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
     config_dir(app).map(|dir| dir.join(LOG_DIR))
 }
 
@@ -386,10 +390,11 @@ fn seed_config() -> HubConfig {
                 ],
             },
         ],
+        desktop_agents: crate::desktop_agents::default_desktop_agents(),
     }
 }
 
-fn read_or_seed_config(dir: &Path) -> Result<HubConfig, String> {
+pub(crate) fn read_or_seed_config(dir: &Path) -> Result<HubConfig, String> {
     std::fs::create_dir_all(dir)
         .map_err(|error| format!("无法创建 agent 配置目录：{error}"))?;
     let path = dir.join(CONFIG_FILE);
@@ -540,8 +545,23 @@ fn last_error_for(agent_id: &str) -> Option<String> {
 
 fn build_registry(dir: &Path) -> Result<RegistrySnapshot, String> {
     let config = read_or_seed_config(dir)?;
-    let running = running_map();
-    let queue = queue_map();
+    // 先在锁内把「谁在跑 / 队列」拷成快照，立刻释放锁；
+    // 探测（读 PATH、stat 可执行文件）可能很慢，绝不能在持有 RUNNING/QUEUE 时做。
+    let running_snapshot: Vec<(String, String)> = {
+        let guard = running_map();
+        guard
+            .as_ref()
+            .map(|map| {
+                map.values()
+                    .map(|entry| (entry.agent_id.clone(), entry.prompt_preview.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let queue_snapshot: HashMap<String, usize> = {
+        let guard = queue_map();
+        guard.clone().unwrap_or_default()
+    };
     let agents = config
         .agents
         .iter()
@@ -551,19 +571,14 @@ fn build_registry(dir: &Path) -> Result<RegistrySnapshot, String> {
             } else {
                 (false, None, Some("已在配置里禁用（enabled: false）。".into()))
             };
-            let is_running = running
-                .as_ref()
-                .map(|map| map.values().any(|entry| entry.agent_id == spec.id))
-                .unwrap_or(false);
-            let queue_length = queue
-                .as_ref()
-                .and_then(|map| map.get(&spec.id).copied())
-                .unwrap_or(0);
-            let prompt_preview = running.as_ref().and_then(|map| {
-                map.values()
-                    .find(|entry| entry.agent_id == spec.id)
-                    .map(|entry| entry.prompt_preview.clone())
-            });
+            let is_running = running_snapshot
+                .iter()
+                .any(|(agent_id, _)| *agent_id == spec.id);
+            let queue_length = queue_snapshot.get(&spec.id).copied().unwrap_or(0);
+            let prompt_preview = running_snapshot
+                .iter()
+                .find(|(agent_id, _)| *agent_id == spec.id)
+                .map(|(_, preview)| preview.clone());
             AgentInfo {
                 id: spec.id.clone(),
                 display_name: spec.display_name.clone(),
@@ -659,7 +674,7 @@ fn log_path_for(log_dir: &Path, date: &str) -> PathBuf {
 }
 
 /// 追加一行 JSONL。日志失败只 eprintln，不影响 agent 运行。
-fn append_log(log_dir: &Path, entry: &Value) -> PathBuf {
+pub(crate) fn append_log(log_dir: &Path, entry: &Value) -> PathBuf {
     let (date, time) = local_parts();
     let path = log_path_for(log_dir, &date);
     if let Some(parent) = path.parent() {
@@ -680,6 +695,25 @@ fn append_log(log_dir: &Path, entry: &Value) -> PathBuf {
         Err(error) => eprintln!("agent-hub: 无法写日志 {}：{error}", path.display()),
     }
     path
+}
+
+/// P0 性能留痕：命令入口耗时 >200ms 时写一条 `SLOW_COMMAND` 到当天 jsonl。
+/// 只记命令名与耗时，不记参数内容。
+pub(crate) fn log_slow_command(app: &AppHandle, command: &str, duration_ms: u128) {
+    if duration_ms < 200 {
+        return;
+    }
+    let Ok(directory) = logs_dir(app) else {
+        return;
+    };
+    append_log(
+        &directory,
+        &json!({
+            "event": "SLOW_COMMAND",
+            "command": command,
+            "durationMs": duration_ms as u64,
+        }),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1331,39 +1365,59 @@ fn auto_stream_id(agent_id: &str) -> String {
 // 命令：注册表 / 状态 / 用量
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub fn get_agent_registry(app: AppHandle, refresh: Option<bool>) -> Result<RegistrySnapshot, String> {
-    if refresh.unwrap_or(false) {
-        let mut guard = PROBE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = None;
-    }
-    let dir = config_dir(&app)?;
-    build_registry(&dir)
+fn clear_probe_cache() {
+    let mut guard = PROBE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = None;
 }
 
+/// 注册表：**异步命令**。PATH 扫描 / stat 可执行文件都放进 blocking 线程，
+/// 绝不在 main thread（Tauri 同步命令的执行线程）里做 IO。
 #[tauri::command]
-pub fn agent_hub_status() -> AgentHubStatus {
-    let running = running_map()
-        .as_ref()
-        .map(|map| {
-            map.values()
-                .map(|entry| RunningAgentInfo {
-                    stream_id: entry.stream_id.clone(),
-                    agent_id: entry.agent_id.clone(),
-                    agent_name: entry.agent_name.clone(),
-                    pid: entry.pid,
-                    started_at: entry.started_at,
-                    prompt_preview: entry.prompt_preview.clone(),
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let queue = queue_map().clone().unwrap_or_default();
-    let recent_errors = RECENT_ERRORS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        .unwrap_or_default();
+pub async fn get_agent_registry(
+    app: AppHandle,
+    refresh: Option<bool>,
+) -> Result<RegistrySnapshot, String> {
+    let started = Instant::now();
+    let dir = config_dir(&app)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if refresh.unwrap_or(false) {
+            clear_probe_cache();
+        }
+        build_registry(&dir)
+    })
+    .await
+    .map_err(|error| format!("agent 注册表线程失败：{error}"))?;
+    log_slow_command(&app, "get_agent_registry", started.elapsed().as_millis());
+    result
+}
+
+fn status_snapshot() -> AgentHubStatus {
+    let running = {
+        let guard = running_map();
+        guard
+            .as_ref()
+            .map(|map| {
+                map.values()
+                    .map(|entry| RunningAgentInfo {
+                        stream_id: entry.stream_id.clone(),
+                        agent_id: entry.agent_id.clone(),
+                        agent_name: entry.agent_name.clone(),
+                        pid: entry.pid,
+                        started_at: entry.started_at,
+                        prompt_preview: entry.prompt_preview.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let queue = {
+        let guard = queue_map();
+        guard.clone().unwrap_or_default()
+    };
+    let recent_errors = {
+        let guard = RECENT_ERRORS.lock().unwrap_or_else(|e| e.into_inner());
+        guard.clone().unwrap_or_default()
+    };
     AgentHubStatus {
         running,
         queue,
@@ -1372,10 +1426,22 @@ pub fn agent_hub_status() -> AgentHubStatus {
 }
 
 #[tauri::command]
-pub fn agent_hub_usage(app: AppHandle) -> Result<AgentUsageSummary, String> {
-    let log_dir = logs_dir(&app)?;
+pub async fn agent_hub_status(app: AppHandle) -> AgentHubStatus {
+    let started = Instant::now();
+    let status = tauri::async_runtime::spawn_blocking(status_snapshot)
+        .await
+        .unwrap_or_else(|_| AgentHubStatus {
+            running: Vec::new(),
+            queue: HashMap::new(),
+            recent_errors: Vec::new(),
+        });
+    log_slow_command(&app, "agent_hub_status", started.elapsed().as_millis());
+    status
+}
+
+fn usage_summary(log_dir: &Path) -> Result<AgentUsageSummary, String> {
     let (date, _) = local_parts();
-    let path = log_path_for(&log_dir, &date);
+    let path = log_path_for(log_dir, &date);
     let mut summary = AgentUsageSummary {
         date: date.clone(),
         log_path: path.display().to_string(),
@@ -1420,6 +1486,17 @@ pub fn agent_hub_usage(app: AppHandle) -> Result<AgentUsageSummary, String> {
     Ok(summary)
 }
 
+#[tauri::command]
+pub async fn agent_hub_usage(app: AppHandle) -> Result<AgentUsageSummary, String> {
+    let started = Instant::now();
+    let log_dir = logs_dir(&app)?;
+    let result = tauri::async_runtime::spawn_blocking(move || usage_summary(&log_dir))
+        .await
+        .map_err(|error| format!("agent 用量统计线程失败：{error}"))?;
+    log_slow_command(&app, "agent_hub_usage", started.elapsed().as_millis());
+    result
+}
+
 // ---------------------------------------------------------------------------
 // 命令：单 agent 运行 / 取消
 // ---------------------------------------------------------------------------
@@ -1431,8 +1508,13 @@ pub async fn agent_run(
     prompt: String,
     stream_id: Option<String>,
 ) -> Result<AgentRunResult, String> {
+    let started = Instant::now();
     let dir = config_dir(&app)?;
-    let (spec, resolved) = find_agent(&dir, &agent_id)?;
+    // 解析命令 = PATH 扫描 + stat，放到 blocking 线程；async 命令的 worker 也不该做 IO。
+    let probe_dir = dir.clone();
+    let (spec, resolved) = tauri::async_runtime::spawn_blocking(move || find_agent(&probe_dir, &agent_id))
+        .await
+        .map_err(|error| format!("agent 探测线程失败：{error}"))??;
     let stream = stream_id
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| auto_stream_id(&spec.id));
@@ -1443,7 +1525,7 @@ pub async fn agent_run(
     let stream_for_task = stream.clone();
     let prompt_for_task = prompt.clone();
     let log_dir_for_task = log_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         run_one_blocking(
             emit_app,
             &log_dir_for_task,
@@ -1454,21 +1536,38 @@ pub async fn agent_run(
         )
     })
     .await
-    .map_err(|error| format!("agent 运行线程失败：{error}"))
+    .map_err(|error| format!("agent 运行线程失败：{error}"));
+    log_slow_command(&app, "agent_run", started.elapsed().as_millis());
+    result
 }
 
+/// 取消：锁内只置标记 / 取 pid，`taskkill`（同步等待）放到 blocking 线程，
+/// 避免阻塞 main thread；返回是否真的杀到了进程。
 #[tauri::command]
-pub fn agent_cancel(stream_id: String) -> bool {
-    let guard = running_map();
-    let Some(map) = guard.as_ref() else {
+pub async fn agent_cancel(app: AppHandle, stream_id: String) -> bool {
+    let started = Instant::now();
+    let target = {
+        let guard = running_map();
+        guard.as_ref().and_then(|map| {
+            map.get(&stream_id).map(|entry| {
+                entry.cancel.store(true, Ordering::SeqCst);
+                (entry.agent_id.clone(), entry.pid)
+            })
+        })
+    };
+    let Some((agent_id, pid)) = target else {
+        log_slow_command(&app, "agent_cancel", started.elapsed().as_millis());
         return false;
     };
-    let Some(entry) = map.get(&stream_id) else {
+    push_recent_error(&agent_id, "用户取消了这次运行。");
+    let Some(pid) = pid else {
+        log_slow_command(&app, "agent_cancel", started.elapsed().as_millis());
         return false;
     };
-    entry.cancel.store(true, Ordering::SeqCst);
-    let killed = entry.pid.map(kill_process_tree).unwrap_or(false);
-    push_recent_error(&entry.agent_id, "用户取消了这次运行。");
+    let killed = tauri::async_runtime::spawn_blocking(move || kill_process_tree(pid))
+        .await
+        .unwrap_or(false);
+    log_slow_command(&app, "agent_cancel", started.elapsed().as_millis());
     killed
 }
 
@@ -1510,6 +1609,7 @@ pub async fn agent_pipeline(
     pipeline_id: Option<String>,
 ) -> Result<PipelineResult, String> {
     validate_steps(&steps)?;
+    let started = Instant::now();
     let dir = config_dir(&app)?;
     let run = pipeline_run_id(run_id);
     let pipeline_label = pipeline_id.unwrap_or_else(|| "custom".into());
@@ -1529,7 +1629,12 @@ pub async fn agent_pipeline(
                 "streamId": stream,
             }),
         );
-        let (spec, resolved) = match find_agent(&dir, &step.agent_id) {
+        let probe_dir = dir.clone();
+        let probe_id = step.agent_id.clone();
+        let probe = tauri::async_runtime::spawn_blocking(move || find_agent(&probe_dir, &probe_id))
+            .await
+            .map_err(|error| format!("第 {} 步探测线程失败：{error}", index + 1))?;
+        let (spec, resolved) = match probe {
             Ok(value) => value,
             Err(message) => {
                 first_error = Some(format!("第 {} 步失败：{message}", index + 1));
@@ -1607,12 +1712,14 @@ pub async fn agent_pipeline(
         }
         prev = result.output;
     }
-    Ok(PipelineResult {
+    let output = PipelineResult {
         ok: first_error.is_none(),
         run_id: run,
         steps: results,
         error: first_error,
-    })
+    };
+    log_slow_command(&app, "agent_pipeline", started.elapsed().as_millis());
+    Ok(output)
 }
 
 #[tauri::command]
@@ -1622,6 +1729,7 @@ pub async fn agent_pipeline_run(
     input: String,
     run_id: Option<String>,
 ) -> Result<PipelineResult, String> {
+    let started = Instant::now();
     let dir = config_dir(&app)?;
     let config = read_or_seed_config(&dir)?;
     let pipeline = config
@@ -1629,7 +1737,9 @@ pub async fn agent_pipeline_run(
         .into_iter()
         .find(|pipeline| pipeline.id == pipeline_id)
         .ok_or_else(|| format!("配置里没有 id 为「{pipeline_id}」的流水线。"))?;
-    agent_pipeline(app, pipeline.steps, input, run_id, Some(pipeline_id)).await
+    let result = agent_pipeline(app.clone(), pipeline.steps, input, run_id, Some(pipeline_id)).await;
+    log_slow_command(&app, "agent_pipeline_run", started.elapsed().as_millis());
+    result
 }
 
 // ---------------------------------------------------------------------------
