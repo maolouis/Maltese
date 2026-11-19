@@ -17,6 +17,10 @@ export type PetVitals = {
   bond: number;
   /** 专注 0–100（下限 0；半衰期 45 分钟）。 */
   focus: number;
+  /** 当前睡眠档位：null/undefined = 醒着；manual = 用户点的睡觉；idle = 待机自动打盹。 */
+  sleepMode?: PetSleepMode | null;
+  /** 最近一次「离线恢复」结算（回归时写入，供设置卡展示「离开 X 小时，体力 +Y」）。 */
+  lastOfflineRecovery?: { hours: number; gained: number; capped: boolean; at: number } | null;
   /** 上次结算时间（毫秒）。 */
   updatedAt: number;
   /** 每类事件最后一次生效时间（冷却用）。 */
@@ -39,9 +43,25 @@ export type VitalsEventKind =
   | "todoStart"// 开始待办（进入专注）
   | "todoStop" // 结束待办（退出专注）
   | "chat"     // 用户发了一条聊天（只上报“发送”，不含文本）
+  | "video"    // 和主人一起看了刷视频插件采集到的一条视频（按 canonicalUrl 去重）
   | "bongo";   // Bongo 敲击
 
 export type VitalsDelta = { energy: number; mood: number; bond: number; focus: number };
+
+/** 睡觉分两档：手动睡觉（快速恢复）/ 待机自动打盹（慢速恢复）。 */
+export type PetSleepMode = "manual" | "idle";
+
+/**
+ * 离线恢复体力（2026-11-19 决策：电子宠物不会“因为你不理它而累”）。
+ * 应用没运行 / 用户离开电脑期间按时间回升，回归时一次性结算；上限 12h，避免久别回来直接满。
+ */
+export const VITALS_OFFLINE_RECOVERY = {
+  manualPerHour: 25,
+  idlePerHour: 8,
+  maxHours: 12,
+} as const;
+/** 最后一次「在线」时间戳（秒级精度足够），用于回归时算离开时长。 */
+export const VITALS_LAST_SEEN_KEY = "maltese-pet-vitals-last-seen";
 
 export const VITALS_STORAGE_KEY = "maltese-pet-vitals";
 /** 半衰期（毫秒）。 */
@@ -80,10 +100,166 @@ export const VITALS_EVENTS: Record<
   todoStop: { delta: { energy: 0, mood: 0, bond: 0, focus: 0 }, cooldownMs: 0, key: "focus" },
   chat: { delta: { energy: 1, mood: 3, bond: 2, focus: 0 }, cooldownMs: 30_000, key: "bond" },
   bongo: { delta: { energy: 0, mood: 0.5, bond: 0.5, focus: 0 }, cooldownMs: 30_000, key: "mood" },
+  // 一起看视频：情绪 +2、亲密 +0.5；同一 canonicalUrl 只记一次、每天最多 6 条（mood +12）。
+  video: { delta: { energy: 0, mood: 2, bond: 0.5, focus: 0 }, cooldownMs: 0, dailyLimit: 6, key: "mood" },
 };
+
+/** 视频事件：同 URL 去重存储键 + 每天去重窗口上限（够覆盖一天刷的量）。 */
+export const VITALS_VIDEO_SEEN_KEY = "maltese-pet-vitals-video-seen";
+export const VITALS_VIDEO_DAILY_LIMIT = 6;
+const VITALS_VIDEO_SEEN_LIMIT = 60;
+
+export type VideoSeenStore = { date: string; urls: string[] };
+
+export function loadVideoSeen(
+  storage: Storage | null,
+  now: number,
+): VideoSeenStore {
+  const key = todayKey(now);
+  if (!storage) return { date: key, urls: [] };
+  try {
+    const raw = storage.getItem(VITALS_VIDEO_SEEN_KEY);
+    if (!raw) return { date: key, urls: [] };
+    const parsed = JSON.parse(raw) as Partial<VideoSeenStore>;
+    if (parsed?.date !== key || !Array.isArray(parsed.urls)) return { date: key, urls: [] };
+    return { date: key, urls: parsed.urls.filter((url): url is string => typeof url === "string") };
+  } catch {
+    return { date: key, urls: [] };
+  }
+}
+
+export function saveVideoSeen(storage: Storage | null, seen: VideoSeenStore): void {
+  if (!storage) return;
+  try {
+    storage.setItem(
+      VITALS_VIDEO_SEEN_KEY,
+      JSON.stringify({ date: seen.date, urls: seen.urls.slice(-VITALS_VIDEO_SEEN_LIMIT) }),
+    );
+  } catch {
+    // 配额失败不影响数值。
+  }
+}
+
+export type VideoWatchDecision = {
+  allowed: boolean;
+  reason: "ok" | "no-url" | "duplicate" | "daily-cap";
+};
+
+/** 一条视频是否该记 vitals：空 URL / 今天已看过 / 今天已满 6 条 → 不再涨。 */
+export function videoWatchDecision(
+  state: PetVitals,
+  seenUrls: readonly string[],
+  url: string | null | undefined,
+  now: number,
+): VideoWatchDecision {
+  if (!url || !url.trim()) return { allowed: false, reason: "no-url" };
+  if (seenUrls.includes(url)) return { allowed: false, reason: "duplicate" };
+  const count = resetDailyIfNeeded(state, now).today.count.video ?? 0;
+  if (count >= VITALS_VIDEO_DAILY_LIMIT) return { allowed: false, reason: "daily-cap" };
+  return { allowed: true, reason: "ok" };
+}
+
+/** 从 `video_get_session` 的 items 里取「还没记过的新视频 URL」（老的在前，保持采集顺序）。 */
+export function newVideoUrls(
+  state: PetVitals,
+  seenUrls: readonly string[],
+  items: ReadonlyArray<{ canonicalUrl?: string | null }> | null | undefined,
+  now: number,
+): string[] {
+  if (!Array.isArray(items)) return [];
+  const out: string[] = [];
+  for (const item of items) {
+    const url = typeof item?.canonicalUrl === "string" ? item.canonicalUrl.trim() : "";
+    if (!url || seenUrls.includes(url) || out.includes(url)) continue;
+    if (videoWatchDecision(state, seenUrls, url, now).reason === "daily-cap") break;
+    out.push(url);
+  }
+  return out;
+}
 
 /** 当日增益上限（防止刷数值）。 */
 export const VITALS_DAILY_GAIN_CAP = { energy: 60, mood: 60, bond: 30, focus: 120 } as const;
+
+/** 离线期间体力恢复速率（每小时）。 */
+export function offlineRecoveryPerHour(mode: PetSleepMode | null | undefined): number {
+  return mode === "manual"
+    ? VITALS_OFFLINE_RECOVERY.manualPerHour
+    : VITALS_OFFLINE_RECOVERY.idlePerHour;
+}
+
+export type OfflineRecovery = {
+  /** 实际加了多少体力（取整前的值）。 */
+  gained: number;
+  /** 离开的小时数（未封顶）。 */
+  hours: number;
+  /** 参与结算的小时数（封顶后，≤ maxHours）。 */
+  cappedHours: number;
+  capped: boolean;
+};
+
+/**
+ * 回归时一次性结算离线体力：先按常规衰减到 now（情绪/亲密照常），再按离开时长给体力回升。
+ * - 睡觉（手动）25/h、待机打盹 8/h；
+ * - 离开时长封顶 12h；体力封顶 100；
+ * - 时钟回拨（elapsed < 0）不结算。
+ */
+export function settleOfflineRecovery(
+  state: PetVitals,
+  lastSeenAt: number,
+  now: number,
+  mode?: PetSleepMode | null,
+): { state: PetVitals; recovery: OfflineRecovery } {
+  const elapsed = Math.max(0, now - lastSeenAt);
+  const hours = elapsed / 3_600_000;
+  const cappedHours = Math.min(hours, VITALS_OFFLINE_RECOVERY.maxHours);
+  const empty: OfflineRecovery = { gained: 0, hours, cappedHours: 0, capped: false };
+  if (!Number.isFinite(cappedHours) || cappedHours <= 0) {
+    return { state, recovery: empty };
+  }
+  const decayed = decayVitals(state, now);
+  const gained = offlineRecoveryPerHour(mode) * cappedHours;
+  const energy = applyEvent(decayed.energy, gained, VITALS_FLOOR.energy);
+  const gainedValue = energy - decayed.energy;
+  const capped = hours > VITALS_OFFLINE_RECOVERY.maxHours;
+  const next: PetVitals = gainedValue >= 1
+    ? {
+        ...decayed,
+        energy,
+        updatedAt: now,
+        // 供设置卡展示「离开 X 小时，体力 +Y」。
+        lastOfflineRecovery: { hours, gained: gainedValue, capped, at: now },
+      }
+    : { ...decayed, energy, updatedAt: now };
+  return {
+    state: next,
+    recovery: { gained: gainedValue, hours, cappedHours, capped },
+  };
+}
+
+/** 睡觉时是否应该暂停「读电脑状态」（前台应用 / 媒体 / 空闲轮询）。 */
+export function isActivityPollingPaused(
+  vitals: { sleepMode?: PetSleepMode | null } | null | undefined,
+): boolean {
+  return Boolean(vitals && vitals.sleepMode);
+}
+
+/** 设置睡眠档位（不动数值）。 */
+export function withSleepMode(state: PetVitals, mode: PetSleepMode | null): PetVitals {
+  return { ...state, sleepMode: mode };
+}
+
+/**
+ * 聊天对情绪的恢复量按当前 mood 分档（越低恢复越多），亲密小幅同步：
+ * mood < 40 → mood +6 / bond +2.5；40–70 → +3 / +2；> 70 → +1.5 / +1。
+ */
+export function chatRecoveryTiers(
+  vitals: Pick<PetVitals, "mood">,
+): { mood: number; bond: number } {
+  const mood = Number.isFinite(vitals.mood) ? vitals.mood : 70;
+  if (mood < 40) return { mood: 6, bond: 2.5 };
+  if (mood <= 70) return { mood: 3, bond: 2 };
+  return { mood: 1.5, bond: 1 };
+}
 
 export function clamp(value: number, low = 0, high = VITALS_CEIL): number {
   if (!Number.isFinite(value)) return low;
@@ -204,15 +380,18 @@ export function applyVitalsEvent(
   if (typeof config.dailyLimit === "number" && count >= config.dailyLimit) {
     return { state: base, applied: false };
   }
-  // 重复递减：第 1 次满额、第 7 次减半……
-  const repeatFactor = 1 / (1 + count / 6);
+  // 重复递减：第 1 次满额、第 7 次减半……；视频按「每天最多 6 条」直接封顶，不做递减，
+  // 这样 6 条正好 mood +12，符合规格。
+  const repeatFactor = kind === "video" ? 1 : 1 / (1 + count / 6);
   const gained = base.today.gained[config.key] ?? 0;
   const cap = VITALS_DAILY_GAIN_CAP[config.key];
   const room = Math.max(0, cap - gained);
+  // 聊天按当前情绪分档恢复（越低回得越多）；其它事件用基准 delta。
+  const chatTier = kind === "chat" ? chatRecoveryTiers(base) : null;
   const delta: VitalsDelta = {
     energy: config.delta.energy * repeatFactor,
-    mood: config.delta.mood * repeatFactor,
-    bond: config.delta.bond * repeatFactor,
+    mood: (chatTier ? chatTier.mood : config.delta.mood) * repeatFactor,
+    bond: (chatTier ? chatTier.bond : config.delta.bond) * repeatFactor,
     focus: config.delta.focus * repeatFactor,
   };
   // 当日加成额度只挡正增益，负增益（陪玩耗体力）照常。
@@ -228,6 +407,8 @@ export function applyVitalsEvent(
     focus: kind === "todoStart"
       ? Math.max(applyEvent(base.focus, delta.focus, VITALS_FLOOR.focus), VITALS_FOCUS_ON_TODO_START)
       : applyEvent(base.focus, delta.focus, VITALS_FLOOR.focus),
+    // 睡觉事件 = 手动睡眠（快速恢复）；醒来/其它互动自动清掉睡眠档。
+    sleepMode: kind === "sleep" ? "manual" : null,
     lastAt: { ...base.lastAt, [kind]: now },
     today: {
       ...base.today,
@@ -543,11 +724,25 @@ export function loadVitals(storage: Storage | null, now: number, options?: { foc
     const focus = Number(parsed.focus);
     const updatedAt = Number(parsed.updatedAt);
     if (![energy, mood, bond, updatedAt].every((value) => Number.isFinite(value))) return fallback;
+    const sleepMode = parsed.sleepMode === "manual" || parsed.sleepMode === "idle"
+      ? parsed.sleepMode
+      : null;
+    const recovery = parsed.lastOfflineRecovery;
+    const lastOfflineRecovery = recovery && Number.isFinite(Number(recovery.gained))
+      ? {
+          hours: Math.max(0, Number(recovery.hours) || 0),
+          gained: Math.max(0, Number(recovery.gained) || 0),
+          capped: Boolean(recovery.capped),
+          at: Number(recovery.at) || 0,
+        }
+      : null;
     return {
       energy: clamp(energy, VITALS_FLOOR.energy),
       mood: clamp(mood, VITALS_FLOOR.mood),
       bond: clamp(bond, VITALS_FLOOR.bond),
       focus: clamp(Number.isFinite(focus) ? focus : 0, VITALS_FLOOR.focus),
+      sleepMode,
+      lastOfflineRecovery,
       updatedAt,
       lastAt: typeof parsed.lastAt === "object" && parsed.lastAt ? { ...parsed.lastAt } : {},
       today: parsed.today && typeof parsed.today === "object"
@@ -607,6 +802,8 @@ export type VitalsLogEntry = {
   at: number;
   /** 只有 todoStart/todoDone 会带待办标题（用户自己写的标题，不是聊天内容）。 */
   todoTitle?: string;
+  /** 只有 video 事件带：去重用的 canonicalUrl（不含标题/正文）。 */
+  url?: string;
 };
 
 export type PetVitalsSnapshot = {
@@ -614,6 +811,10 @@ export type PetVitalsSnapshot = {
   mood: number;
   bond: number;
   focus: number;
+  /** 当前睡眠档位（null = 醒着）。 */
+  sleepMode?: PetSleepMode | null;
+  /** 最近一次离线恢复（离开 X 小时、体力 +Y）。 */
+  lastOfflineRecovery?: { hours: number; gained: number; capped: boolean; at: number } | null;
   updatedAt: number;
 };
 
@@ -639,6 +840,17 @@ export function readPetVitals(storage: Storage | null = typeof window !== "undef
       mood: clamp(Number(parsed.mood), VITALS_FLOOR.mood),
       bond: clamp(Number(parsed.bond), VITALS_FLOOR.bond),
       focus: clamp(Number.isFinite(Number(parsed.focus)) ? Number(parsed.focus) : 0, VITALS_FLOOR.focus),
+      sleepMode: parsed.sleepMode === "manual" || parsed.sleepMode === "idle"
+        ? parsed.sleepMode
+        : null,
+      lastOfflineRecovery: parsed.lastOfflineRecovery && Number.isFinite(Number(parsed.lastOfflineRecovery.gained))
+        ? {
+            hours: Math.max(0, Number(parsed.lastOfflineRecovery.hours) || 0),
+            gained: Math.max(0, Number(parsed.lastOfflineRecovery.gained) || 0),
+            capped: Boolean(parsed.lastOfflineRecovery.capped),
+            at: Number(parsed.lastOfflineRecovery.at) || 0,
+          }
+        : null,
       updatedAt: Number(parsed.updatedAt) || 0,
     };
   } catch {
@@ -670,7 +882,13 @@ export function loadVitalsLog(storage: Storage | null): VitalsLogEntry[] {
       .filter((item): item is VitalsLogEntry => Boolean(item)
         && typeof (item as VitalsLogEntry).kind === "string"
         && Number.isFinite((item as VitalsLogEntry).at))
-      .slice(0, VITALS_LOG_LIMIT);
+      .slice(0, VITALS_LOG_LIMIT)
+      .map((item) => ({
+        kind: item.kind,
+        at: item.at,
+        todoTitle: typeof item.todoTitle === "string" ? item.todoTitle : undefined,
+        url: typeof item.url === "string" ? item.url : undefined,
+      }));
   } catch {
     return [];
   }
@@ -694,6 +912,7 @@ export function appendVitalsLog(
 }
 
 const INTERACTION_LABELS: Record<VitalsEventKind, string> = {
+  video: "一起看了视频",
   pet: "被摸头",
   eat: "喂过食",
   play: "一起玩了",

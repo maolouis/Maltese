@@ -10,7 +10,15 @@ import {
   applyVitalsEvent,
   buildIdlePlaylist,
   createVitals,
+  chatRecoveryTiers,
   describeRecentInteractions,
+  isActivityPollingPaused,
+  loadVideoSeen,
+  newVideoUrls,
+  offlineRecoveryPerHour,
+  saveVideoSeen,
+  settleOfflineRecovery,
+  videoWatchDecision,
   loadVitals,
   loadVitalsLog,
   pickStickerForVitals,
@@ -24,6 +32,8 @@ import {
   VITALS_FLOOR,
   VITALS_HALF_LIFE_MS,
   VITALS_LOG_KEY,
+  VITALS_OFFLINE_RECOVERY,
+  VITALS_VIDEO_DAILY_LIMIT,
   VITALS_LOG_LIMIT,
   VITALS_ROTATION_STATES,
   VITALS_STORAGE_KEY,
@@ -425,4 +435,123 @@ test("pickStickerForVitals：支持对象池 / avoid 去重 / 空池返回 null"
     { avoid: ["sleeping"], rng: () => 0.5 },
   );
   assert.equal(onlyHappy, "happy");
+});
+
+
+// ---------------------------------------------------------------------------
+// 离线恢复体力（不惩罚在线用户）/ 手动睡觉 vs 待机打盹 / 刷视频涨情绪
+// ---------------------------------------------------------------------------
+
+function vitalsAt(now, patch = {}) {
+  return { ...createVitals(now), ...patch };
+}
+
+test("离线恢复：待机 8/h、手动睡眠 25/h，2h 分别是 +16 / +50", () => {
+  const now = 1_700_000_000_000;
+  const state = vitalsAt(now, { energy: 15 });
+  const idle = settleOfflineRecovery(state, now - 2 * 3_600_000, now, "idle");
+  assert.equal(Math.round(idle.state.energy), 15 + 16);
+  assert.equal(Math.round(idle.recovery.gained), 16);
+  const manual = settleOfflineRecovery(state, now - 2 * 3_600_000, now, "manual");
+  assert.equal(Math.round(manual.state.energy), 15 + 50);
+  // 手动睡眠一定比待机恢复快
+  assert.ok(manual.state.energy > idle.state.energy);
+  assert.equal(offlineRecoveryPerHour("manual"), 25);
+  assert.equal(offlineRecoveryPerHour("idle"), 8);
+  assert.equal(offlineRecoveryPerHour(null), 8);
+});
+
+test("离线恢复：12h 封顶、超过 12h 只按 12h 结算，体力封顶 100", () => {
+  const now = 1_700_000_000_000;
+  const low = vitalsAt(now, { energy: 15 });
+  const twelve = settleOfflineRecovery(low, now - 12 * 3_600_000, now, "manual");
+  assert.equal(Math.round(twelve.state.energy), 100); // 15 + 300 封顶
+  assert.equal(twelve.recovery.capped, false);
+  const long = settleOfflineRecovery(low, now - 20 * 3_600_000, now, "manual");
+  assert.equal(long.recovery.capped, true);
+  assert.equal(long.recovery.cappedHours, VITALS_OFFLINE_RECOVERY.maxHours);
+  assert.equal(Math.round(long.state.energy), 100);
+  assert.equal(long.state.lastOfflineRecovery?.capped, true);
+  // 时钟回拨不结算
+  const backwards = settleOfflineRecovery(low, now + 3_600_000, now, "manual");
+  assert.equal(backwards.recovery.gained, 0);
+  assert.equal(backwards.state.energy, low.energy);
+});
+
+test("睡觉事件 = 手动档；其它互动会清掉睡眠档", () => {
+  const now = 1_700_000_000_000;
+  const slept = applyVitalsEvent(createVitals(now), "sleep", now).state;
+  assert.equal(slept.sleepMode, "manual");
+  assert.equal(isActivityPollingPaused(slept), true);
+  const woke = applyVitalsEvent(slept, "pet", now + 1000).state;
+  assert.equal(woke.sleepMode, null);
+  assert.equal(isActivityPollingPaused(woke), false);
+  assert.equal(isActivityPollingPaused(null), false);
+});
+
+test("睡觉态不读电脑状态：轮询循环调用次数为 0（mock 调用计数）", () => {
+  const now = 1_700_000_000_000;
+  const sleeping = applyVitalsEvent(createVitals(now), "sleep", now).state;
+  let pollCalls = 0;
+  const pollActivity = (vitals) => {
+    if (!isActivityPollingPaused(vitals)) pollCalls += 1;
+  };
+  for (let i = 0; i < 20; i += 1) pollActivity(sleeping);
+  assert.equal(pollCalls, 0);
+  const awake = applyVitalsEvent(sleeping, "pet", now + 1000).state;
+  for (let i = 0; i < 5; i += 1) pollActivity(awake);
+  assert.equal(pollCalls, 5);
+});
+
+test("聊天恢复按情绪分档：越低回得越多（mood 6/3/1.5）", () => {
+  assert.deepEqual(chatRecoveryTiers({ mood: 30 }), { mood: 6, bond: 2.5 });
+  assert.deepEqual(chatRecoveryTiers({ mood: 50 }), { mood: 3, bond: 2 });
+  assert.deepEqual(chatRecoveryTiers({ mood: 80 }), { mood: 1.5, bond: 1 });
+  const now = 1_700_000_000_000;
+  const low = applyVitalsEvent(vitalsAt(now, { mood: 30 }), "chat", now).state;
+  assert.equal(Math.round((low.mood - 30) * 10) / 10, 6);
+  const high = applyVitalsEvent(vitalsAt(now, { mood: 80 }), "chat", now).state;
+  assert.equal(Math.round((high.mood - 80) * 10) / 10, 1.5);
+});
+
+test("刷视频：mood +2 / bond +0.5，同 URL 去重，每日 6 条封顶", () => {
+  const now = 1_700_000_000_000;
+  const base = createVitals(now);
+  const first = applyVitalsEvent(base, "video", now).state;
+  assert.equal(Math.round((first.mood - base.mood) * 10) / 10, 2);
+  assert.equal(Math.round((first.bond - base.bond) * 10) / 10, 0.5);
+  // 同 URL 去重
+  assert.equal(videoWatchDecision(base, ["https://b23.tv/v1"], "https://b23.tv/v1", now).reason, "duplicate");
+  // 空 URL / 没有数据不报错
+  assert.equal(videoWatchDecision(base, [], "", now).reason, "no-url");
+  assert.deepEqual(newVideoUrls(base, [], null, now), []);
+  // 新 URL 才会进候选
+  const urls = newVideoUrls(base, ["https://b23.tv/v1"], [
+    { canonicalUrl: "https://b23.tv/v1" },
+    { canonicalUrl: "https://b23.tv/v2" },
+  ], now);
+  assert.deepEqual(urls, ["https://b23.tv/v2"]);
+  // 每日 6 条封顶：第 7 条被拒
+  let state = base;
+  for (let i = 1; i <= VITALS_VIDEO_DAILY_LIMIT; i += 1) {
+    state = applyVitalsEvent(state, "video", now + i).state;
+  }
+  const seventh = applyVitalsEvent(state, "video", now + 100);
+  assert.equal(seventh.applied, false);
+  assert.equal(Math.round(state.mood - base.mood), 12);
+});
+
+test("视频去重存储：同日读写、跨日重置", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => { store.set(key, value); },
+  };
+  const now = 1_700_000_000_000;
+  const d = new Date(now);
+  const date = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  saveVideoSeen(storage, { date, urls: ["a"] });
+  saveVideoSeen(storage, { date, urls: ["a", "b"] });
+  const same = loadVideoSeen(storage, now);
+  assert.equal(same.urls.includes("b"), true);
 });

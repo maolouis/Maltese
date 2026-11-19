@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "./i18n";
-import { vitalsLevel, type PetVitalsSnapshot } from "./petVitals";
+import { loadVitalsLog, vitalsLevel, type PetVitalsSnapshot } from "./petVitals";
 import "./PetVitalsCard.css";
 
 export type PetVitalsCardProps = {
@@ -36,6 +36,15 @@ function formatTime(at: number): string {
   }
 }
 
+function relativeAgo(at: number, now = Date.now()): string {
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
+
 export default function PetVitalsCard({
   enabled,
   onToggleEnabled,
@@ -50,6 +59,16 @@ export default function PetVitalsCard({
   const copy = t.petVitals;
   const [expanded, setExpanded] = useState(false);
   const level = vitalsLevel(vitals);
+  const recentVideo = (() => {
+    try {
+      const log = loadVitalsLog(window.localStorage);
+      const entry = log.find((item) => item.kind === "video");
+      if (entry && Date.now() - entry.at < 24 * 3_600_000) return entry;
+    } catch {
+      // 读不到日志不影响卡片。
+    }
+    return null;
+  })();
 
   return (
     <div className="pet-vitals" data-enabled={enabled ? "on" : "off"}>
@@ -71,6 +90,11 @@ export default function PetVitalsCard({
         {copy.levels[level]}
         {focusActive ? ` · ${copy.focusing}` : ""}
       </p>
+      {vitals.sleepMode && (
+        <p className="pet-vitals__sleep" data-sleep-mode={vitals.sleepMode}>
+          {vitals.sleepMode === "manual" ? copy.sleepingManual : copy.sleepingIdle}
+        </p>
+      )}
       {thinking && <p className="pet-vitals__thinking">{copy.thinking}</p>}
 
       <div className="pet-vitals__bars">
@@ -123,6 +147,34 @@ export default function PetVitalsCard({
             <dd>{Math.round(vitals.bond)}</dd>
             <dt>{copy.focus}</dt>
             <dd>{Math.round(vitals.focus)}</dd>
+            {vitals.sleepMode && (
+              <>
+                <dt>{copy.sleepLabel}</dt>
+                <dd>{vitals.sleepMode === "manual" ? copy.sleepingManual : copy.sleepingIdle}</dd>
+              </>
+            )}
+            {vitals.lastOfflineRecovery && vitals.lastOfflineRecovery.gained >= 1 && (
+              <>
+                <dt>{copy.offlineLabel}</dt>
+                <dd>
+                  {vitals.lastOfflineRecovery.capped
+                    ? copy.offlineRecoveredCapped(
+                        Math.round(vitals.lastOfflineRecovery.hours),
+                        Math.round(vitals.lastOfflineRecovery.gained),
+                      )
+                    : copy.offlineRecovered(
+                        Math.round(vitals.lastOfflineRecovery.hours),
+                        Math.round(vitals.lastOfflineRecovery.gained),
+                      )}
+                </dd>
+              </>
+            )}
+            {recentVideo && (
+              <>
+                <dt>{copy.recentLabel}</dt>
+                <dd>{copy.recentVideo(relativeAgo(recentVideo.at))}</dd>
+              </>
+            )}
           </dl>
           <p className="pet-vitals__privacy">{copy.privacy}</p>
           {onRefresh && (

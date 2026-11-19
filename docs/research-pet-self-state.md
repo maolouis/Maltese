@@ -198,3 +198,20 @@ buildIdlePlaylist(v, config, states, character, rng, slots = 24) {
 - 专注：`App.tsx` 的 `startTodo`、`toggleTodo`、`deleteTodo`、`activeTodoId` 持久化/恢复、active-todo 清理 effect、`systemIdleSeconds`
 - 聊天/主动聊天：`PetChat.tsx`（`MESSAGES_KEY`、`loadMessages/persist`）、`proactiveChat.ts`（`maltese-proactive-times`、`maltese-proactive-history`）；待办/闲置/媒体见 `App.tsx`（`TodoItem`、`loadTodos`、`mediaState`、`refreshMediaState`）与 `src-tauri/src/lib.rs`（`get_system_idle_seconds`）
 - 联动/Bongo：`petLinkBus.ts`、`BongoPet.tsx`、`App.tsx` 的 bongo 响应 effect；设置见 `SettingsWindow.tsx`（`PetSettings`、`DEFAULTS`、`sw-card`）与 `App.tsx`（`IslandSettings`、`DEFAULT_SETTINGS`、`settings-section--companion`）
+
+## 2026-11-19 决策补充：体力 = 离线恢复，刷视频也涨情绪
+
+- **体力不删、也不按“在线不互动就掉”惩罚用户**：体力只在**离线**（应用未运行 / 用户离开电脑超过阈值）期间
+  按时间回升，回归时一次性结算；在线时的自然衰减/事件照旧。
+  - 离开时长封顶 **12h**（久别回来不会瞬间满）；体力封顶 100。
+  - **手动睡觉**（用户点睡觉/缩边睡眠）：**+25/小时**（约 30 分钟回满一档）；
+  - **待机自动打盹**（长时间无操作自动趴下）：**+8/小时**（慢速）。
+  - 状态里用 `sleepMode: "manual" | "idle"` 区分两档，设置卡/状态详情显示当前档位；
+    睡觉事件置 `manual`，任何其它互动清空。
+- **睡觉后不读电脑状态**：睡觉期间暂停 `get_active_activity` / 媒体 / 空闲轮询（`isActivityPollingPaused`），
+  醒来恢复；待机判定本身仍需要 idle 秒数（必须读），但不再读前台应用/媒体。
+- **对话恢复更多（情绪低时）**：`chat` 事件对 `mood` 分档——mood<40 → **+6**、40–70 → **+3**、>70 → **+1.5**；
+  `bond` 同步小幅（+2.5 / +2 / +1）。
+- **刷视频也涨情绪**：视频插件采集到一条视频（`video` 事件）→ `mood +2`、`bond +0.5`；
+  同一 `canonicalUrl` 只记一次；每天最多 **6 条**（mood +12），超出只记日志不再涨。
+  属于“和主人一起娱乐”，不受“睡觉不读电脑状态”影响（睡觉时不采集视频，自然也不会触发）。

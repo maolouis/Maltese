@@ -253,6 +253,60 @@ export type Translations = {
     chat: string;
     video: string;
     plugins: string;
+    agentConsole: string;
+  };
+
+  agentHub: {
+    title: string;
+    hint: string;
+    refresh: string;
+    loading: string;
+    desktopOnly: string;
+    loadFailed: (reason: string) => string;
+    usageTitle: string;
+    usageHint: string;
+    usageRuns: string;
+    usageFailures: string;
+    usageAvgFirstLine: string;
+    usageAvgDuration: string;
+    usageTokens: string;
+    pendingIntegration: string;
+    noUsage: string;
+    tasksTitle: string;
+    noTasks: string;
+    videoIdle: string;
+    videoProgress: (percent: number) => string;
+    videoItems: (count: number) => string;
+    videoPending: (count: number) => string;
+    todoRunning: (title: string) => string;
+    todoNone: string;
+    agentsTitle: string;
+    noAgents: string;
+    available: string;
+    notInstalled: string;
+    disabled: string;
+    statusRunning: string;
+    statusQueued: string;
+    statusIdle: string;
+    run: string;
+    cancel: string;
+    send: string;
+    promptPlaceholder: string;
+    runningWhat: (text: string) => string;
+    queueLabel: (count: number) => string;
+    lastError: string;
+    pipelineTitle: string;
+    pipelineHint: string;
+    pipelineRun: string;
+    pipelineInputLabel: string;
+    pipelineInputPlaceholder: string;
+    pipelineSelect: string;
+    pipelineStepTitle: (index: number, name: string) => string;
+    pipelineRunning: string;
+    pipelineDone: string;
+    pipelineFailed: string;
+    dataSource: (time: string) => string;
+    logHint: (path: string) => string;
   };
 
   agent: {
@@ -416,6 +470,16 @@ export type Translations = {
       focused: string;
     };
     details: string;
+    /** 手动睡觉：体力快速恢复。 */
+    sleepingManual: string;
+    /** 待机自动打盹：体力慢速恢复。 */
+    sleepingIdle: string;
+    sleepLabel: string;
+    offlineLabel: string;
+    offlineRecovered: (hours: number, gained: number) => string;
+    offlineRecoveredCapped: (hours: number, gained: number) => string;
+    recentLabel: string;
+    recentVideo: (ago: string) => string;
     detailsHint: string;
     refresh: string;
     lastUpdate: (time: string) => string;

@@ -1,21 +1,31 @@
-// 桌宠自我状态的 React 层：持久化 + 60s 结算 + 事件上报。
+// 桌宠自我状态的 React 层：持久化 + 60s 结算 + 事件上报 + 离线体力恢复 + 刷视频涨情绪。
 // 纯逻辑都在 petVitals.ts（有单测），这里只做「何时结算 / 何时上报」。
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   appendVitalsLog,
   applyVitalsEvent,
   createVitals,
+  loadVideoSeen,
   loadVitals,
+  newVideoUrls,
+  saveVideoSeen,
   saveVitals,
+  settleOfflineRecovery,
   tickVitals,
+  videoWatchDecision,
+  VITALS_LAST_SEEN_KEY,
   VITALS_TICK_MS,
+  type PetSleepMode,
   type PetVitals,
   type VitalsEventKind,
 } from "./petVitals";
 
 /** 聊天消息存储键：只读 `role`/`at`，**不读 text**。 */
 const PET_CHAT_STORAGE_KEY = "focusd-island-pet-chat-messages";
+/** 刷视频同步间隔：snapshot 是 2s 轮询的，这里 20s 拉一次 session items 足够。 */
+const VIDEO_SYNC_MS = 20_000;
 
 export type PetVitalsController = {
   vitals: PetVitals;
@@ -23,6 +33,10 @@ export type PetVitalsController = {
   reportEvent: (kind: VitalsEventKind, options?: { todoTitle?: string }) => void;
   /** 立刻结算一次（打开设置卡片时用）。 */
   refresh: () => void;
+  /** 设置睡眠档位（manual = 用户点的睡觉；idle = 待机自动打盹；null = 醒着）。 */
+  setSleepMode: (mode: PetSleepMode | null) => void;
+  /** 睡觉时外部轮询（前台应用/媒体/空闲）应当停下；醒着才读。 */
+  activityPollingPaused: boolean;
 };
 
 function safeStorage(): Storage | null {
@@ -52,6 +66,25 @@ function unreadUserChatTimes(storage: Storage | null, since: number): number[] {
   }
 }
 
+function readLastSeen(storage: Storage | null): number {
+  if (!storage) return 0;
+  try {
+    const value = Number(storage.getItem(VITALS_LAST_SEEN_KEY));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLastSeen(storage: Storage | null, at: number): void {
+  if (!storage) return;
+  try {
+    storage.setItem(VITALS_LAST_SEEN_KEY, String(at));
+  } catch {
+    // 忽略配额失败。
+  }
+}
+
 export function usePetVitals(options: {
   /** 总开关：关闭后不写指标、也不参与待机权重。 */
   enabled: boolean;
@@ -61,7 +94,13 @@ export function usePetVitals(options: {
   const { enabled, focusActive } = options;
   const [vitals, setVitals] = useState<PetVitals>(() => {
     const storage = safeStorage();
-    return loadVitals(storage, Date.now(), { focusActive });
+    const now = Date.now();
+    const loaded = loadVitals(storage, now, { focusActive });
+    const lastSeen = readLastSeen(storage);
+    // 离线恢复：应用没运行/用户离开期间体力按时间回升（睡觉两档速率不同）。
+    if (!enabled || lastSeen <= 0) return loaded;
+    const { state } = settleOfflineRecovery(loaded, lastSeen, now, loaded.sleepMode ?? null);
+    return state;
   });
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -113,6 +152,58 @@ export function usePetVitals(options: {
     return () => window.clearInterval(timer);
   }, [enabled]);
 
+  // 刷视频：读视频插件的 snapshot/session（只读，不改视频模块），
+  // 按 canonicalUrl 去重，每天最多 6 条 → mood +2/条、bond +0.5/条。
+  useEffect(() => {
+    if (!enabled || !isTauri()) return;
+    let cancelled = false;
+    const sync = async () => {
+      if (cancelled) return;
+      try {
+        const snapshot = await invoke<{
+          running?: boolean;
+          itemCount?: number;
+          sessionId?: string;
+        }>("video_get_snapshot");
+        if (!snapshot?.running || !snapshot.sessionId || !(Number(snapshot.itemCount) > 0)) return;
+        const session = await invoke<{ items?: Array<{ canonicalUrl?: string | null }> }>(
+          "video_get_session",
+          { sessionId: snapshot.sessionId },
+        );
+        if (cancelled || !session?.items?.length) return;
+        const storage = safeStorage();
+        const now = Date.now();
+        setVitals((previous) => {
+          const seen = loadVideoSeen(storage, now);
+          const candidates = newVideoUrls(previous, seen.urls, session.items, now);
+          if (!candidates.length) return previous;
+          let next = previous;
+          let changed = false;
+          for (const url of candidates) {
+            const decision = videoWatchDecision(next, seen.urls, url, now);
+            if (!decision.allowed) continue;
+            const result = applyVitalsEvent(next, "video", now);
+            if (!result.applied) continue;
+            next = result.state;
+            seen.urls.push(url);
+            saveVideoSeen(storage, seen);
+            appendVitalsLog(storage, { kind: "video", at: now, url });
+            changed = true;
+          }
+          return changed ? next : previous;
+        });
+      } catch {
+        // 视频插件未启用 / 没有会话数据：静默，不影响桌宠。
+      }
+    };
+    void sync();
+    const timer = window.setInterval(() => void sync(), VIDEO_SYNC_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
+
   // 进入/退出专注：开始待办 → focus +15 并开始随时间上涨；结束/完成 → 停止上涨。
   const wasFocusRef = useRef(focusActive);
   useEffect(() => {
@@ -122,17 +213,34 @@ export function usePetVitals(options: {
     setVitals((previous) => applyVitalsEvent(previous, focusActive ? "todoStart" : "todoStop", Date.now()).state);
   }, [enabled, focusActive]);
 
-  // 持久化：状态变化就落盘（事件频率远低于每秒一次，不需要额外节流）。
+  // 持久化：状态变化就落盘，并刷新「最后在线时间」（下次启动算离开时长用）。
   useEffect(() => {
     if (!enabled) return;
     saveVitals(safeStorage(), vitals);
+    writeLastSeen(safeStorage(), Date.now());
   }, [enabled, vitals]);
+
+  // 关闭/切后台时也记一次最后在线时间。
+  useEffect(() => {
+    if (!enabled) return;
+    const mark = () => writeLastSeen(safeStorage(), Date.now());
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") mark();
+    };
+    window.addEventListener("beforeunload", mark);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      mark();
+      window.removeEventListener("beforeunload", mark);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [enabled]);
 
   const reportEvent = useCallback((kind: VitalsEventKind, options?: { todoTitle?: string }) => {
     if (!enabledRef.current) return;
     const now = Date.now();
     setVitals((previous) => applyVitalsEvent(previous, kind, now).state);
-    // 记录一条「互动事实」（只有类型/时间/待办标题，不含任何聊天正文），供模型上下文读取。
+    // 记录一条「互动事实」（只有类型/时间/待办标题/视频 URL，不含任何聊天正文），供模型上下文读取。
     appendVitalsLog(safeStorage(), { kind, at: now, todoTitle: options?.todoTitle });
   }, []);
 
@@ -140,7 +248,17 @@ export function usePetVitals(options: {
     settle(Date.now());
   }, [settle]);
 
-  return { vitals, reportEvent, refresh };
+  const setSleepMode = useCallback((mode: PetSleepMode | null) => {
+    setVitals((previous) => ({ ...previous, sleepMode: mode, updatedAt: previous.updatedAt }));
+  }, []);
+
+  return {
+    vitals,
+    reportEvent,
+    refresh,
+    setSleepMode,
+    activityPollingPaused: Boolean(vitals.sleepMode),
+  };
 }
 
 /** 开关关闭时给调用方一个「不影响轮播」的占位状态。 */
