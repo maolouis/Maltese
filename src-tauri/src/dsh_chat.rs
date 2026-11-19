@@ -177,11 +177,7 @@ fn credential_patch(app: &AppHandle) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))?
-        .join("dsh-chat");
+    let directory = crate::paths::data_root().join("dsh-chat");
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("无法创建 DSH 聊天配置目录：{error}"))?;
     let path = directory.join("headless-credentials.yml");

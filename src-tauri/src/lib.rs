@@ -7,6 +7,7 @@ mod web_protocol;
 mod dsh_api;
 mod dsh_chat;
 mod instance_lock;
+mod paths;
 mod local_chat;
 mod icons;
 mod lyrics;
@@ -3424,11 +3425,31 @@ async fn get_agent_status(app: AppHandle) -> Result<AgentStatusSnapshot, String>
         .map_err(|error| format!("Failed to join the agent status task: {error}"))?
 }
 
+
+/// 数据目录信息（设置页只读展示）。
+#[tauri::command]
+fn data_directory_info() -> serde_json::Value {
+    serde_json::json!({
+        "root": crate::paths::data_root(),
+        "legacyRoot": crate::paths::legacy_root(),
+        "webviewProfile": crate::paths::webview_profile_dir(),
+    })
+}
+
+/// 在资源管理器里打开数据目录。
+#[tauri::command]
+fn open_data_directory() -> Result<(), String> {
+    let root = crate::paths::data_root();
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    std::process::Command::new("explorer")
+        .arg(root)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 fn read_agent_status(app: AppHandle) -> Result<AgentStatusSnapshot, String> {
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let app_dir = crate::paths::data_root();
     fs::create_dir_all(&app_dir)
         .map_err(|error| format!("Failed to create app data directory: {error}"))?;
 
@@ -3448,10 +3469,7 @@ fn read_agent_status(app: AppHandle) -> Result<AgentStatusSnapshot, String> {
 
 #[tauri::command]
 fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSnapshot, String> {
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let app_dir = crate::paths::data_root();
     fs::create_dir_all(&app_dir)
         .map_err(|error| format!("Failed to create app data directory: {error}"))?;
 
@@ -3505,10 +3523,7 @@ fn clear_agent_status(app: AppHandle, provider: String) -> Result<AgentStatusSna
 
 #[tauri::command]
 fn install_agent_status_hooks(app: AppHandle) -> Result<AgentHooksInstallResult, String> {
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let app_dir = crate::paths::data_root();
     fs::create_dir_all(&app_dir)
         .map_err(|error| format!("Failed to create app data directory: {error}"))?;
 
@@ -5565,7 +5580,8 @@ pub fn run() {
     // profile / 托盘 / 全局快捷键；只留一个 show-request 文件让首实例把狗叫出来。
     // 锁随文件句柄释放，进程退出（含崩溃 / 任务管理器结束）时自动回收，没有 stale lock。
     let identifier = context.config().identifier.clone();
-    let mut instance_data_dir = instance_lock::resolve_data_dir(&identifier);
+    paths::migrate_if_needed();
+    let mut instance_data_dir = Some(paths::data_root());
     if let Some(data_dir) = instance_data_dir.as_deref() {
         match instance_lock::acquire(data_dir, &identifier) {
             Ok(instance_lock::InstanceGuard::Primary) => {}
@@ -5795,6 +5811,8 @@ pub fn run() {
             get_agent_status,
             clear_agent_status,
             install_agent_status_hooks,
+            data_directory_info,
+            open_data_directory,
             get_media_state,
             get_system_idle_seconds,
             get_audio_level,

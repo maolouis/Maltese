@@ -35,6 +35,18 @@ export function LocalChatSettings({
   const [testStatus, setTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [memoryDepth, setMemoryDepth] = useState<MemoryDepth>(loadMemoryDepth);
   const [memoryCleared, setMemoryCleared] = useState(false);
+  const [dataDirectory, setDataDirectory] = useState<{ root: string; legacyRoot: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<{ root: string; legacyRoot: string; webviewProfile: string }>("data_directory_info")
+      .then((info) => {
+        if (!cancelled) setDataDirectory({ root: info.root, legacyRoot: info.legacyRoot });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // 渲染期不再直接读 localStorage：挂载/记忆更新时解析一次，避免每次渲染都 JSON.parse。
   const [memoryFactCount, setMemoryFactCount] = useState(() => loadMemory().facts.length);
   useEffect(() => {
@@ -306,6 +318,15 @@ export function LocalChatSettings({
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="local-chat-settings__row">
+              <span>数据目录</span>
+              <span className="local-chat-settings__hint" title={dataDirectory?.root ?? ""}>
+                {dataDirectory?.root ?? "读取中…"}
+              </span>
+              <button type="button" onClick={() => void invoke("open_data_directory")}>
+                打开目录
+              </button>
             </div>
             <div className="local-chat-settings__row">
               <span>记忆 {memoryFactCount} 条</span>

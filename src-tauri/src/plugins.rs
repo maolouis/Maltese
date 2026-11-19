@@ -89,11 +89,7 @@ pub struct PluginList {
 }
 
 fn plugins_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))?
-        .join(PLUGINS_DIRECTORY);
+    let dir = crate::paths::data_root().join(PLUGINS_DIRECTORY);
     fs::create_dir_all(&dir).map_err(|error| format!("无法创建插件目录：{error}"))?;
     Ok(dir)
 }

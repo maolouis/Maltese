@@ -49,7 +49,7 @@ pub fn init(app: &AppHandle) {
     }
     let _ = TOKEN.set(load_or_create_token(app));
     // 清掉上一次运行留下的端口文件，避免调用方连到已经死掉的端口。
-    if let Ok(directory) = app.path().app_data_dir() {
+    if let Ok(directory) = Result::<std::path::PathBuf, String>::Ok(crate::paths::data_root()) {
         let _ = fs::remove_file(directory.join(PORT_FILE));
     }
     let preferred = preferred_port();
@@ -71,7 +71,7 @@ pub fn init(app: &AppHandle) {
             );
         }
         // 把实际端口写进应用数据目录，调用方以文件为准。
-        match app_handle.path().app_data_dir() {
+        match Ok::<std::path::PathBuf, String>(crate::paths::data_root()) {
             Ok(directory) => {
                 if let Err(error) = fs::create_dir_all(&directory)
                     .and_then(|_| fs::write(directory.join(PORT_FILE), format!("{port}\n")))
@@ -151,7 +151,7 @@ fn load_or_create_token(app: &AppHandle) -> String {
             return trimmed.to_string();
         }
     }
-    if let Ok(directory) = app.path().app_data_dir() {
+    if let Ok(directory) = Result::<std::path::PathBuf, String>::Ok(crate::paths::data_root()) {
         let path = directory.join(TOKEN_FILE);
         if let Ok(existing) = fs::read_to_string(&path) {
             let trimmed = existing.trim();

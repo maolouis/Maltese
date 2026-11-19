@@ -91,8 +91,7 @@ struct StyleBackup {
 static STYLE_BACKUP: Mutex<Option<StyleBackup>> = Mutex::new(None);
 
 fn backup_path() -> Option<PathBuf> {
-    let base = std::env::var("APPDATA").ok()?;
-    Some(PathBuf::from(base).join("maltese").join("billiards-backup.json"))
+    Some(crate::paths::data_root().join("billiards-backup.json"))
 }
 
 fn write_backup_file(entries: &[BackupEntry]) {

@@ -1,6 +1,6 @@
 # 数据目录迁移方案（C 盘 → 可配置目录）
 
-> 状态：**只读盘点 + 方案设计**，未改任何代码。盘点时间 2026-11-19，实测自本机
+> 状态：**第 1 步已实现**（paths.rs 收口 + 业务数据迁移；WebView2 profile 迁移留第 2 步）。盘点时间 2026-11-19，实测自本机
 > `C:\Users\Administrator\AppData\{Roaming,Local}\com.maolouis.maltese`。
 
 ## 1. 现状盘点（实测体积）
@@ -149,3 +149,14 @@ pub fn resolve_root(exe: &Path, legacy: Option<&Path>, bootstrap: Option<&Path>,
 - 数据目录切换后 `instance.lock` 键变化，若旧实例仍在运行可能短暂双开；迁移前需检测旧锁/进程。
 - 用户把目录设到可移动盘/网络盘：磁盘离线时启动需 fail-open 回退，避免应用打不开。
 - Roaming 里 `local-storage.before-restore.*` 是历史备份（1.6 MB），迁移时可选择跳过并提示。
+
+---
+
+## 6. 第 1 步实现记录（2026-11-19）
+
+- src-tauri/src/paths.rs：
+esolve_root（环境变量 > data-dir.txt > 默认策略）、data_root()（OnceLock 缓存、创建失败回退旧目录）、webview_profile_dir()（第 2 步启用）、migrate_if_needed()（复制→文件数/大小校验→原子写引导文件→旧目录改名 .migrated-<ts>；失败清理回退）。
+- 14 处 pp_data_dir() + desktop_icons.rs 手写路径已全部收口到 paths::data_root()（grep -rn app_data_dir( src-tauri/src 已只剩注释）。
+- 设置页新增「数据目录」只读展示 + 「打开目录」（data_directory_info / open_data_directory 命令）。
+- 实机：启动后业务数据落到 E:\MalteseData（80 个文件），%APPDATA%\com.maolouis.maltese\data-dir.txt 内容 E:\MalteseData，旧目录改名为 com.maolouis.maltese.migrated-1795076175，新旧目录仅保留 data-dir.txt。
+- 单测：paths::tests（优先级/默认策略/兼容旧目录/迁移校验与回滚/引导文件），cargo check 0。

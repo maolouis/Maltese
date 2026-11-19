@@ -20,10 +20,7 @@ pub struct CustomSound {
 }
 
 fn sounds_root(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("sounds"))
-        .map_err(|error| error.to_string())
+    Ok::<std::path::PathBuf, String>(crate::paths::data_root().join("sounds"))
 }
 
 fn extension_of(name: &str) -> Option<String> {

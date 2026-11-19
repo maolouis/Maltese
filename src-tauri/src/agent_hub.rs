@@ -280,10 +280,7 @@ fn now_ms() -> u64 {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join(CONFIG_DIR))
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))
+    Ok::<std::path::PathBuf, String>(crate::paths::data_root().join(CONFIG_DIR))
 }
 
 pub(crate) fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {

@@ -221,10 +221,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let app_dir = crate::paths::data_root();
     let history_path = app_dir.join(HISTORY_FILE_NAME);
     let image_dir = app_dir.join(IMAGE_DIRECTORY_NAME);
 

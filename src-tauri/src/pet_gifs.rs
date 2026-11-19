@@ -31,18 +31,12 @@ pub struct ParkedPetGif {
 }
 
 fn plugins_root(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("pet-gifs"))
-        .map_err(|error| error.to_string())
+    Ok::<std::path::PathBuf, String>(crate::paths::data_root().join("pet-gifs"))
 }
 
 /// 删除前的磁盘副本目录：自定义 GIF 先复制到这里，撤销时再复制回去。
 fn trash_root(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("pet-gifs-trash"))
-        .map_err(|error| error.to_string())
+    Ok::<std::path::PathBuf, String>(crate::paths::data_root().join("pet-gifs-trash"))
 }
 
 fn validate_state(state: &str) -> Result<(), String> {
