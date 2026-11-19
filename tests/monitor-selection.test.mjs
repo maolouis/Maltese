@@ -12,6 +12,7 @@ import {
   pinnedDefaultPosition,
   pinnedPhysicalSize,
   resolveBongoPreference,
+  resolveExtrasTargetKey,
   resolveMonitorPreference,
   resolvePinnedWorkArea,
   screenSelectOptions,
@@ -196,4 +197,16 @@ test("pinned DPI：物理尺寸按目标屏 scale 换算（100% vs 150%）", () 
   assert.deepEqual(pinnedPhysicalSize({ width: 420, height: 560 }, 1), { width: 420, height: 560 });
   assert.deepEqual(pinnedPhysicalSize({ width: 420, height: 560 }, 1.5), { width: 630, height: 840 });
   assert.deepEqual(pinnedPhysicalSize(undefined, 1.25), { width: 525, height: 700 });
+});
+
+test("Bongo 跟随小狗：偏好为空时跟小狗实际所在屏，不回主屏；显式偏好优先级更高", () => {
+  const secondaryKey = "\\\\.\\DISPLAY1|1920x1080@-1920,0";
+  // islandScreen=跟随上次位置 / 没设置 → 偏好 null，必须用小狗实际所在屏
+  assert.equal(resolveExtrasTargetKey(null, null, secondaryKey), secondaryKey);
+  // 显式选了「小狗屏幕」→ 用偏好指纹
+  assert.equal(resolveExtrasTargetKey(null, "pref-island", secondaryKey), "pref-island");
+  // Bongo 单独指定 → 优先级最高
+  assert.equal(resolveExtrasTargetKey("pref-bongo", "pref-island", null), "pref-bongo");
+  // 显示器枚举未就绪（全空）→ null，调用方回主屏
+  assert.equal(resolveExtrasTargetKey(null, null, null), null);
 });

@@ -262,10 +262,43 @@ pub(crate) fn reset_tray_status(app: &tauri::AppHandle) {
 
 pub(crate) fn extras_target_monitor_key(app: &AppHandle) -> Option<String> {
     let bongo = BONGO_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
-    if bongo.is_some() {
-        return bongo;
-    }
-    ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone())
+    let island_pref = ISLAND_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone());
+    resolve_extras_target_key(bongo, island_pref, island_actual_monitor_key(app))
+}
+
+/// 「跟随小狗」的目标屏解析（纯函数，有单测）：
+/// 1. Bongo 单独指定了屏 → 用它；
+/// 2. 没单独指定、但「小狗屏幕」选了一块具体的屏 → 跟随小狗的**偏好**；
+/// 3. 「小狗屏幕」是「跟随上次位置」/没设置（偏好为 None）→ 跟随小狗**实际所在显示器**。
+///    这一步是「重启后 Bongo 回主屏」的根因：偏好 None 时不能直接回主屏，
+///    否则小狗靠持久化的位置落在副屏，而 Bongo 又回了主屏。
+pub(crate) fn resolve_extras_target_key(
+    bongo_pref: Option<String>,
+    island_pref: Option<String>,
+    island_actual: Option<String>,
+) -> Option<String> {
+    bongo_pref.or(island_pref).or(island_actual)
+}
+
+/// 主岛窗口当前所在显示器的完整指纹（名字|宽x高@x,y，与 `monitor_infos` 一致）。
+pub(crate) fn bongo_pref_key() -> Option<String> {
+    BONGO_MONITOR_PREF.lock().ok().and_then(|slot| slot.clone())
+}
+
+pub(crate) fn island_actual_monitor_key(app: &AppHandle) -> Option<String> {
+    let window = app.get_webview_window(WINDOW_LABEL)?;
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())?;
+    Some(monitor_full_key(
+        monitor.name().map(|name| name.as_str()).unwrap_or(""),
+        monitor.size().width,
+        monitor.size().height,
+        monitor.position().x,
+        monitor.position().y,
+    ))
 }
 
 pub(crate) fn find_extras_monitor(app: &AppHandle, key: Option<&str>) -> Option<Monitor> {
@@ -652,6 +685,10 @@ fn set_island_interaction(
         state,
         animate_position.unwrap_or(true) && previous_state.is_tucked != state.is_tucked,
     )?;
+    // Bongo「跟随小狗」按主岛**实际所在屏**解析：主岛位置刚恢复 / 切屏后重排一次（幂等）。
+    if let Some(config) = desktop_extras::last_config() {
+        let _ = desktop_extras::sync_extras_now(&app, &config);
+    }
     let glass = apply_glass_material(&window, state);
     ensure_island_on_screen(&window);
     glass
@@ -4811,6 +4848,30 @@ mod tests {
         assert_eq!(sane_window_rect(WindowRect { x: 1560, y: 880, width: 259, height: 28 }), None);
     }
 
+    // —— Bongo「跟随小狗」的目标屏解析 ——
+
+    #[test]
+    fn extras_target_follows_island_actual_monitor_when_preferences_are_none() {
+        // 用户没选「小狗屏幕」（跟随上次位置）时，偏好是 None；
+        // 小狗靠持久化位置落在副屏，Bongo 必须跟到副屏，不能回主屏。
+        assert_eq!(
+            resolve_extras_target_key(None, None, Some("\\\\.\\DISPLAY1|1920x1080@-1920,0".to_string())),
+            Some("\\\\.\\DISPLAY1|1920x1080@-1920,0".to_string())
+        );
+        // 显式选了「小狗屏幕」时优先用偏好
+        assert_eq!(
+            resolve_extras_target_key(None, Some("pref-island".to_string()), Some("actual".to_string())),
+            Some("pref-island".to_string())
+        );
+        // Bongo 单独指定时优先级最高
+        assert_eq!(
+            resolve_extras_target_key(Some("pref-bongo".to_string()), Some("pref-island".to_string()), None),
+            Some("pref-bongo".to_string())
+        );
+        // 全都没有（显示器未就绪）→ None，调用方回主屏
+        assert_eq!(resolve_extras_target_key(None, None, None), None);
+    }
+
     // —— 固定在桌面的标签页（pinned）跟随副屏 ——
 
     #[test]
@@ -5006,6 +5067,20 @@ pub fn run() {
             }
             // 多屏热插拔：30s 轮询显示器指纹集合，变化时按偏好重排主岛/Bongo。
             start_monitor_watch(app.handle().clone());
+            // 重启后 Bongo 回主屏：启动瞬间显示器枚举 / 前端恢复主岛位置 / 屏幕偏好
+            // 都还没就绪，extras 可能先按主屏落位。这里在 1s / 3s / 6s 各重同步一次
+            // （幂等，成功后配置不变就不会再动），保证「Bongo 跟随小狗」用的是主岛实际所在屏。
+            {
+                let app_handle = app.handle().clone();
+                thread::spawn(move || {
+                    for delay in [Duration::from_millis(1000), Duration::from_secs(3), Duration::from_secs(6)] {
+                        thread::sleep(delay);
+                        if let Some(config) = desktop_extras::last_config() {
+                            let _ = desktop_extras::sync_extras_now(&app_handle, &config);
+                        }
+                    }
+                });
+            }
             if let Err(error) = clipboard_history::init(app.handle()) {
                 eprintln!("failed to initialize clipboard history: {error}");
             }

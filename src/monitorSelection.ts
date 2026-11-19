@@ -161,6 +161,21 @@ export function resolveBongoPreference(
   if (choice === "follow") return islandPreference;
   return resolveMonitorPreference(choice, monitors, true);
 }
+/**
+ * 「Bongo 跟随小狗」的目标屏解析（与 Rust `resolve_extras_target_key` 同规则）：
+ * 1. Bongo 单独指定了屏 → 用它；
+ * 2. 没单独指定、但「小狗屏幕」有具体偏好 → 跟随偏好指纹；
+ * 3. 「小狗屏幕」是「跟随上次位置」/未设置（偏好 null）→ 跟随小狗**实际所在显示器**，
+ *    不能回主屏——否则小狗靠持久化位置落在副屏时，重启后 Bongo 会留在主屏。
+ */
+export function resolveExtrasTargetKey(
+  bongoPreference: string | null,
+  islandPreference: string | null,
+  islandActualMonitor: string | null,
+): string | null {
+  return bongoPreference ?? islandPreference ?? islandActualMonitor ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // 「固定在桌面的标签页」(pinned) 的多屏行为：与主岛共用同一份「小狗屏幕」偏好。
 // ---------------------------------------------------------------------------

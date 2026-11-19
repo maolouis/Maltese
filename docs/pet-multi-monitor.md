@@ -185,3 +185,21 @@ export function cornerRect(monitor, logicalWidth, logicalHeight, corner: "tl" | 
   - `src/ScreenPlacementCard.tsx` / `.css`（两处设置共用，只有一块屏时禁用）、
     `src/App.tsx`（设置项 `islandScreen`/`bongoScreen` + 下发偏好 + 缺屏气泡）、
     `src/SettingsWindow.tsx`（卡片挂载）、i18n 文案。
+
+## 11. 重启后 Bongo 跟随小狗（2026-11-19 修复）
+
+**现象**：小狗在副屏、Bongo 设为「跟随小狗」，完整退出应用再启动后 Bongo 回到主屏。
+
+**根因**（时序 + 解析）：
+1. 屏幕偏好（`islandScreen` / `bongoScreen`）只在内存里，靠前端 `set_monitor_preferences` 恢复；
+   启动瞬间前端还没跑，`extras_target_monitor_key` 拿到 `None` → 回主屏把 Bongo 放好。
+2. 更关键：「跟随小狗」原来解析成**小狗屏幕偏好**；当「小狗屏幕 = 跟随上次位置」时这个偏好是
+   `null`，于是 Bongo 直接回主屏——而小狗自己是靠持久化的**位置**落在副屏的。
+
+**修法**：
+- `extras_target_monitor_key`：Bongo 单独偏好 → 小狗屏幕偏好 → **小狗窗口实际所在显示器指纹**，
+  三级解析（`resolve_extras_target_key` 纯函数，Rust / TS 各一份单测）。
+- 主岛几何落定（`set_island_interaction`）后立刻重排一次 extras（幂等）；
+- 启动后 **1s / 3s / 6s** 各重同步一次，等显示器枚举、前端恢复位置、偏好就绪；
+- `work_area` 的兜底从硬编码 `1920×1080` 改为**主屏真实工作区**；
+- 排障日志：`[monitor] extras sync bongo monitor=<指纹> rect=<x,y,w,h> prefer=<偏好|follow>`。

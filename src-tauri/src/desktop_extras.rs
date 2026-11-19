@@ -141,6 +141,17 @@ fn work_area(app: &AppHandle, monitor_key: Option<&str>) -> (i32, i32, i32, i32,
             monitor.scale_factor(),
         );
     }
+    // 显示器枚举尚未就绪：先用主屏真实工作区，别再硬编码 1920×1080。
+    if let Some(monitor) = app.primary_monitor().ok().flatten() {
+        let area = monitor.work_area();
+        return (
+            area.position.x,
+            area.position.y,
+            area.size.width as i32,
+            area.size.height as i32,
+            monitor.scale_factor(),
+        );
+    }
     (0, 0, 1920, 1080, 1.0)
 }
 
@@ -219,11 +230,15 @@ fn sync_bongo(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), Strin
             "topCenter" => (left + ((screen_w - phys_w) / 2).max(0), top + margin),
             _ => (left + ((screen_w - phys_w) / 2).max(0), max_y),
         };
-        let _ = window.set_position(Position::Physical(PhysicalPosition::new(
-            x.clamp(left, max_x),
-            y.clamp(top, max_y),
-        )));
+        let (x, y) = (x.clamp(left, max_x), y.clamp(top, max_y));
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
         let _ = window.show();
+        // 排障口径：重启后 Bongo 落在哪块屏、跟随的是哪个指纹。
+        eprintln!(
+            "[monitor] extras sync bongo monitor={} rect=({x},{y},{phys_w},{phys_h}) prefer={}",
+            target.as_deref().unwrap_or("primary"),
+            crate::bongo_pref_key().as_deref().unwrap_or("follow")
+        );
     } else {
         let _ = window.hide();
     }
