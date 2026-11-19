@@ -210,3 +210,20 @@ pid / 调试端口 / profile 路径。应用重启后靠它认出上次留下的
   （含 title、reason、url）；snapshot 的 ilteredCount 即丢弃计数，面板可直接显示。
 - **N4 收起后可见**：采集运行时托盘图标 tooltip 显示「正在刷视频 N 条（已丢弃 M 条伪条目）」，
   停止后恢复默认提示（crate::set_tray_status）。
+
+### N5 强制进入视频详情页（2026-11-19）
+
+页面停在 Feed/首页时（on_feed=true、canonicalUrl 空），按三段降级把页面带进 /video/：
+
+1. 从 DOM [href*=/video/BV] 或 window.__INITIAL_STATE__（bvid / recommendList）取第一条视频链接，
+   Page.navigate 过去，再每 300ms 轮询 location.href（≤8s）确认进入 /video/；
+2. 取不到链接就依次点第一张卡片：.bili-video-card a、.bili-video-card、[data-video-id] a、
+   [data-video-id]、.feed-card a、.feed-card、.bili-video-card__info--tit a，同样轮询 URL；
+3. 仍不行 → 先开 /v/popular/all、/v/popular/rank/all 再重试 1/2。
+
+成功写 NAV_OK（含最终 url 与 attempts）；连续 3 次失败写 NAV_FAILED（final_url/title/attempts），
+同时 set_runtime_error(NAV_FAILED, 中文原因) 并停止本轮（面板可见原因，不再静默丢条目）。
+真正采到条目时写 ITEM_COLLECTED（url 必含 /video/）。实机已验证：NAV_OK url=.../video/BV1GJsz6FEke/、
+ITEM_COLLECTED ×2。
+
+注意：sessions/*.json 是启动时落盘、不实时；面板的 ilteredCount/items 请读 live snapshot。
