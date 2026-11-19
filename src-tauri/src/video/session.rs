@@ -421,6 +421,126 @@ fn lock_state(state: &Mutex<RuntimeState>) -> std::sync::MutexGuard<'_, RuntimeS
     }
 }
 
+
+/// N5：把页面强制带进视频详情页（三段降级）。
+pub struct NavOutcome {
+    pub ok: bool,
+    pub attempts: Vec<String>,
+    pub final_url: String,
+    pub title: String,
+}
+
+async fn wait_for_video_url(cdp: &mut CdpSession) -> (String, String) {
+    for _ in 0..27 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let url = cdp
+            .evaluate("location.href", EVALUATE_TIMEOUT)
+            .await
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+        if url.contains("/video/") {
+            let title = cdp
+                .evaluate("document.title", EVALUATE_TIMEOUT)
+                .await
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default();
+            return (url, title);
+        }
+    }
+    let url = cdp
+        .evaluate("location.href", EVALUATE_TIMEOUT)
+        .await
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let title = cdp
+        .evaluate("document.title", EVALUATE_TIMEOUT)
+        .await
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
+    (url, title)
+}
+
+const NAV_FIND_LINK_JS: &str = r#"(function(){try{
+  var a=document.querySelector('a[href*="/video/BV"],a[href*="/video/av"]');
+  if(a&&a.href)return a.href;
+  var s=window.__INITIAL_STATE__;
+  if(s){
+    var bvid=(s.videoData&&s.videoData.bvid)||(s.bvid)||'';
+    if(bvid)return 'https://www.bilibili.com/video/'+bvid;
+    var list=s.recommendList||s.relatedList||[];
+    for(var i=0;i<list.length;i++){ if(list[i]&&list[i].bvid) return 'https://www.bilibili.com/video/'+list[i].bvid; }
+  }
+  return '';
+}catch(e){return ''}})()"#;
+
+const NAV_CLICK_CARD_JS: &str = r#"(function(){try{
+  var sels=['.bili-video-card a','.bili-video-card','[data-video-id] a','[data-video-id]','.feed-card a','.feed-card','.bili-video-card__info--tit a'];
+  for(var i=0;i<sels.length;i++){ var el=document.querySelector(sels[i]); if(el){ el.click(); return sels[i]; } }
+  return '';
+}catch(e){return ''}})()"#;
+
+/// 三段降级：① 找 /video 链接直接导航 → ② 点第一个视频卡片 → ③ 先进排行榜再走 ①②。
+pub async fn force_enter_video_page(cdp: &mut CdpSession) -> NavOutcome {
+    let mut attempts: Vec<String> = Vec::new();
+
+    // ① 直接导航
+    if let Ok(value) = cdp.evaluate(NAV_FIND_LINK_JS, EVALUATE_TIMEOUT).await {
+        if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
+            attempts.push(format!("navigate:{url}"));
+            if cdp.navigate(&url).await.is_ok() {
+                let (final_url, title) = wait_for_video_url(cdp).await;
+                if final_url.contains("/video/") {
+                    return NavOutcome { ok: true, attempts, final_url, title };
+                }
+            }
+        } else {
+            attempts.push("find_link:empty".to_string());
+        }
+    }
+
+    // ② 点卡片
+    if let Ok(value) = cdp.evaluate(NAV_CLICK_CARD_JS, EVALUATE_TIMEOUT).await {
+        let selector = value.as_str().unwrap_or("").to_string();
+        attempts.push(format!("click:{selector}"));
+        if !selector.is_empty() {
+            let (final_url, title) = wait_for_video_url(cdp).await;
+            if final_url.contains("/video/") {
+                return NavOutcome { ok: true, attempts, final_url, title };
+            }
+        }
+    }
+
+    // ③ 搜索/排行榜兜底后重新找链接
+    for target in [
+        "https://www.bilibili.com/v/popular/all",
+        "https://www.bilibili.com/v/popular/rank/all",
+    ] {
+        attempts.push(format!("fallback:{target}"));
+        if cdp.navigate(target).await.is_err() {
+            continue;
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        if let Ok(value) = cdp.evaluate(NAV_FIND_LINK_JS, EVALUATE_TIMEOUT).await {
+            if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
+                attempts.push(format!("navigate:{url}"));
+                if cdp.navigate(&url).await.is_ok() {
+                    let (final_url, title) = wait_for_video_url(cdp).await;
+                    if final_url.contains("/video/") {
+                        return NavOutcome { ok: true, attempts, final_url, title };
+                    }
+                }
+            }
+        }
+    }
+
+    let (final_url, title) = wait_for_video_url(cdp).await;
+    NavOutcome { ok: false, attempts, final_url, title }
+}
+
 impl SessionEngine {
     pub fn snapshot(&self) -> VideoSnapshot {
         let state = lock_state(&self.state);
@@ -968,6 +1088,8 @@ impl SessionEngine {
 
         let mut cdp_failures = 0u32;
         let mut reconnect_failures = 0u32;
+        let mut nav_failures = 0u32;
+        let mut last_nav_at = 0u64;
 
         loop {
             if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
@@ -1089,6 +1211,21 @@ impl SessionEngine {
 
                 if let Some(Ok((facts, _unknown))) = facts_result {
                     let kind = adapter.classify_page(&facts);
+                    // N5：Feed/首页时先在 state 锁之外做导航尝试（await 期间不能持有 MutexGuard）。
+                    let mut nav_result: Option<NavOutcome> = None;
+                    {
+                        let items_empty = lock_state(&self.state).items.is_empty();
+                        if matches!(kind, PageKind::Feed)
+                            && items_empty
+                            && nav_failures < 3
+                            && now.saturating_sub(last_nav_at) >= 5
+                        {
+                            last_nav_at = now;
+                            if let Some(cdp) = session.as_mut() {
+                                nav_result = Some(force_enter_video_page(cdp).await);
+                            }
+                        }
+                    }
                     let mut auto_comment: Option<PageFacts> = None;
                     {
                         let mut state = lock_state(&self.state);
@@ -1116,6 +1253,42 @@ impl SessionEngine {
                             state.waiting_for_browser = true;
                         }
                         PageKind::Feed => {
+                            // N5：使用锁外完成的导航结果（成功记 NAV_OK；三次失败 → NAV_FAILED + 停止）。
+                            if let Some(outcome) = nav_result.take() {
+                                if outcome.ok {
+                                    nav_failures = 0;
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(state.session_id.clone()),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "info".to_string(),
+                                        code: "NAV_OK".to_string(),
+                                        message: format!("url={} attempts={:?}", outcome.final_url, outcome.attempts),
+                                    });
+                                } else {
+                                    nav_failures = nav_failures.saturating_add(1);
+                                    if nav_failures >= 3 {
+                                        self.store.log(DiagnosticEntry {
+                                            at: now,
+                                            session_id: Some(state.session_id.clone()),
+                                            channel: Some(ChannelType::Cdp),
+                                            level: "error".to_string(),
+                                            code: "NAV_FAILED".to_string(),
+                                            message: format!(
+                                                "final_url={} title={} attempts={:?}",
+                                                outcome.final_url, outcome.title, outcome.attempts
+                                            ),
+                                        });
+                                        drop(state);
+                                        self.set_runtime_error(
+                                            "NAV_FAILED",
+                                            "进不去视频页：可能停在登录页、遇到风控，或页面结构变了（详见 video/logs 里的 NAV_FAILED）。",
+                                        );
+                                        self.finish(&app, StopReason::Crash, false);
+                                        return;
+                                    }
+                                }
+                            }
                             if state.phase == Phase::AwaitingLogin {
                                 let mut diagnostics = 0;
                                 try_transition(&mut state.phase, Phase::Collecting, &mut diagnostics);
@@ -1140,7 +1313,22 @@ impl SessionEngine {
                                         ),
                                     });
                                 }
-                                _ => {}
+                                other => {
+                                    // N5 验收：真正采到视频条目时落 ITEM_COLLECTED（含 /video/ URL）。
+                                    if matches!(other, MergeOutcome::New | MergeOutcome::Updated) {
+                                        let url = facts.canonical_url.clone().unwrap_or_default();
+                                        if url.contains("/video/") {
+                                            self.store.log(DiagnosticEntry {
+                                                at: now,
+                                                session_id: Some(state.session_id.clone()),
+                                                channel: Some(ChannelType::Cdp),
+                                                level: "info".to_string(),
+                                                code: "ITEM_COLLECTED".to_string(),
+                                                message: format!("url={} title={}", url, facts.title),
+                                            });
+                                        }
+                                    }
+                                }
                             }
                             if state.items.len() > config.max_items as usize {
                                 state.items.truncate(config.max_items as usize);
