@@ -69,6 +69,7 @@ pub async fn dsh_chat(
     character: String,
     sticker: Option<bool>,
     memory_context: Option<String>,
+    source: Option<String>,
     request_id: Option<String>,
 ) -> Result<DshChatReply, String> {
     let message = message.trim().to_string();
@@ -86,6 +87,7 @@ pub async fn dsh_chat(
             &character,
             sticker.unwrap_or(false),
             memory_context.as_deref(),
+            source.as_deref(),
             request_id.as_deref(),
         )
     })
@@ -100,7 +102,7 @@ pub(crate) async fn generate_video_comment(
     character: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        chat(&app, &prompt, None, &character, false, None, None).map(|reply| reply.text)
+        chat(&app, &prompt, None, &character, false, None, Some("video-comment"), None).map(|reply| reply.text)
     })
     .await
     .map_err(|error| format!("评论模型线程失败：{error}"))?
@@ -113,6 +115,7 @@ fn chat(
     character: &str,
     sticker: bool,
     memory_context: Option<&str>,
+    source: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<DshChatReply, String> {
     let cli = dsh_cli()?;

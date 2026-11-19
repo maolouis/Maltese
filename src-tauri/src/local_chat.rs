@@ -215,6 +215,7 @@ pub async fn local_chat(
     images: Option<Vec<String>>,
     sticker: Option<bool>,
     memory_context: Option<String>,
+    source: Option<String>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -352,6 +353,7 @@ pub(crate) async fn generate_video_comment(
         None,
         Some(false),
         None,
+        Some("video-comment".to_string()),
         Some(LocalChatGenerationSettings {
             max_tokens: Some(max_tokens.clamp(64, 256)),
             temperature: Some(temperature.clamp(0.0, 1.2)),
@@ -377,6 +379,7 @@ pub async fn local_chat_stream(
     images: Option<Vec<String>>,
     sticker: Option<bool>,
     memory_context: Option<String>,
+    source: Option<String>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -408,6 +411,7 @@ pub async fn local_chat_stream(
         api_key.as_deref(),
         messages.clone(),
         settings.clone(),
+        source.as_deref(),
     )
     .await?;
 
@@ -440,6 +444,7 @@ pub async fn local_chat_stream(
         api_key.as_deref(),
         messages,
         retry_settings,
+        source.as_deref(),
     )
     .await
     .unwrap_or_default();
@@ -461,6 +466,7 @@ async fn stream_once(
     api_key: Option<&str>,
     messages: Vec<Value>,
     settings: LocalChatGenerationSettings,
+    source: Option<&str>,
 ) -> Result<String, String> {
     let mut request = client
         .post(endpoint.clone())
@@ -558,7 +564,7 @@ async fn stream_once(
     };
     crate::usage::record(crate::usage::UsageRecord {
         at: crate::usage::now_seconds(),
-        source: "chat".to_string(),
+        source: crate::usage::normalize_source(source.as_deref()),
         backend: "local".to_string(),
         model: model.to_string(),
         prompt_tokens,

@@ -62,6 +62,10 @@ pub struct UsageSummary {
     pub by_source: std::collections::BTreeMap<String, UsageStats>,
     pub exact_requests: u64,
     pub estimated_requests: u64,
+    pub failed_requests: u64,
+    pub avg_duration_ms: u64,
+    pub by_model: std::collections::BTreeMap<String, UsageStats>,
+    pub latest: Option<UsageRecord>,
 }
 
 fn usage_dir() -> PathBuf {
@@ -90,6 +94,16 @@ pub fn file_for(day: &str) -> PathBuf {
 }
 
 /// 估算 token：中文 1.6 字/token、其余 4 字符/token（与前端 petMemory 口径一致）。
+/// 来源归一化：未知/缺失一律归入 chat。
+pub fn normalize_source(source: Option<&str>) -> String {
+    let value = source.unwrap_or("chat").trim();
+    if SOURCES.contains(&value) {
+        value.to_string()
+    } else {
+        "chat".to_string()
+    }
+}
+
 pub fn estimate_tokens(text: &str) -> u64 {
     if text.is_empty() {
         return 0;
@@ -170,6 +184,9 @@ pub fn summary(days: u32, now: u64) -> UsageSummary {
     for offset in 0..days as u64 {
         day_keys.push(today_key((today_index.saturating_sub(offset)) * 86_400));
     }
+    let mut duration_total = 0u64;
+    let mut duration_count = 0u64;
+    let mut all_records: Vec<UsageRecord> = Vec::new();
     for day in &day_keys {
         for record in read_day(day) {
             if !SOURCES.contains(&record.source.as_str()) {
@@ -186,6 +203,16 @@ pub fn summary(days: u32, now: u64) -> UsageSummary {
             summary.total.cached_tokens += record.cached_tokens;
             summary.total.total_tokens += record.total_tokens;
             summary.total.requests += 1;
+            duration_total += record.duration_ms;
+            duration_count += 1;
+            if !record.ok {
+                summary.failed_requests += 1;
+            }
+            let model_key = format!("{}:{}", record.backend, record.model);
+            let model_stats = summary.by_model.entry(model_key).or_default();
+            model_stats.total_tokens += record.total_tokens;
+            model_stats.requests += 1;
+            all_records.push(record.clone());
             if record.precision == "exact" {
                 summary.exact_requests += 1;
             } else {
@@ -194,6 +221,9 @@ pub fn summary(days: u32, now: u64) -> UsageSummary {
         }
     }
     summary.total.day = today;
+    summary.avg_duration_ms = if duration_count > 0 { duration_total / duration_count } else { 0 };
+    all_records.sort_by_key(|record| record.at);
+    summary.latest = all_records.last().cloned();
     summary
 }
 
