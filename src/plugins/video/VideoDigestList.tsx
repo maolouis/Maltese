@@ -1,5 +1,6 @@
 // 小结与历史：待投递小结 + 历史会话（QA §1 #7：只保留必要内容，清空数据移到「高级设置」）。
 
+import { invoke } from "@tauri-apps/api/core";
 import type { AgentAccount, DigestDraft, SessionSummary } from "./types";
 import { sessionReason } from "./videoPanelLogic";
 
@@ -31,6 +32,14 @@ export function VideoDigestList({
         <span className="video-automation__muted">待投递 {pendingCount}</span>
         <button type="button" className="video-automation__link" onClick={onLoadSessions}>
           刷新历史
+        </button>
+        <button
+          type="button"
+          className="video-automation__link"
+          title="自检：写入一条示例评论并弹气泡，用于验证面板/气泡显示（不影响采集）"
+          onClick={() => void invoke("video_comment_selftest", {})}
+        >
+          评论自检
         </button>
       </div>
 

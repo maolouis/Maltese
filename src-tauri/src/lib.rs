@@ -5189,6 +5189,7 @@ pub fn run() {
             video::video_get_snapshot,
             video::video_update_config,
             video::video_probe_channels,
+            video::video_comment_selftest,
             video::video_list_sessions,
             video::video_get_session,
             video::video_get_profile,

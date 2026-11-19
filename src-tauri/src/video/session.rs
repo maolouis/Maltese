@@ -680,6 +680,24 @@ impl SessionEngine {
         self.store.save_session(&session);
     }
 
+    /// 自检：把一条评论写进 live snapshot 并发气泡事件（不依赖采集是否成功）。
+    pub fn selftest_comment(&self, app: &AppHandle, text: &str) {
+        let now = now_seconds();
+        {
+            let mut state = lock_state(&self.state);
+            state.last_comment_text = text.to_string();
+            state.last_comment_dry_run = true;
+            state.last_comment_at = now;
+        }
+        let _ = app.emit(
+            "video-comment-bubble",
+            serde_json::json!({
+                "kind": "selftest",
+                "text": format!("小狗评论（预演）：{}", text),
+            }),
+        );
+    }
+
     pub fn snapshot(&self) -> VideoSnapshot {
         let state = lock_state(&self.state);
         VideoSnapshot {
@@ -1215,6 +1233,9 @@ impl SessionEngine {
         }
         let mut last_progress_at = now_seconds();
         let mut stall_logged = false;
+        let mut last_housekeeping_at = 0u64;
+        let mut no_progress_rounds = 0u32;
+        let mut pending_heal = false;
         let connect_deadline = Instant::now() + Duration::from_secs(15);
         loop {
             match CdpSession::connect(port, platform).await {
@@ -1305,6 +1326,12 @@ impl SessionEngine {
             }
 
             let now = now_seconds();
+            if now.saturating_sub(last_progress_at) >= 8 {
+                no_progress_rounds = no_progress_rounds.saturating_add(1);
+                if no_progress_rounds >= 2 && !pending_heal {
+                    pending_heal = true;
+                }
+            }
             if now.saturating_sub(last_progress_at) >= 30 && !stall_logged {
                 stall_logged = true;
                 self.store.log(DiagnosticEntry {
@@ -1326,6 +1353,35 @@ impl SessionEngine {
                 );
                 self.finish(&app, StopReason::Crash, true);
                 break;
+            }
+            // A1：每 10s 做一次单实例体检（软件运行中也可能被重新拉起第二个实例）。
+            if now.saturating_sub(last_housekeeping_at) >= 10 {
+                last_housekeeping_at = now;
+                let mut alive: Vec<u16> = Vec::new();
+                for candidate in 9333u16..=9338 {
+                    if port_alive(candidate).await {
+                        alive.push(candidate);
+                    }
+                }
+                if alive.len() > 1 {
+                    let mut closed = 0usize;
+                    for candidate in alive.iter().copied() {
+                        if candidate == port {
+                            continue;
+                        }
+                        if shutdown_browser(candidate).await {
+                            closed += 1;
+                        }
+                    }
+                    self.store.log(DiagnosticEntry {
+                        at: now,
+                        session_id: Some(self.snapshot().session_id),
+                        channel: None,
+                        level: "warn".to_string(),
+                        code: "BROWSER_ENFORCED_SINGLE".to_string(),
+                        message: format!("closed={} kept_port={} alive={:?}", closed, port, alive),
+                    });
+                }
             }
             let should_sample = {
                 let mut channel = match self.channel.lock() {
@@ -1350,6 +1406,26 @@ impl SessionEngine {
                                 self.close_browser_instance();
                                 self.finish(&app, StopReason::Crash, false);
                                 break;
+                            }
+                        }
+                    }
+                }
+                // A2：每轮采集前复核 target。已有视频上下文却读到非 /video/ 页面 → 重选 page。
+                if let Some(cdp) = session.as_mut() {
+                    if !current_video_url.is_empty() {
+                        let before = cdp.current_url().await;
+                        if !before.contains("/video/") {
+                            let from = if before.is_empty() { "(empty)" } else { before.as_str() };
+                            if cdp.reconnect().await.is_ok() {
+                                let after = cdp.current_url().await;
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: "warn".to_string(),
+                                    code: "TARGET_REPICK".to_string(),
+                                    message: format!("from={} to={}", from, after),
+                                });
                             }
                         }
                     }
@@ -1552,6 +1628,7 @@ impl SessionEngine {
                                             pending_persist = true;
                                             last_progress_at = now;
                                             stall_logged = false;
+                                            no_progress_rounds = 0;
                                             // N11：锁外做自动评论（去重/间隔/预演都在锁外判断）。
                                             pending_comment = Some(facts.clone());
                                             // N6：同一条重复采集且停留够 20s → 换下一条（标记，锁外执行）。
@@ -1570,6 +1647,25 @@ impl SessionEngine {
                             }
                             // 旧 auto_comment 路径已停用：由新评论块接管（dry-run 优先），避免双发。
                         }
+                        }
+                    }
+                    // A3：连续两轮没进展 → 立即重导航，不等下一轮。
+                    if pending_heal {
+                        pending_heal = false;
+                        no_progress_rounds = 0;
+                        if let Some(cdp) = session.as_mut() {
+                            let outcome = force_enter_video_page(cdp).await;
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: Some(ChannelType::Cdp),
+                                level: if outcome.ok { "info" } else { "warn" }.to_string(),
+                                code: "SELF_HEAL_NAV".to_string(),
+                                message: format!(
+                                    "ok={} url={} attempts={:?}",
+                                    outcome.ok, outcome.final_url, outcome.attempts
+                                ),
+                            });
                         }
                     }
                     // N11：自动评论（默认 dry-run：只生成 + 日志 + 气泡，不真正发送）。

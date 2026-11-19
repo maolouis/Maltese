@@ -175,6 +175,18 @@ pub fn video_update_config(
     session::engine(&app).update_config(&patch)
 }
 
+
+/// 自检命令：把一条评论写进 live snapshot 并发气泡事件（仅用于验证面板/气泡，不影响采集）。
+#[tauri::command]
+pub fn video_comment_selftest(app: AppHandle, text: Option<String>) -> Result<(), String> {
+    let value = text
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "这个讲得挺细的，先码住。".to_string());
+    session::engine(&app).selftest_comment(&app, &value);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn video_probe_channels(app: AppHandle) -> Vec<ChannelState> {
     session::engine(&app).probe_channels()
