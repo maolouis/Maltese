@@ -28,6 +28,7 @@ export type SkillAction =
   | "agent_registry"
   | "agent_status"
   | "desktop_agents_status"
+  | "video_taste"
   | "current_time";
 
 export type SkillDefinition = {
@@ -82,6 +83,14 @@ export const SKILLS: SkillDefinition[] = [
     title: "调整自己的设置",
     description: "改小狗自己的设置，目前支持 character（形象：小白 / 小鸡毛 / 双狗）",
     example: '{"tool":"pet_settings","args":{"key":"character","value":"小鸡毛"}}',
+  },
+  {
+    action: "video_taste",
+    group: "settings",
+    title: "调整视频口味",
+    description:
+      "按主人一句话调整刷视频的喜好（少刷/多看某个分区或题材），只改视频口味画像，不改平台、时长、自动评论等其它设置",
+    example: '{"tool":"video_taste","args":{"text":"少刷游戏区，多来点纪录片"}}',
   },
   {
     action: "web_search",
@@ -229,6 +238,10 @@ const NEW_SKILL_ACTIONS: SkillAction[] = [
 const AGENT_SKILLS_MIGRATION_KEY = "maltese-skills-migrated-20261119";
 const AGENT_SKILL_ACTIONS: SkillAction[] = ["agent_registry", "agent_status", "desktop_agents_status"];
 
+/** 视频口味技能：单独迁移键，老用户默认补进去，之后仍可手动关闭。 */
+const VIDEO_TASTE_MIGRATION_KEY = "maltese-skills-migrated-20261119-video-taste";
+const VIDEO_TASTE_ACTIONS: SkillAction[] = ["video_taste"];
+
 export function loadEnabledSkills(): SkillAction[] {
   const stored = readJson<SkillAction[] | null>(SKILLS_STORAGE_KEY, null);
   if (!stored) return SKILLS.filter((skill) => skill.group !== "clipboard").map((s) => s.action);
@@ -248,6 +261,15 @@ export function loadEnabledSkills(): SkillAction[] {
     writeJson(SKILLS_STORAGE_KEY, enabled);
     try {
       window.localStorage.setItem(AGENT_SKILLS_MIGRATION_KEY, "1");
+    } catch {
+      // 忽略
+    }
+  }
+  if (!window.localStorage.getItem(VIDEO_TASTE_MIGRATION_KEY)) {
+    enabled = Array.from(new Set([...enabled, ...VIDEO_TASTE_ACTIONS]));
+    writeJson(SKILLS_STORAGE_KEY, enabled);
+    try {
+      window.localStorage.setItem(VIDEO_TASTE_MIGRATION_KEY, "1");
     } catch {
       // 忽略
     }
@@ -284,7 +306,7 @@ export function skillsPrompt(enabled: SkillAction[], custom: CustomSkill[]): str
     "可用的动作：",
     ...active.map((skill) => `- ${skill.action}：${skill.description}；示例 ${skill.example}`),
     "如果不需要动手（只是聊天），就直接用中文回答，不要输出 JSON。",
-    "判断口诀：「我要开始学/做…」→ todo_start；「休息一下 / 暂停」→ todo_pause；「记一下今天… / 写日记」→ diary_add；「今天都记了什么」→ diary_read；「放点音乐 / 播放音乐」→ music_play；「换个形象 / 换成小鸡毛」→ pet_settings；「帮我查 / 搜一下 / 网上看看…」→ web_search；「有哪些 agent / 装了哪些模型」→ agent_registry；「谁在干活 / 有几个在跑」→ agent_status。",
+    "判断口诀：「我要开始学/做…」→ todo_start；「休息一下 / 暂停」→ todo_pause；「记一下今天… / 写日记」→ diary_add；「今天都记了什么」→ diary_read；「放点音乐 / 播放音乐」→ music_play；「换个形象 / 换成小鸡毛」→ pet_settings；「帮我查 / 搜一下 / 网上看看…」→ web_search；「有哪些 agent / 装了哪些模型」→ agent_registry；「谁在干活 / 有几个在跑」→ agent_status；「少刷游戏区 / 多看纪录片 / 别看直播」→ video_taste。",
     "一次只调用一个动作。动作执行完会告诉你结果，再据此用中文回答主人。",
   ];
   if (custom.length > 0) {
@@ -676,6 +698,21 @@ ${text}` };
         }
         if (parts.length === 0) return { ok: true, message: "现在没有 agent 在跑，也没有开着的桌面 AI 应用。" };
         return { ok: true, message: parts.join("；") };
+      }
+      case "video_taste": {
+        const text = String(args.text ?? args.query ?? args.utterance ?? "").trim();
+        if (!text) {
+          return { ok: false, message: "没说得太具体，是想多看还是少看哪个分区？（比如「少刷游戏区」）" };
+        }
+        const report = await invoke<{
+          reply: string;
+          positiveTags: string[];
+          negativeTags: string[];
+          moves: string[];
+        }>("video_update_taste", { text });
+        // 通知已挂载的视频面板刷新口味标签。
+        window.dispatchEvent(new CustomEvent("video-taste-changed"));
+        return { ok: true, message: report.reply };
       }
       case "current_time": {
         const now = new Date();

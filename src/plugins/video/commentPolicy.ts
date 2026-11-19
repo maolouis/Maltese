@@ -5,7 +5,7 @@
 // - 两次评论最小间隔 3 分钟、单次会话最多 10 条；
 // - 只评论视频页（首页/搜索页不评）；
 // - 未登录/风控 → 本会话停止自动评论；
-// - 生成失败用模板兜底，绝不发空。
+// - 生成失败返回空文本，调用方必须记录失败并跳过发送，不使用模板冒充模型结果。
 
 export const COMMENT_MAX_CHARS = 40;
 export const COMMENT_MIN_INTERVAL_MS = 3 * 60_000;
@@ -13,7 +13,6 @@ export const COMMENT_SESSION_LIMIT = 10;
 export const COMMENT_MIN_WATCH_MS = 8_000;
 export const COMMENT_TITLE_MAX_CHARS = 12;
 export const COMMENT_RECENT_HISTORY = 5;
-export const COMMENT_TEMPLATE = "这个讲得挺细的，先码住。";
 
 /** 禁词/话术：命中就重写或跳过。 */
 export const COMMENT_BANNED = [
@@ -44,7 +43,7 @@ export type CommentDecision =
   | { allowed: false; reason: CommentBlockReason };
 
 export type CommentState = {
-  /** 自动评论开关（设置项，默认开）。 */
+  /** 自动评论开关（设置项，默认关闭）。 */
   enabled: boolean;
   /** 当前页面是不是视频详情页。 */
   onVideoPage: boolean;
@@ -85,7 +84,7 @@ export function truncateTitle(title: string, max = COMMENT_TITLE_MAX_CHARS): str
   return `${trimmed.slice(0, max)}…`;
 }
 
-/** 口径统一：折叠空白、去掉 @ 与 URL、限制 40 字；空则用模板兜底。 */
+/** 口径统一：折叠空白、去掉 @ 与 URL、限制 40 字；空文本表示模型没有生成评论。 */
 export function sanitizeComment(raw: string): string {
   let text = (raw ?? "").replace(/\s+/g, " ").trim();
   text = text.replace(/https?:\/\/\S+/gi, "").replace(/@\S+/g, "");
@@ -95,7 +94,7 @@ export function sanitizeComment(raw: string): string {
   }
   text = text.trim();
   if (text.length > COMMENT_MAX_CHARS) text = `${text.slice(0, COMMENT_MAX_CHARS - 1)}…`;
-  return text || COMMENT_TEMPLATE;
+  return text;
 }
 
 /** 是否命中禁词（单测/调试用）。 */

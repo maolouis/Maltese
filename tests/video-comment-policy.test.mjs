@@ -4,7 +4,6 @@ import {
   COMMENT_MAX_CHARS,
   COMMENT_MIN_INTERVAL_MS,
   COMMENT_SESSION_LIMIT,
-  COMMENT_TEMPLATE,
   canCommentNow,
   commentBubbleText,
   commentFailureBubble,
@@ -53,9 +52,9 @@ test("触发条件：开关/页面/观看时长/去重/间隔/上限", () => {
   );
 });
 
-test("评论清洗：≤40 字、去链接/@、禁词、空则模板", () => {
+test("评论清洗：≤40 字、去链接/@、禁词、空则跳过", () => {
   assert.equal(sanitizeComment("  这个讲得  挺细的  "), "这个讲得 挺细的");
-  assert.equal(sanitizeComment(""), COMMENT_TEMPLATE);
+  assert.equal(sanitizeComment(""), "");
   assert.ok(sanitizeComment("x".repeat(100)).length <= COMMENT_MAX_CHARS);
   const cleaned = sanitizeComment("看完了求关注 @某人 https://example.com 已三连");
   assert.equal(hasBannedWords(cleaned), false, cleaned);

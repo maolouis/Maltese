@@ -65,3 +65,10 @@ $token = Get-Content "$env:APPDATA\com.maolouis.maltese\dsh-api-token.txt"
 Invoke-RestMethod "http://127.0.0.1:$port/api/video/sessions" | ConvertTo-Json -Depth 3
 Invoke-RestMethod "http://127.0.0.1:$port/api/video/sessions/<sessionId>" -Headers @{ "x-maltese-token" = $token } | ConvertTo-Json -Depth 4
 ```
+## 折叠/展开（可发现性）
+
+- 「最近小结」「历史会话」标题行**整行可点**：`role="button"`、`tabIndex=0`、Enter/Space 切换、`aria-expanded`，
+  右侧有明确的「收起 ▲ / 展开 ▼」文字按钮；标题左侧显示数量（如「历史会话（20）」）。
+- 默认：最近小结**展开**（主要内容）、历史会话**收起**；状态分别持久化到
+  `localStorage` 的 `maltese-video-summary-collapsed` / `maltese-video-history-collapsed`。
+- 窄窗/矮窗时区块内容 `max-height:42vh; overflow-y:auto`，折叠不会把内容挤没。

@@ -84,8 +84,9 @@ impl Default for VideoConfig {
             daily_deliveries: 2,
             channel_priority: ChannelPriority::Auto,
             model_summary: true,
-            auto_comment: true,
-            comment_dry_run: false,
+            // 自动评论必须由用户在面板里明确打开；打开后默认只预演，避免首次升级直接发出评论。
+            auto_comment: false,
+            comment_dry_run: true,
             auto_like: false,
             auto_favorite: false,
             auto_like_daily_limit: 10,
@@ -235,6 +236,7 @@ mod tests {
     #[test]
     fn auto_comment_requires_explicit_patch() {
         assert!(!VideoConfig::default().auto_comment);
+        assert!(VideoConfig::default().comment_dry_run);
         let patch: VideoConfigPatch =
             serde_json::from_str(r#"{"autoComment": true}"#).expect("patch");
         let next = apply_patch(&VideoConfig::default(), &patch).expect("valid");

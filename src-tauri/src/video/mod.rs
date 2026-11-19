@@ -22,6 +22,8 @@ pub mod queue;
 pub mod rules;
 pub mod session;
 pub mod store;
+pub mod taste;
+pub mod reflection;
 pub mod url_guard;
 
 use accounts::AgentAccount;
@@ -271,6 +273,27 @@ pub fn video_update_profile(
 pub fn video_take_pending_digest(app: AppHandle) -> Option<DigestDraft> {
     let _guard = command_guard(&app, "video_take_pending_digest");
     session::engine(&app).take_pending_digest(&app)
+}
+
+/// 当前视频口味（面板展示；聊天技能也读它）。
+#[tauri::command]
+pub fn video_get_taste(app: AppHandle) -> UserProfile {
+    let _guard = command_guard(&app, "video_get_taste");
+    session::engine(&app).taste_profile()
+}
+
+/// 聊天里一句话调整视频口味：只动画像正/负标签，不改其它设置。
+#[tauri::command]
+pub fn video_update_taste(app: AppHandle, text: String) -> VideoResult<taste::TasteReport> {
+    let _guard = command_guard(&app, "video_update_taste");
+    session::engine(&app).apply_taste_text(&text)
+}
+
+/// 恢复默认口味。
+#[tauri::command]
+pub fn video_reset_taste(app: AppHandle) -> UserProfile {
+    let _guard = command_guard(&app, "video_reset_taste");
+    session::engine(&app).reset_taste()
 }
 
 #[tauri::command]

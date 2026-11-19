@@ -433,10 +433,7 @@ pub struct SessionEngine {
 static ENGINE: OnceLock<Arc<SessionEngine>> = OnceLock::new();
 
 pub(crate) fn data_root(app: &AppHandle) -> std::path::PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("maltese-assistant"))
-        .join("video")
+    crate::paths::data_root().join("video")
 }
 
 pub fn engine(app: &AppHandle) -> Arc<SessionEngine> {
@@ -660,6 +657,8 @@ fn digest_for_items(
         total_chars: draft.total_chars,
         created_at,
         items: draft.items,
+        reflection: None,
+        reflection_source: None,
     })
 }
 
@@ -840,7 +839,7 @@ impl SessionEngine {
     }
 
     /// 启动失败时把本次启动的浏览器关掉，并落一条诊断日志（QA U1/U4）。
-    fn fail_start(&self, app: &AppHandle, code: &str, message: &str, detail: &str) -> VideoError {
+    fn fail_start(self: &Arc<Self>, app: &AppHandle, code: &str, message: &str, detail: &str) -> VideoError {
         self.close_browser_instance();
         self.set_runtime_error(code, message);
         self.store.log(DiagnosticEntry {
@@ -2241,7 +2240,116 @@ impl SessionEngine {
         }
     }
 
-    fn finish(&self, app: &AppHandle, reason: StopReason, produce_digest: bool) {
+    /// 当前视频口味（面板展示 / 聊天技能读取）。
+    pub fn taste_profile(&self) -> UserProfile {
+        self.store.profile()
+    }
+
+    /// 聊天里说一句话 → 解析成口味调整并落库；解析失败返回 TASTE_UNCLEAR（由调用方反问）。
+    pub fn apply_taste_text(&self, text: &str) -> VideoResult<super::taste::TasteReport> {
+        let Some(intent) = super::taste::parse_taste_intent(text) else {
+            return Err(VideoError::new(
+                "TASTE_UNCLEAR",
+                super::taste::clarify_reply(),
+            ));
+        };
+        let mut profile = self.store.profile();
+        let report = super::taste::apply_intent(&mut profile, &intent)
+            .map_err(|message| VideoError::new("TASTE_UPDATE_FAILED", message))?;
+        self.store.save_profile(&profile);
+        self.log_event(
+            None,
+            None,
+            "info",
+            "TASTE_UPDATED",
+            format!(
+                "text={} moves={:?} positive={:?} negative={:?}",
+                text.chars().take(60).collect::<String>(),
+                report.moves,
+                report.positive_tags,
+                report.negative_tags
+            ),
+        );
+        Ok(report)
+    }
+
+    /// 恢复默认口味（只清画像标签，不动平台/时长/自动评论等设置）。
+    pub fn reset_taste(&self) -> UserProfile {
+        let mut profile = self.store.profile();
+        profile.positive_tags.clear();
+        profile.negative_tags.clear();
+        profile.sources.clear();
+        profile.updated_at = now_seconds();
+        self.store.save_profile(&profile);
+        self.log_event(None, None, "info", "TASTE_RESET", "taste=default");
+        profile
+    }
+
+    /// 异步生成「看完感悟」并回写 session.digest；失败降级模板并标 reflection=template。
+    fn spawn_reflection(self: &Arc<Self>, app: &AppHandle, session_id: String, items: Vec<ContentItem>) {
+        if items.is_empty() {
+            return;
+        }
+        let engine = self.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let model = {
+                let state = lock_state(&engine.state);
+                state.comment_model.clone()
+            };
+            let generated = match model.as_ref() {
+                Some(model) => tokio::time::timeout(
+                    Duration::from_secs(25),
+                    super::reflection::generate_reflection(&app, &items, model),
+                )
+                .await
+                .unwrap_or_else(|_| Err("感悟模型超时".to_string())),
+                None => Err("没有传入当前聊天模型配置".to_string()),
+            };
+            let (text, source) = match generated {
+                Ok(text) => (text, "model"),
+                Err(error) => {
+                    engine.log_event(
+                        Some(&session_id),
+                        None,
+                        "warn",
+                        "REFLECTION_FALLBACK",
+                        format!("reason={} mood={}", error, super::reflection::mood_key(&items)),
+                    );
+                    (
+                        super::reflection::template_reflection(&items, super::reflection::reflection_timestamp()),
+                        "template",
+                    )
+                }
+            };
+            let mut session = match engine.store.get_session(&session_id) {
+                Some(session) => session,
+                None => return,
+            };
+            let Some(mut digest) = session.digest.take() else {
+                return;
+            };
+            digest.reflection = Some(text.clone());
+            digest.reflection_source = Some(source.to_string());
+            session.digest = Some(digest);
+            engine.store.save_session(&session);
+            engine.log_event(
+                Some(&session_id),
+                None,
+                "info",
+                "REFLECTION_BUILT",
+                format!(
+                    "reflection={} chars={} text={}",
+                    source,
+                    text.chars().count(),
+                    text
+                ),
+            );
+            let _ = app.emit("video-session-updated", engine.snapshot());
+        });
+    }
+
+    fn finish(self: &Arc<Self>, app: &AppHandle, reason: StopReason, produce_digest: bool) {
         let config = self.config();
         let profile = self.store.profile();
         let (mut session, items, platform, ended_at, summary) = {
@@ -2402,6 +2510,8 @@ impl SessionEngine {
                     total_chars: draft.total_chars,
                     created_at: ended_at,
                     items: draft.items.clone(),
+                    reflection: None,
+                    reflection_source: None,
                 });
             }
 
@@ -2439,6 +2549,8 @@ impl SessionEngine {
         }
 
         self.store.save_session(&session);
+        // 感悟：异步生成并回写 session.digest（不阻塞停止/不放待投递正文）。
+        self.spawn_reflection(&app, session.session_id.clone(), session.items.clone());
         {
             let mut state = lock_state(&self.state);
             let mut diagnostics = 0;

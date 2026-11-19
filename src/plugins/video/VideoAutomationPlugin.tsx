@@ -14,6 +14,7 @@ import "../../App.css";
 import { useVideoPluginState } from "./useVideoPluginState";
 import { VideoChannelCard } from "./VideoChannelCard";
 import { VideoDigestList } from "./VideoDigestList";
+import { VideoTasteCard } from "./VideoTasteCard";
 import { accountStatusLabel } from "./videoPanelLogic";
 import {
   browserStatusText,
@@ -102,6 +103,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
       const chatConfig = loadLocalChatConfig();
       await video.start(provider, selectedAccountId || undefined, {
         autoComment,
+        commentDryRun,
         commentModel: {
           backend: chatConfig.backend,
           baseUrl: chatConfig.baseUrl,
@@ -185,6 +187,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         sampleIntervalSeconds: Math.min(5, Math.max(1, Math.round(sampleInterval))),
         dailyDeliveries: Math.min(5, Math.max(1, Math.round(dailyDeliveries))),
         autoComment,
+        commentDryRun,
       });
       onNotice("本轮观看参数已生效（重开面板会回到已保存值）");
       await video.refresh();
@@ -261,11 +264,6 @@ export function VideoAutomationPanel({ onNotice }: Props) {
             评论 {snapshot?.commentCount ?? 0} 条（预演 {snapshot?.commentDryRunCount ?? 0} 条）
           </span>
         </div>
-        {snapshot?.lastCommentText ? (
-          <p className="video-automation__muted" aria-live="polite">
-            小狗评论{snapshot.lastCommentDryRun ? "（预演）" : snapshot.lastCommentVerified ? "（已发）" : "（未验证）"}：{snapshot.lastCommentText}
-          </p>
-        ) : null}
         <button
           type="button"
           className={`video-automation__primary${running ? " is-stop" : ""}`}
@@ -274,6 +272,11 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           {running ? "停下" : "开始看"}
         </button>
       </div>
+      {snapshot?.lastCommentText ? (
+        <p className="video-automation__last-comment" aria-live="polite">
+          小狗评论{snapshot.lastCommentDryRun ? "（预演）" : snapshot.lastCommentVerified ? "（已发）" : "（未验证）"}：{snapshot.lastCommentText}
+        </p>
+      ) : null}
 
       {panelError && (
         <div className="video-automation__error" role="alert">
@@ -332,11 +335,15 @@ export function VideoAutomationPanel({ onNotice }: Props) {
       <VideoDigestList
         pendingCount={snapshot?.pendingCount ?? 0}
         preview={video.preview}
+        latestDigest={video.latestDigest}
         sessions={video.sessions}
+        sessionsError={video.sessionsError}
         accounts={video.accounts}
         onTake={() => void video.takePending()}
         onLoadSessions={() => void video.loadSessions()}
       />
+
+      <VideoTasteCard taste={video.taste} busy={running} onReset={video.resetTaste} />
 
       {/* 高级设置：参数 / 账号档案 / 自检与诊断 / 清空数据 */}
       <details className="video-automation__advanced">
@@ -366,12 +373,16 @@ export function VideoAutomationPanel({ onNotice }: Props) {
               <input type="checkbox" checked={autoComment} onChange={(event) => setAutoComment(event.currentTarget.checked)} />
               允许小狗根据视频内容自动评论
             </label>
+            <label className="video-automation__permission">
+              <input type="checkbox" checked={commentDryRun} onChange={(event) => setCommentDryRun(event.currentTarget.checked)} />
+              仅预演评论（不真正发送）
+            </label>
             <button type="button" className="video-automation__secondary" onClick={() => void saveConfig()}>
               保存参数
             </button>
           </div>
           <p className="video-automation__muted">
-            开启权限后，小狗会打开推荐流里的视频详情页，读取标题、简介和标签，只对每条视频尝试一次内容相关评论；关闭后仍会读取内容，但不会自动发评论。
+            自动评论默认关闭，预演默认开启。预演只调用模型并显示结果，不会操作平台评论框；关闭预演后才会尝试发送，并在页面回读验证。
           </p>
 
           <div className="video-automation__row video-automation__browser">
@@ -470,4 +481,3 @@ export function VideoAutomationPanel({ onNotice }: Props) {
 
 /** 账号状态徽标文案（下拉与「登录：」共用；QA D3 已统一成中文）。 */
 export { accountStatusLabel };
-        latestDigest={video.latestDigest}

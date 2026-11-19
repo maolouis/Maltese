@@ -5908,3 +5908,6 @@ pub fn run() {
         });
 }
             video::video_open_logs_dir,
+            video::video_get_taste,
+            video::video_update_taste,
+            video::video_reset_taste,

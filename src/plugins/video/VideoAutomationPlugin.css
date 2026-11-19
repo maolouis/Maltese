@@ -29,6 +29,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
   min-height: 36px;
 }
 
@@ -36,8 +37,23 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
+  flex: 1 1 230px;
   min-width: 0;
   flex-wrap: wrap;
+}
+
+.video-automation__last-comment {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 9px;
+  border-left: 3px solid #568568;
+  border-radius: 6px;
+  background: #edf7ef;
+  color: #274735;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .video-automation__phase {
@@ -90,6 +106,12 @@
   color: #a33b2a;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.video-automation__error > span:first-child {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .video-automation__error-code {
@@ -428,6 +450,13 @@
   background: rgba(120, 40, 30, 0.35);
   color: #ffc8bd;
   font-size: 10.5px;
+}
+
+.island__expanded .video-automation__last-comment {
+  border-left-color: #315c42;
+  background: #edf7ef;
+  color: #274735;
+  font-size: 13px;
 }
 
 .island__expanded .video-automation__error-code {
@@ -859,4 +888,317 @@
 .island__expanded .video-history__error {
   background: rgba(255, 120, 120, 0.16);
   color: #ffd7d7;
+}
+
+/* ---------------------------------------------------------------------------
+   最近小结卡片：层级 + 可读性（标题 14px / 主题 13px / 条目 12px，行高 1.5+）
+   --------------------------------------------------------------------------- */
+.video-digest-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 94, 76, 0.22);
+  background: #ffffff;
+}
+
+.video-digest-card__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.video-digest-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #143324;
+}
+
+.video-digest-card__body {
+  display: grid;
+  gap: 8px;
+}
+
+.video-digest-card__theme {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #234536;
+}
+
+.video-digest-card__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.video-digest-card__row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #2b4a3b;
+}
+
+.video-digest-card__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(63, 122, 95, 0.16);
+  color: #1f4d36;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.video-digest-card__item-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
+}
+
+.video-digest-card__why {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(63, 122, 95, 0.12);
+  color: #1f4d36;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.video-digest-card__duration {
+  color: #3f5a4d;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.video-digest-card__reflection {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.6;
+  color: #40584c;
+  border-left: 3px solid rgba(63, 122, 95, 0.45);
+  padding-left: 8px;
+}
+
+.video-digest-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 历史详情里的感悟 */
+.video-history__reflection {
+  margin: 0;
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.6;
+  color: #40584c;
+}
+
+/* 视频口味卡片 */
+.video-taste {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(52, 94, 76, 0.3);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.video-taste__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.video-taste__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.video-taste__tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.video-taste__tag--negative {
+  background: rgba(196, 92, 60, 0.14);
+  color: #7a3418;
+}
+
+.video-taste__tag--positive {
+  background: rgba(45, 120, 82, 0.16);
+  color: #1d5237;
+}
+
+/* 岛内深色主题：对比度 ≥4.5:1 */
+.island__expanded .video-digest-card {
+  background: rgba(22, 32, 27, 0.92);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.island__expanded .video-digest-card__title {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.island__expanded .video-digest-card__theme,
+.island__expanded .video-digest-card__row,
+.island__expanded .video-digest-card__duration {
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.island__expanded .video-digest-card__index {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+.island__expanded .video-digest-card__why {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.island__expanded .video-digest-card__reflection,
+.island__expanded .video-history__reflection {
+  color: rgba(255, 255, 255, 0.84);
+  border-left-color: rgba(255, 255, 255, 0.45);
+}
+
+.island__expanded .video-taste {
+  background: rgba(22, 32, 27, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.island__expanded .video-taste__tag--negative {
+  background: rgba(255, 170, 140, 0.22);
+  color: #ffd9c9;
+}
+
+.island__expanded .video-taste__tag--positive {
+  background: rgba(140, 230, 180, 0.2);
+  color: #d9ffe8;
+}
+
+/* ---------------------------------------------------------------------------
+   可折叠区块标题行（最近小结 / 历史会话）：整行可点，明确「收起 ▲ / 展开 ▼」
+   --------------------------------------------------------------------------- */
+.video-section {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.video-section__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  background: rgba(63, 122, 95, 0.08);
+}
+
+.video-section__head:hover,
+.video-section__head:focus-visible {
+  background: rgba(63, 122, 95, 0.16);
+  border-color: rgba(63, 122, 95, 0.35);
+  outline: none;
+}
+
+.video-section__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #143324;
+}
+
+.video-section__meta {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #3f5a4d;
+}
+
+.video-section__toggle {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(63, 122, 95, 0.4);
+  background: #ffffff;
+  color: #1f4d36;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.video-section__head[aria-expanded="false"] .video-section__toggle {
+  background: rgba(63, 122, 95, 0.12);
+}
+
+.video-section__extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-section__extra .video-automation__link {
+  font-size: 11px;
+}
+
+.video-section__body {
+  display: grid;
+  gap: 8px;
+  /* 窄窗/矮窗时区块自身滚动，不会把内容挤没 */
+  max-height: 42vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.island__expanded .video-section__head {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.island__expanded .video-section__head:hover,
+.island__expanded .video-section__head:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.island__expanded .video-section__title {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.island__expanded .video-section__meta {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.island__expanded .video-section__toggle {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #ffffff;
 }

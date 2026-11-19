@@ -149,6 +149,25 @@ export type DigestDraft = {
   generator: DigestGenerator;
   items: DigestItem[];
   totalChars: number;
+  /** 小狗看完的第一人称感悟（只展示，不进投递正文）。 */
+  reflection?: string | null;
+  /** model / template。 */
+  reflectionSource?: string | null;
+};
+
+/** 视频口味（画像正/负标签）——面板展示 + 聊天技能读取。 */
+export type TasteProfile = {
+  positiveTags: string[];
+  negativeTags: string[];
+  updatedAt: number;
+};
+
+/** 一次口味调整的结果（聊天技能拿 reply 回话）。 */
+export type TasteReport = {
+  reply: string;
+  positiveTags: string[];
+  negativeTags: string[];
+  moves: string[];
 };
 
 export type DiagnosticEntry = {
@@ -171,8 +190,59 @@ export type SessionSummary = {
   itemCount: number;
   strongCount: number;
   filteredCount: number;
+  /** 本轮评论数；旧数据没有这个字段。 */
+  commentCount?: number;
+  /** 是否已生成摘要。 */
+  hasDigest?: boolean;
+  /** 是否还有待投递小结。 */
+  hasPending?: boolean;
   errorCode: string | null;
   deliveryStatus: DeliveryStatus | null;
+};
+
+/** 本轮的一条自动评论记录（历史详情里展示）。 */
+export type SessionComment = {
+  text: string;
+  url: string;
+  title: string;
+  dryRun: boolean;
+  verified: boolean;
+  at: number;
+};
+
+/** 历史详情里的一条视频条目（后端 ContentItem 的子集）。 */
+export type SessionDetailItem = {
+  itemKey: string;
+  title: string;
+  author: string | null;
+  canonicalUrl: string | null;
+  durationSeconds: number | null;
+  watchedSeconds: number;
+  completionPercent: number | null;
+  verdict: { level: "strong" | "weak" | "skip" | null } | null;
+};
+
+/** 历史详情（`video_get_session` 的返回）。 */
+export type VideoSessionDetail = {
+  sessionId: string;
+  platform: Platform;
+  accountId: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason: StopReason | null;
+  itemCount: number;
+  strongCount: number;
+  filteredCount: number;
+  errorCode: string | null;
+  items: SessionDetailItem[];
+  digest: {
+    themeLine: string | null;
+    generator: DigestGenerator;
+    items: DigestItem[];
+    reflection?: string | null;
+    reflectionSource?: string | null;
+  } | null;
+  comments: SessionComment[];
 };
 
 export type VideoConfig = {
@@ -248,7 +318,7 @@ export function isVideoSnapshot(value: unknown): value is VideoSnapshot {
     typeof value.sessionId === "string" &&
     PLATFORMS.includes(value.provider as Platform) &&
     (value.accountId === null || typeof value.accountId === "string") &&
-    (value.autoComment === undefined || typeof value.autoComment === "boolean") &&
+    typeof value.autoComment === "boolean" &&
     PHASES.includes(value.phase as Phase) &&
     typeof value.running === "boolean" &&
     isNumber(value.intervalSeconds) &&
@@ -257,6 +327,13 @@ export function isVideoSnapshot(value: unknown): value is VideoSnapshot {
     isNumber(value.itemCount) &&
     isNumber(value.strongCount) &&
     isNumber(value.filteredCount) &&
+    typeof value.commentDryRun === "boolean" &&
+    isNumber(value.commentCount) &&
+    isNumber(value.commentDryRunCount) &&
+    typeof value.lastCommentText === "string" &&
+    typeof value.lastCommentDryRun === "boolean" &&
+    typeof value.lastCommentVerified === "boolean" &&
+    isNumber(value.lastCommentAt) &&
     isNullableNumber(value.startedAt) &&
     isNullableNumber(value.endedAt) &&
     isNullableNumber(value.lastActionAt) &&
@@ -333,55 +410,3 @@ export function errorMessageForCode(code: string | null, fallback: string): stri
       return fallback;
   }
 }
-  /** 本轮评论数；旧数据没有这个字段。 */
-  commentCount?: number;
-  /** 是否已生成摘要。 */
-  hasDigest?: boolean;
-  /** 是否还有待投递小结。 */
-  hasPending?: boolean;
-/** 本轮的一条自动评论记录（历史详情里展示）。 */
-export type SessionComment = {
-  text: string;
-  url: string;
-  title: string;
-  dryRun: boolean;
-  verified: boolean;
-  at: number;
-};
-
-/** 历史详情里的一条视频条目（后端 ContentItem 的子集）。 */
-export type SessionDetailItem = {
-  itemKey: string;
-  title: string;
-  author: string | null;
-  canonicalUrl: string | null;
-  durationSeconds: number | null;
-  watchedSeconds: number;
-  completionPercent: number | null;
-  verdict: { level: "strong" | "weak" | "skip" | null } | null;
-};
-
-/** 历史详情（`video_get_session` 的返回）。 */
-export type VideoSessionDetail = {
-  sessionId: string;
-  platform: Platform;
-  accountId: string | null;
-  startedAt: number;
-  endedAt: number | null;
-  stopReason: StopReason | null;
-  itemCount: number;
-  strongCount: number;
-  filteredCount: number;
-  errorCode: string | null;
-  items: SessionDetailItem[];
-  digest: { themeLine: string | null; generator: DigestGenerator; items: DigestItem[] } | null;
-  comments: SessionComment[];
-};
-
-    typeof value.commentDryRun === "boolean" &&
-    isNumber(value.commentCount) &&
-    isNumber(value.commentDryRunCount) &&
-    typeof value.lastCommentText === "string" &&
-    typeof value.lastCommentDryRun === "boolean" &&
-    typeof value.lastCommentVerified === "boolean" &&
-    isNumber(value.lastCommentAt) &&

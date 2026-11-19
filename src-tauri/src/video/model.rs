@@ -372,6 +372,12 @@ pub struct Digest {
     pub total_chars: u32,
     pub created_at: u64,
     pub items: Vec<DigestItem>,
+    /// 小狗看完这一轮的第一人称感悟（只给主人看，不进待投递正文）。
+    #[serde(default)]
+    pub reflection: Option<String>,
+    /// 感悟来源：model（模型生成）/ template（按情绪降级模板）。
+    #[serde(default)]
+    pub reflection_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

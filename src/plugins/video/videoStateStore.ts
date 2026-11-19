@@ -13,6 +13,8 @@ import {
   type DigestDraft,
   type DigestGenerator,
   type SessionSummary,
+  type TasteProfile,
+  type TasteReport,
   type VideoConfig,
   type VideoSessionDetail,
   type VideoSnapshot,
@@ -60,6 +62,8 @@ export type VideoStoreState = {
   sessionsError: string | null;
   /** 最近一轮摘要（即使待投递为空也要显示，解决「最近小结空白」）。 */
   latestDigest: DigestDraft | null;
+  /** 当前视频口味标签（面板展示）。 */
+  taste: TasteProfile | null;
   preview: DigestDraft | null;
   browserStatus: BrowserStatus | null;
   autoCommentNotice: { ok: boolean; message: string } | null;
@@ -76,6 +80,7 @@ let state: VideoStoreState = {
   sessions: [],
   sessionsError: null,
   latestDigest: null,
+  taste: null,
   preview: null,
   browserStatus: null,
   autoCommentNotice: null,
@@ -196,11 +201,59 @@ export async function loadVideoLatestDigest() {
         generator,
         items: digest.items,
         totalChars: 0,
+        reflection: digest.reflection ?? null,
+        reflectionSource: digest.reflectionSource ?? null,
       },
     });
   } catch {
     publish({ latestDigest: null });
   }
+}
+
+/** 读当前视频口味（画像标签）。 */
+export async function loadVideoTaste() {
+  if (!isTauri()) return;
+  try {
+    const profile = await invoke<{ positiveTags?: string[]; negativeTags?: string[]; updatedAt?: number }>(
+      "video_get_taste",
+    );
+    publish({
+      taste: {
+        positiveTags: profile?.positiveTags ?? [],
+        negativeTags: profile?.negativeTags ?? [],
+        updatedAt: profile?.updatedAt ?? 0,
+      },
+    });
+  } catch {
+    publish({ taste: null });
+  }
+}
+
+/** 聊天技能/面板：一句话调整口味，返回中文确认（失败抛错由调用方反问）。 */
+export async function updateVideoTaste(text: string): Promise<TasteReport> {
+  const report = await invoke<TasteReport>("video_update_taste", { text });
+  publish({
+    taste: {
+      positiveTags: report.positiveTags,
+      negativeTags: report.negativeTags,
+      updatedAt: Date.now() / 1000,
+    },
+  });
+  window.dispatchEvent(new CustomEvent("video-taste-changed"));
+  return report;
+}
+
+/** 恢复默认口味。 */
+export async function resetVideoTaste() {
+  const profile = await invoke<{ positiveTags?: string[]; negativeTags?: string[] }>("video_reset_taste");
+  publish({
+    taste: {
+      positiveTags: profile?.positiveTags ?? [],
+      negativeTags: profile?.negativeTags ?? [],
+      updatedAt: Date.now() / 1000,
+    },
+  });
+  window.dispatchEvent(new CustomEvent("video-taste-changed"));
 }
 
 export async function loadVideoSessionDetail(sessionId: string): Promise<VideoSessionDetail> {
@@ -225,6 +278,8 @@ function startCoordinator() {
   void loadVideoDiagnostics();
   void loadVideoBrowserStatus();
   void loadVideoSessions().then(() => loadVideoLatestDigest());
+  void loadVideoTaste();
+  window.addEventListener("video-taste-changed", () => void loadVideoTaste());
   refreshTimer = window.setInterval(() => void refreshVideoState(), 2000);
   diagnosticsTimer = window.setInterval(() => void loadVideoDiagnostics(), 4000);
   unlistenSession = listen<unknown>("video-session-updated", (event) => {
