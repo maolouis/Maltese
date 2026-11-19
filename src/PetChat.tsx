@@ -38,6 +38,7 @@ import {
   shouldPersistReply,
 } from "./chatGuard";
 import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
+import { RECENT_TURNS, buildMemoryContext, loadMemory, loadMemoryDepth } from "./petMemory";
 import { PetStateBar } from "./PetStateBar";
 import {
   isStickerId,
@@ -356,6 +357,7 @@ export function PetChat() {
           sessionId,
           character,
           sticker: false,
+          memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
         });
         if (reply.sessionId) {
           setSessionId(reply.sessionId);
@@ -380,7 +382,7 @@ export function PetChat() {
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
           message,
-          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          history: history.slice(-RECENT_TURNS).map((item) => ({ role: item.role, content: item.text })),
           character,
           sticker: false,
           images: images && images.length > 0 ? images : null,
@@ -407,7 +409,7 @@ export function PetChat() {
                 model: chatConfig.model,
                 apiKey: chatConfig.apiKey.trim() || null,
                 message,
-                history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+                history: history.slice(-RECENT_TURNS).map((item) => ({ role: item.role, content: item.text })),
                 character,
                 sticker: false,
                 images: images && images.length > 0 ? images : null,
@@ -430,7 +432,8 @@ export function PetChat() {
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
           message,
-          history: history.slice(-16).map((item) => ({ role: item.role, content: item.text })),
+          memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+          history: history.slice(-RECENT_TURNS).map((item) => ({ role: item.role, content: item.text })),
           character,
           sticker: false,
           images: images && images.length > 0 ? images : null,
@@ -473,7 +476,7 @@ export function PetChat() {
   const streamLocalReply = useCallback(
     async (message: string, history: ChatMessage[], images: string[]) => {
       const depth = chatConfig.thinkingDepth;
-      const historyTurns = history.slice(-16).map((item) => ({ role: item.role, content: item.text }));
+      const historyTurns = history.slice(-RECENT_TURNS).map((item) => ({ role: item.role, content: item.text }));
 
       const runAttempt = async (injectVitals: boolean, useStream = chatConfig.stream): Promise<string> => {
         const requestId = createId();
@@ -545,6 +548,7 @@ export function PetChat() {
           const payload = {
             requestId,
             baseUrl: chatConfig.baseUrl,
+            memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
             model: chatConfig.model,
             apiKey: chatConfig.apiKey.trim() || null,
             message,
@@ -574,6 +578,7 @@ export function PetChat() {
                   model: payload.model,
                   apiKey: payload.apiKey,
                   message: payload.message,
+                  memoryContext: payload.memoryContext,
                   history: payload.history,
                   character: payload.character,
                   sticker: true,
@@ -799,6 +804,7 @@ export function PetChat() {
               message: text,
               sessionId,
               character,
+              memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
               requestId,
             }),
             dshGuard,
