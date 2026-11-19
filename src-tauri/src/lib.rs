@@ -5907,3 +5907,4 @@ pub fn run() {
             }
         });
 }
+            video::video_open_logs_dir,

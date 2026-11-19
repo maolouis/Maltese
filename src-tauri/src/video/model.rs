@@ -410,6 +410,9 @@ pub struct VideoSession {
     pub schema_version: u32,
     pub items: Vec<ContentItem>,
     pub digest: Option<Digest>,
+    /// 本轮发过/预演过的评论（旧会话没有这个字段，默认空）。
+    #[serde(default)]
+    pub comments: Vec<SessionComment>,
 }
 
 impl VideoSession {
@@ -429,8 +432,27 @@ impl VideoSession {
             schema_version: SCHEMA_VERSION,
             items: Vec::new(),
             digest: None,
+            comments: Vec::new(),
         }
     }
+}
+
+/// 一条自动评论记录（历史详情里展示「这轮给哪个视频评论了什么」）。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionComment {
+    pub text: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    /// true = 只预演，没真发。
+    #[serde(default)]
+    pub dry_run: bool,
+    /// 发出后是否在评论区回读到。
+    #[serde(default)]
+    pub verified: bool,
+    pub at: u64,
 }
 
 impl Default for Platform {
@@ -453,6 +475,15 @@ pub struct SessionSummary {
     pub item_count: u32,
     pub strong_count: u32,
     pub filtered_count: u32,
+    /// 本轮评论数（旧索引没有这个字段，默认 0）。
+    #[serde(default)]
+    pub comment_count: u32,
+    /// 是否已生成摘要（UI 用来显示「有小结」角标，旧数据默认 false）。
+    #[serde(default)]
+    pub has_digest: bool,
+    /// 是否还有待投递小结（UI 用来显示「待投递」角标）。
+    #[serde(default)]
+    pub has_pending: bool,
     pub error_code: Option<String>,
     pub delivery_status: Option<DeliveryStatus>,
 }
@@ -469,6 +500,9 @@ impl From<&VideoSession> for SessionSummary {
             item_count: session.item_count,
             strong_count: session.strong_count,
             filtered_count: session.filtered_count,
+            comment_count: session.comments.len() as u32,
+            has_digest: session.digest.is_some(),
+            has_pending: false,
             error_code: session.error_code.clone(),
             delivery_status: None,
         }

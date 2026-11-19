@@ -3,7 +3,7 @@
 //! 纯逻辑部分（状态迁移、条目合并）可单测；运行部分通过 CDP 驱动专用浏览器，
 //! CDP 不可用时降级到前台窗口标题（弱通道，只作主题线索）。
 
-use super::adapter::adapter_for;
+use super::adapter::{adapter_for, PlatformAdapter};
 use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserInstance};
 use super::cdp::{port_alive, shutdown_browser, CdpSession, EVALUATE_TIMEOUT};
@@ -13,16 +13,19 @@ use super::CommentReport;
 use super::config::{apply_patch, validate_config, VideoCommentModelConfig, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
 use super::digest::build_digest;
-use super::extract::{is_video_page, normalize_value, ExtractIssue, PageFacts, PageKind, RawFacts};
+use super::extract::{is_video_page, normalize_value, PageFacts, PageKind};
 use super::guard::Guard;
 use super::interest::score;
 use super::model::*;
 use super::profile::learn_from_session;
+use super::queue::{
+    fallback_candidate_pages, parse_candidates, url_matches_video_id, CandidateQueue,
+    FailureOutcome, PageProbe, QueuedCandidate, REFILL_THRESHOLD,
+};
 use super::store::StoreHandle;
 use super::{VideoError, VideoResult};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -41,7 +44,7 @@ const MAX_CDP_FAILURES: u32 = 3;
 const MAX_RECONNECT_FAILURES: u32 = 3;
 
 /// 专用浏览器实例的现状（面板高级设置里展示，便于判断「会不会复用上次的浏览器」）。
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserStatus {
     pub pid: Option<u32>,
@@ -69,6 +72,8 @@ pub struct VideoSnapshot {
     pub item_count: u32,
     pub strong_count: u32,
     pub filtered_count: u32,
+    /// 当前自动评论是否只生成不发送。
+    pub comment_dry_run: bool,
     /// 本轮已产生的评论数（含预演）。
     pub comment_count: u32,
     /// 其中仅预演的条数。
@@ -108,6 +113,7 @@ impl Default for VideoSnapshot {
             item_count: 0,
             strong_count: 0,
             filtered_count: 0,
+            comment_dry_run: true,
             comment_count: 0,
             comment_dry_run_count: 0,
             last_comment_text: String::new(),
@@ -326,7 +332,6 @@ struct RuntimeState {
     platform: Platform,
     provider: String,
     account_id: Option<String>,
-    auto_comment_attempted: HashSet<String>,
     /// 本轮启动时从聊天设置传入的模型配置，只保存在内存。
     comment_model: Option<VideoCommentModelConfig>,
     interval_seconds: u64,
@@ -358,6 +363,13 @@ struct RuntimeState {
     diagnostics: u32,
     /// 当前专用浏览器实例的 CDP 端口（0 表示还没起来），评论等一次性操作要用。
     cdp_port: u16,
+    /// 本轮评论记录（历史详情用）。
+    comments: Vec<SessionComment>,
+    /// 稳定性改造：本轮导航轮次、失败 URL 数、成功采集轮次、已采到的不同视频 id。
+    round_index: u64,
+    failed_urls: u32,
+    collected_rounds: u32,
+    collected_ids: std::collections::HashSet<String>,
 }
 
 impl Default for RuntimeState {
@@ -368,7 +380,6 @@ impl Default for RuntimeState {
             platform: Platform::Bilibili,
             provider: "bilibili".to_string(),
             account_id: None,
-            auto_comment_attempted: HashSet::new(),
             comment_model: None,
             interval_seconds: 45,
             max_minutes: 30,
@@ -398,6 +409,11 @@ impl Default for RuntimeState {
             last_action_at: None,
             diagnostics: 0,
             cdp_port: 0,
+            comments: Vec::new(),
+            round_index: 0,
+            failed_urls: 0,
+            collected_rounds: 0,
+            collected_ids: std::collections::HashSet::new(),
         }
     }
 }
@@ -416,7 +432,7 @@ pub struct SessionEngine {
 
 static ENGINE: OnceLock<Arc<SessionEngine>> = OnceLock::new();
 
-fn data_root(app: &AppHandle) -> std::path::PathBuf {
+pub(crate) fn data_root(app: &AppHandle) -> std::path::PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("maltese-assistant"))
@@ -426,8 +442,12 @@ fn data_root(app: &AppHandle) -> std::path::PathBuf {
 pub fn engine(app: &AppHandle) -> Arc<SessionEngine> {
     ENGINE
         .get_or_init(|| {
+            let store = StoreHandle::new(data_root(app));
+            // 进程异常退出（崩溃/被重启）时，磁盘上会留下 endedAt=null 的会话：
+            // 启动时补成 crash + 补算摘要，保证历史不会一直空白。
+            recover_interrupted_sessions(&store);
             Arc::new(SessionEngine {
-                store: StoreHandle::new(data_root(app)),
+                store,
                 accounts: Mutex::new(AccountStore::load(&data_root(app))),
                 state: Mutex::new(RuntimeState::default()),
                 config: Mutex::new(VideoConfig::default()),
@@ -450,63 +470,57 @@ fn lock_state(state: &Mutex<RuntimeState>) -> std::sync::MutexGuard<'_, RuntimeS
 
 
 
-/// N6：从当前视频页的推荐列表取**下一个** /video/BV 链接并导航过去。
-pub async fn advance_to_next_video(cdp: &mut CdpSession, current_url: &str) -> NavOutcome {
-    const NEXT_JS: &str = r#"(function(){
-      try{
-        var cur=location.href;
-        var curBv=(cur.match(/\/video\/(BV[0-9A-Za-z]+|av\d+)/)||[])[1]||'';
-        var s=window.__INITIAL_STATE__;
-        if(s){
-          var lists=[s.related,s.recommendList,s.relatedList];
-          for(var i=0;i<lists.length;i++){
-            var list=lists[i]||[];
-            for(var j=0;j<list.length;j++){
-              var bv=(list[j]&&(list[j].bvid||list[j].bvid_str))||'';
-              if(bv && bv!==curBv) return 'https://www.bilibili.com/video/'+bv;
-            }
-          }
-        }
-        var as=document.querySelectorAll('a[href*="/video/BV"]');
-        for(var k=0;k<as.length;k++){
-          var m=(as[k].href||'').match(/\/video\/(BV[0-9A-Za-z]+)/);
-          if(m && m[1]!==curBv) return 'https://www.bilibili.com/video/'+m[1];
-        }
-        return '';
-      }catch(e){return ''}})()"#;
-    let mut attempts: Vec<String> = Vec::new();
-    if let Ok(value) = cdp.evaluate(NEXT_JS, EVALUATE_TIMEOUT).await {
-        if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
-            if url != current_url {
-                attempts.push(format!("next:{url}"));
-                if cdp.navigate(&url).await.is_ok() {
-                    let (final_url, title) = wait_for_video_url(cdp).await;
-                    if final_url.contains("/video/") && final_url != current_url {
-                        return NavOutcome { ok: true, attempts, final_url, title };
-                    }
-                }
-            } else {
-                attempts.push("next:same_url".to_string());
-            }
-        } else {
-            attempts.push("next:empty".to_string());
-        }
-    }
-    // 兜底：回排行榜再走 N5 的三段降级
-    attempts.push("fallback:force_enter_video_page".to_string());
-    let outcome = force_enter_video_page(cdp).await;
-    attempts.extend(outcome.attempts.clone());
-    NavOutcome {
-        ok: outcome.ok && outcome.final_url != current_url,
-        attempts,
-        final_url: outcome.final_url,
-        title: outcome.title,
-    }
+/// 一条视频页停留过程的结局。
+enum DwellOutcome {
+    /// 页面被带回非视频页（首页/推荐流），需要立刻换下一条。
+    TargetLost,
+    /// 用户停止或被新会话顶掉。
+    Aborted,
+    /// 停够了或视频播完；带上最后一次页面事实（可能为空）。
+    Finished(Option<PageFacts>),
 }
 
+/// 页面探针：URL / 标题 / video 元素 / og:title。
+const PAGE_PROBE_JS: &str = r#"
+(() => {
+  const meta = (name) => (document.querySelector(`meta[property="${name}"]`)?.content || '').trim();
+  return {
+    href: location.href,
+    title: document.title || '',
+    hasVideo: !!document.querySelector('video'),
+    ogTitle: meta('og:title'),
+  };
+})()
+"#;
 
-/// N11：评论清洗（≤40 字、去 @/链接/禁词、空则模板兜底）。
-fn sanitize_comment(raw: &str) -> String {
+/// navigate 后等待「页面关键信息就绪」的最长时间与轮询间隔。
+const PAGE_READY_WAIT_SECONDS: u64 = 8;
+const PAGE_READY_POLL_MS: u64 = 350;
+
+pub async fn probe_page(cdp: &mut CdpSession) -> Option<PageProbe> {
+    let value = cdp.evaluate(PAGE_PROBE_JS, EVALUATE_TIMEOUT).await.ok()?;
+    serde_json::from_value(value).ok()
+}
+
+/// 轮询等页面就绪：URL 命中该 bvid + 标题不是站点标题 + 有 video/og:title。
+/// 最多 PAGE_READY_WAIT_SECONDS 秒，超时返回 None（调用方按这条 URL 失败处理）。
+pub async fn wait_page_ready(cdp: &mut CdpSession, expected_id: &str) -> Option<PageProbe> {
+    let deadline = Instant::now() + Duration::from_secs(PAGE_READY_WAIT_SECONDS);
+    loop {
+        if let Some(probe) = probe_page(cdp).await {
+            if probe.is_ready(expected_id) {
+                return Some(probe);
+            }
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(PAGE_READY_POLL_MS)).await;
+    }
+}
+/// N11：评论清洗（≤40 字、去 @/链接/禁词）。模型空/失败时必须返回错误，
+/// 不再发送固定模板，避免把“模型未生成”伪装成真实评论。
+fn sanitize_comment(raw: &str) -> Result<String, String> {
     const BANNED: [&str; 7] = ["三连", "求关注", "互关", "点个赞", "投币", "私信", "加微信"];
     let mut text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     for word in BANNED {
@@ -519,26 +533,15 @@ fn sanitize_comment(raw: &str) -> String {
         .join(" ");
     let text: String = text.trim().chars().take(40).collect();
     if text.trim().is_empty() {
-        "这个讲得挺细的，先码住。".to_string()
+        Err("模型没有返回可用评论".to_string())
     } else {
-        text.trim().to_string()
+        Ok(text.trim().to_string())
     }
 }
 
 fn comment_bubble(title: &str, comment: &str) -> String {
     let short: String = title.trim().chars().take(12).collect();
     format!("刚给《{short}》评论了一句：{comment}")
-}
-
-/// post_comment 错误 → 面板/日志用的原因码。
-fn comment_error_reason(message: &str) -> &'static str {
-    if message.contains("输入框") || message.contains("input") {
-        "no-input"
-    } else if message.contains("按钮") || message.contains("button") {
-        "no-button"
-    } else {
-        "comment-cdp"
-    }
 }
 
 /// 评论回读匹配：去掉空白与标点后做子串匹配（容忍页面截断/换行差异）。
@@ -560,123 +563,104 @@ pub fn comment_in_text(page_text: &str, comment: &str) -> bool {
     page.contains(&probe)
 }
 
-/// N5：把页面强制带进视频详情页（三段降级）。
-pub struct NavOutcome {
-    pub ok: bool,
-    pub attempts: Vec<String>,
-    pub final_url: String,
-    pub title: String,
-}
-
-async fn wait_for_video_url(cdp: &mut CdpSession) -> (String, String) {
-    for _ in 0..27 {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let url = cdp
-            .evaluate("location.href", EVALUATE_TIMEOUT)
-            .await
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_default();
-        if url.contains("/video/") {
-            let title = cdp
-                .evaluate("document.title", EVALUATE_TIMEOUT)
-                .await
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default();
-            return (url, title);
-        }
-    }
-    let url = cdp
-        .evaluate("location.href", EVALUATE_TIMEOUT)
-        .await
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let title = cdp
-        .evaluate("document.title", EVALUATE_TIMEOUT)
-        .await
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default();
-    (url, title)
-}
-
-const NAV_FIND_LINK_JS: &str = r#"(function(){try{
-  var a=document.querySelector('a[href*="/video/BV"],a[href*="/video/av"]');
-  if(a&&a.href)return a.href;
-  var s=window.__INITIAL_STATE__;
-  if(s){
-    var bvid=(s.videoData&&s.videoData.bvid)||(s.bvid)||'';
-    if(bvid)return 'https://www.bilibili.com/video/'+bvid;
-    var list=s.recommendList||s.relatedList||[];
-    for(var i=0;i<list.length;i++){ if(list[i]&&list[i].bvid) return 'https://www.bilibili.com/video/'+list[i].bvid; }
-  }
-  return '';
-}catch(e){return ''}})()"#;
-
-const NAV_CLICK_CARD_JS: &str = r#"(function(){try{
-  var sels=['.bili-video-card a','.bili-video-card','[data-video-id] a','[data-video-id]','.feed-card a','.feed-card','.bili-video-card__info--tit a'];
-  for(var i=0;i<sels.length;i++){ var el=document.querySelector(sels[i]); if(el){ el.click(); return sels[i]; } }
-  return '';
-}catch(e){return ''}})()"#;
-
-/// 三段降级：① 找 /video 链接直接导航 → ② 点第一个视频卡片 → ③ 先进排行榜再走 ①②。
-pub async fn force_enter_video_page(cdp: &mut CdpSession) -> NavOutcome {
-    let mut attempts: Vec<String> = Vec::new();
-
-    // ① 直接导航
-    if let Ok(value) = cdp.evaluate(NAV_FIND_LINK_JS, EVALUATE_TIMEOUT).await {
-        if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
-            attempts.push(format!("navigate:{url}"));
-            if cdp.navigate(&url).await.is_ok() {
-                let (final_url, title) = wait_for_video_url(cdp).await;
-                if final_url.contains("/video/") {
-                    return NavOutcome { ok: true, attempts, final_url, title };
-                }
-            }
-        } else {
-            attempts.push("find_link:empty".to_string());
-        }
-    }
-
-    // ② 点卡片
-    if let Ok(value) = cdp.evaluate(NAV_CLICK_CARD_JS, EVALUATE_TIMEOUT).await {
-        let selector = value.as_str().unwrap_or("").to_string();
-        attempts.push(format!("click:{selector}"));
-        if !selector.is_empty() {
-            let (final_url, title) = wait_for_video_url(cdp).await;
-            if final_url.contains("/video/") {
-                return NavOutcome { ok: true, attempts, final_url, title };
-            }
-        }
-    }
-
-    // ③ 搜索/排行榜兜底后重新找链接
-    for target in [
-        "https://www.bilibili.com/v/popular/all",
-        "https://www.bilibili.com/v/popular/rank/all",
-    ] {
-        attempts.push(format!("fallback:{target}"));
-        if cdp.navigate(target).await.is_err() {
+/// 启动时兜底：把上次异常退出（崩溃/被重启）留下的「未结束」会话补成 crash，
+/// 有 items 就补算摘要。保证历史里永远不是「有内容但显示空白」。
+fn recover_interrupted_sessions(store: &StoreHandle) {
+    let now = now_seconds();
+    let profile = store.profile();
+    for summary in store.list_sessions(50) {
+        if summary.ended_at.is_some() {
             continue;
         }
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        if let Ok(value) = cdp.evaluate(NAV_FIND_LINK_JS, EVALUATE_TIMEOUT).await {
-            if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
-                attempts.push(format!("navigate:{url}"));
-                if cdp.navigate(&url).await.is_ok() {
-                    let (final_url, title) = wait_for_video_url(cdp).await;
-                    if final_url.contains("/video/") {
-                        return NavOutcome { ok: true, attempts, final_url, title };
-                    }
-                }
+        let Some(mut session) = store.get_session(&summary.session_id) else {
+            continue;
+        };
+        let last_seen = session
+            .items
+            .iter()
+            .map(|item| item.last_seen_at)
+            .max()
+            .unwrap_or(session.started_at)
+            .max(session.started_at);
+        session.ended_at = Some(last_seen);
+        session.stop_reason = Some(StopReason::Crash);
+        if session.error_code.is_none() {
+            session.error_code = Some("INTERRUPTED".to_string());
+        }
+        session.item_count = session.items.len() as u32;
+        if session.digest.is_none() {
+            session.digest = digest_for_items(
+                &session.session_id,
+                session.platform,
+                &session.items,
+                &profile,
+                last_seen,
+            );
+        }
+        store.save_session(&session);
+        store.log(DiagnosticEntry {
+            at: now,
+            session_id: Some(session.session_id.clone()),
+            channel: None,
+            level: "warn".to_string(),
+            code: "SESSION_RECOVERED".to_string(),
+            message: format!(
+                "reason=crash items={} has_digest={} from=endedAt_null",
+                session.items.len(),
+                session.digest.is_some()
+            ),
+        });
+    }
+}
+
+/// 用已有条目补算一份摘要（与停止时同一套打分/模板）。
+fn digest_for_items(
+    session_id: &str,
+    platform: Platform,
+    items: &[ContentItem],
+    profile: &UserProfile,
+    created_at: u64,
+) -> Option<Digest> {
+    if items.is_empty() {
+        return None;
+    }
+    let mut scored = items.to_vec();
+    for item in &mut scored {
+        item.verdict = Some(score(item, profile, item.source_confidence.max(0.1)));
+    }
+    let mut strong: Vec<ContentItem> = scored
+        .iter()
+        .filter(|item| {
+            item.verdict.as_ref().and_then(|verdict| verdict.level) == Some(InterestLevel::Strong)
+        })
+        .cloned()
+        .collect();
+    let weak: Vec<ContentItem> = scored
+        .iter()
+        .filter(|item| {
+            item.verdict.as_ref().and_then(|verdict| verdict.level) == Some(InterestLevel::Weak)
+        })
+        .cloned()
+        .collect();
+    if strong.is_empty() && scored.len() >= 2 {
+        let mut relaxed = scored.clone();
+        for item in relaxed.iter_mut().take(5) {
+            if let Some(verdict) = item.verdict.as_mut() {
+                verdict.level = Some(InterestLevel::Strong);
             }
         }
+        strong = relaxed;
     }
-
-    let (final_url, title) = wait_for_video_url(cdp).await;
-    NavOutcome { ok: false, attempts, final_url, title }
+    let draft = build_digest(session_id, platform, &strong, &weak, 5)?;
+    Some(Digest {
+        session_id: session_id.to_string(),
+        theme_line: draft.theme_line,
+        generator: draft.generator,
+        status: DigestStatus::Pending,
+        total_chars: draft.total_chars,
+        created_at,
+        items: draft.items,
+    })
 }
 
 impl SessionEngine {
@@ -709,6 +693,7 @@ impl SessionEngine {
             schema_version: SCHEMA_VERSION,
             items: state.items.clone(),
             digest: None,
+            comments: state.comments.clone(),
         };
         drop(state);
         self.store.save_session(&session);
@@ -766,6 +751,7 @@ impl SessionEngine {
                 })
                 .count() as u32,
             filtered_count: state.filtered_count,
+            comment_dry_run: self.config().comment_dry_run,
             comment_count: state.comment_count,
             comment_dry_run_count: state.comment_dry_run_count,
             last_comment_text: state.last_comment_text.clone(),
@@ -1111,7 +1097,7 @@ impl SessionEngine {
                 }
             };
             let handle = process.handle.clone();
-            if !browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+            if !browser::wait_for_cdp_async(port, browser::CDP_READY_TIMEOUT).await {
                 // 本次启动的进程必须关掉，不能留下占着 profile 的孤儿实例（U1/U10）。
                 let mut process = process;
                 process.close();
@@ -1164,12 +1150,12 @@ impl SessionEngine {
         });
     }
 
-    pub fn stop(&self, app: &AppHandle, reason: Option<StopReason>) -> VideoSnapshot {
+    /// 停止会话：只做「发信号 + 落一条停止日志 + 返回快照」，
+    /// 写终态/生成摘要/关浏览器全部丢到后台阻塞线程，命令立即返回（用户点停止不再卡界面）。
+    pub fn stop(self: &Arc<Self>, app: &AppHandle, reason: Option<StopReason>) -> VideoSnapshot {
         self.stop.store(true, Ordering::SeqCst);
         self.run_id.fetch_add(1, Ordering::SeqCst);
         let stop_reason = reason.unwrap_or(StopReason::UserStop);
-        // 正在跑就按「结束」保存会话（保留已采集条目、不生成小结），
-        // 这样历史里能看到真实的条目数/停止原因，而不是一条 0 条的空会话（QA U5）。
         let running = {
             let state = lock_state(&self.state);
             matches!(
@@ -1178,73 +1164,390 @@ impl SessionEngine {
             )
         };
         if running {
-            // N3：每次运行结束必须落日志（停止事件 + 原因）。
             {
-                let state = lock_state(&self.state);
+                let mut state = lock_state(&self.state);
                 self.store.log(DiagnosticEntry {
                     at: now_seconds(),
                     session_id: Some(state.session_id.clone()),
                     channel: None,
                     level: "info".to_string(),
                     code: "SESSION_STOPPED".to_string(),
-                    message: format!("reason={:?} items={} filtered={}", stop_reason, state.items.len(), state.filtered_count),
+                    message: format!(
+                        "reason={:?} items={} filtered={}",
+                        stop_reason,
+                        state.items.len(),
+                        state.filtered_count
+                    ),
                 });
-            }
-            // N10：用户停止也要产出小结（digest/pending），否则历史里永远没有成果。
-            self.finish(app, stop_reason, true);
-            {
-                let mut state = lock_state(&self.state);
+                // 立刻把 phase 置为 stopped：采集循环看到就退出，不会重复收尾。
                 state.phase = Phase::Stopped;
                 state.stop_reason = Some(stop_reason);
             }
+            let engine = self.clone();
+            let app_for_cleanup = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                // 同一把状态锁保证 finish 不会和采集循环打架（循环已因 stop 退出）。
+                engine.finish(&app_for_cleanup, stop_reason, true);
+            });
             let snapshot = self.snapshot();
-            // N4：面板收起后仍能看到采集状态（托盘提示）。
-            if snapshot.running {
-                crate::set_tray_status(
-                    app,
-                    &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
-                );
-            } else {
-                crate::reset_tray_status(app);
+            let _ = app.emit("video-session-updated", snapshot);
+            return self.snapshot();
+        }
+
+        {
+            let mut state = lock_state(&self.state);
+            let mut diagnostics = 0;
+            if try_transition(&mut state.phase, Phase::Stopped, &mut diagnostics) {
+                state.stop_reason = Some(stop_reason);
+                state.ended_at = Some(now_seconds());
             }
-            // N4：面板收起后仍能看到采集状态（托盘提示）。
-        if snapshot.running {
-            crate::set_tray_status(
-                app,
-                &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
-            );
         }
-        // N4：面板收起后仍能看到采集状态（托盘提示）。
-        if snapshot.running {
-            crate::set_tray_status(
-                app,
-                &format!("正在刷视频 {} 条（已丢弃 {} 条伪条目）", snapshot.item_count, snapshot.filtered_count),
-            );
+        let engine = self.clone();
+        tauri::async_runtime::spawn_blocking(move || engine.close_browser_instance());
+        self.snapshot()
+    }
+
+    /// 命令耗时埋点：>200ms 记 SLOW_COMMAND，>1s 记 VERY_SLOW_COMMAND。
+    pub fn command_cost(&self, name: &str, ms: u64) {
+        if ms < 200 {
+            return;
         }
-        let _ = app.emit("video-session-updated", snapshot);
+        let (code, level) = if ms >= 1000 {
+            ("VERY_SLOW_COMMAND", "warn")
         } else {
-            {
-                let mut state = lock_state(&self.state);
-                let mut diagnostics = 0;
-                if try_transition(&mut state.phase, Phase::Stopped, &mut diagnostics) {
-                    state.stop_reason = Some(stop_reason);
-                    state.ended_at = Some(now_seconds());
+            ("SLOW_COMMAND", "info")
+        };
+        self.store.log(DiagnosticEntry {
+            at: now_seconds(),
+            session_id: None,
+            channel: None,
+            level: level.to_string(),
+            code: code.to_string(),
+            message: format!("name={} ms={}", name, ms),
+        });
+    }
+
+    /// 统一写诊断日志，避免每处都手写 DiagnosticEntry。
+    fn log_event(
+        &self,
+        session_id: Option<&str>,
+        channel: Option<ChannelType>,
+        level: &str,
+        code: &str,
+        message: impl Into<String>,
+    ) {
+        self.store.log(DiagnosticEntry {
+            at: now_seconds(),
+            session_id: session_id.map(str::to_string),
+            channel,
+            level: level.to_string(),
+            code: code.to_string(),
+            message: message.into(),
+        });
+    }
+
+    fn browser_port(&self) -> Option<u16> {
+        match self.browser.lock() {
+            Ok(browser) => browser.as_ref().map(|instance| instance.handle().port),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .as_ref()
+                .map(|instance| instance.handle().port),
+        }
+    }
+
+    /// CDP 完全不可用时才走的唯一重启路径：
+    /// 关旧实例 → 重新 launch → wait_for_cdp → 连新端口。端口可能变化。
+    async fn restart_browser(&self, platform: Platform, session_id: &str) -> Option<CdpSession> {
+        self.log_event(
+            Some(session_id),
+            None,
+            "warn",
+            "BROWSER_RESTART",
+            "step=close reason=cdp_unavailable",
+        );
+        self.close_browser_instance();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let profile = self
+            .accounts
+            .lock()
+            .ok()
+            .and_then(|accounts| accounts.active())
+            .map(|account| std::path::PathBuf::from(&account.profile_dir))
+            .unwrap_or_else(browser::profile_dir);
+        let port = match browser::pick_port(browser::DEFAULT_PORT) {
+            Ok(port) => port,
+            Err(error) => {
+                self.log_event(
+                    Some(session_id),
+                    None,
+                    "error",
+                    "BROWSER_RESTART",
+                    format!("ok=false step=pick_port reason={}", error.message),
+                );
+                return None;
+            }
+        };
+        let process = match browser::launch(platform, port, &profile, false) {
+            Ok(process) => process,
+            Err(error) => {
+                self.log_event(
+                    Some(session_id),
+                    None,
+                    "error",
+                    "BROWSER_RESTART",
+                    format!("ok=false step=launch reason={}", error.message),
+                );
+                return None;
+            }
+        };
+        let handle = process.handle.clone();
+        if !browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+            let mut process = process;
+            process.close();
+            self.log_event(
+                Some(session_id),
+                None,
+                "error",
+                "BROWSER_RESTART",
+                format!("ok=false step=cdp port={port}"),
+            );
+            return None;
+        }
+        browser::write_marker(&handle);
+        self.install_browser(BrowserInstance::Owned(process));
+        match CdpSession::connect(port, platform).await {
+            Ok(session) => {
+                self.log_event(
+                    Some(session_id),
+                    None,
+                    "info",
+                    "BROWSER_RESTART",
+                    format!("ok=true port={port}"),
+                );
+                if let Ok(mut state) = self.state.lock() {
+                    state.cdp_port = port;
+                }
+                Some(session)
+            }
+            Err(_) => {
+                self.log_event(
+                    Some(session_id),
+                    None,
+                    "error",
+                    "BROWSER_RESTART",
+                    format!("ok=false step=connect port={port}"),
+                );
+                None
+            }
+        }
+    }
+
+    /// 连 CDP：先重试 MAX_RECONNECT_FAILURES 次，仍失败才重启浏览器（默认不重启）。
+    async fn open_session(
+        &self,
+        platform: Platform,
+        port: &mut u16,
+        session_id: &str,
+    ) -> Option<CdpSession> {
+        for _ in 0..MAX_RECONNECT_FAILURES {
+            if self.stop.load(Ordering::SeqCst) {
+                return None;
+            }
+            match CdpSession::connect(*port, platform).await {
+                Ok(session) => return Some(session),
+                Err(_) => tokio::time::sleep(Duration::from_millis(700)).await,
+            }
+        }
+        self.log_event(
+            Some(session_id),
+            None,
+            "warn",
+            "CDP_UNAVAILABLE",
+            format!("connect_failures={} port={}", MAX_RECONNECT_FAILURES, port),
+        );
+        let session = self.restart_browser(platform, session_id).await?;
+        if let Some(new_port) = self.browser_port() {
+            *port = new_port;
+        }
+        Some(session)
+    }
+
+    /// 从当前页面批量抓候选链接入队，写 `CANDIDATES n=… sample=…`。
+    async fn fill_candidate_queue(
+        &self,
+        cdp: &mut CdpSession,
+        adapter: &'static dyn PlatformAdapter,
+        platform: Platform,
+        queue: &mut CandidateQueue,
+        session_id: &str,
+    ) -> usize {
+        let value = match cdp.evaluate(adapter.candidate_script(), EVALUATE_TIMEOUT).await {
+            Ok(value) => value,
+            Err(_) => {
+                self.log_event(
+                    Some(session_id),
+                    Some(ChannelType::Cdp),
+                    "warn",
+                    "CANDIDATES",
+                    "n=0 reason=script_failed",
+                );
+                return 0;
+            }
+        };
+        let added = queue.push_candidates(parse_candidates(&value, platform));
+        let sample = queue.sample(3).join(" ");
+        self.log_event(
+            Some(session_id),
+            Some(ChannelType::Cdp),
+            "info",
+            "CANDIDATES",
+            format!(
+                "n={} queue={} sample={}",
+                added,
+                queue.remaining(),
+                sample
+            ),
+        );
+        added
+    }
+
+    /// 记录一次 URL 失败：连败 2 次拉黑并写 `URL_BLACKLIST`，同时落一条 `ROUND`。
+    fn record_url_failure(
+        &self,
+        queue: &mut CandidateQueue,
+        target: &QueuedCandidate,
+        session_id: &str,
+        rounds: &mut u64,
+        failed_urls: &mut u32,
+    ) {
+        *failed_urls = failed_urls.saturating_add(1);
+        match queue.record_failure(&target.id) {
+            FailureOutcome::Retry(count) => self.log_event(
+                Some(session_id),
+                Some(ChannelType::Cdp),
+                "warn",
+                "URL_FAILED",
+                format!(
+                    "url={} id={} count={} queue={}",
+                    target.url,
+                    target.id,
+                    count,
+                    queue.remaining()
+                ),
+            ),
+            FailureOutcome::Blacklisted(count) => self.log_event(
+                Some(session_id),
+                Some(ChannelType::Cdp),
+                "warn",
+                "URL_BLACKLIST",
+                format!(
+                    "url={} id={} failures={} blacklist={}",
+                    target.url,
+                    target.id,
+                    count,
+                    queue.blacklist_len()
+                ),
+            ),
+        }
+        *rounds = rounds.saturating_add(1);
+        let (items, _) = {
+            let mut state = lock_state(&self.state);
+            state.round_index = *rounds;
+            state.failed_urls = *failed_urls;
+            state.waiting_for_browser = false;
+            (state.items.len(), state.phase)
+        };
+        self.log_event(
+            Some(session_id),
+            Some(ChannelType::Cdp),
+            "warn",
+            "ROUND",
+            format!(
+                "n={} url={} title= items={} queue={} failed={}",
+                rounds,
+                target.url,
+                items,
+                queue.remaining(),
+                failed_urls
+            ),
+        );
+    }
+
+    /// 在一条视频页上停留采样：页面健康检查 + 累计观看时长，最长 page_interval 秒。
+    async fn dwell_on_video(
+        &self,
+        cdp: &mut CdpSession,
+        expected_id: &str,
+        session_id: &str,
+        extract_script: &str,
+        platform: Platform,
+        config: &VideoConfig,
+        run_id: u64,
+    ) -> DwellOutcome {
+        let dwell_seconds = config.page_interval_seconds.clamp(15, 180);
+        let sample_seconds = config.sample_interval_seconds.clamp(1, 5);
+        let started = Instant::now();
+        let mut last_facts: Option<PageFacts> = None;
+        let mut last_persist = Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_secs(sample_seconds)).await;
+            if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
+                return DwellOutcome::Aborted;
+            }
+            let href = cdp.current_url().await;
+            if !href.is_empty() && !url_matches_video_id(&href, expected_id) {
+                self.log_event(
+                    Some(session_id),
+                    Some(ChannelType::Cdp),
+                    "warn",
+                    "TARGET_HEALTH",
+                    format!(
+                        "url={} expect={} ok=false action=next_candidate",
+                        href, expected_id
+                    ),
+                );
+                return DwellOutcome::TargetLost;
+            }
+            if let Ok(value) = cdp.evaluate(extract_script, EVALUATE_TIMEOUT).await {
+                if let Ok((facts, _unknown)) = normalize_value(&value, platform, 1.0) {
+                    let ended = facts
+                        .duration_seconds
+                        .map(|duration| duration > 0 && facts.position_seconds + 1 >= duration)
+                        .unwrap_or(false)
+                        && !facts.playing;
+                    {
+                        let mut state = lock_state(&self.state);
+                        merge_facts(&mut state.items, &facts, now_seconds());
+                        if let Some(url) = facts.canonical_url.clone() {
+                            state.current_url = url;
+                        }
+                        state.foreground_title = facts.title.clone();
+                        state.waiting_for_browser = false;
+                    }
+                    last_facts = Some(facts);
+                    // 每 30 秒把边看边攒的观看时长增量落盘。
+                    if last_persist.elapsed() >= Duration::from_secs(30) {
+                        last_persist = Instant::now();
+                        self.persist_runtime_session();
+                    }
+                    if ended {
+                        return DwellOutcome::Finished(last_facts.take());
+                    }
                 }
             }
-            self.close_browser_instance();
+            if started.elapsed() >= Duration::from_secs(dwell_seconds) {
+                return DwellOutcome::Finished(last_facts.take());
+            }
         }
-        self.snapshot()
     }
 
     async fn run(self: Arc<Self>, app: AppHandle, port: u16, run_id: u64) {
         let platform = self.snapshot().provider;
         let platform = Platform::parse(&platform).unwrap_or(Platform::Bilibili);
         let adapter = adapter_for(platform);
-
+        let session_id = self.snapshot().session_id;
         let mut last_emit = Instant::now() - Duration::from_millis(SNAPSHOT_THROTTLE_MS);
-        let mut session: Option<CdpSession> = None;
-        let mut last_turn = Instant::now();
-        let mut first_turn = true;
 
         // P0：清掉同 profile 的多余浏览器实例，只保留当前端口。
         {
@@ -1264,106 +1567,74 @@ impl SessionEngine {
                         closed += 1;
                     }
                 }
-                self.store.log(DiagnosticEntry {
-                    at: now_seconds(),
-                    session_id: Some(self.snapshot().session_id),
-                    channel: None,
-                    level: "warn".to_string(),
-                    code: "BROWSER_ENFORCED_SINGLE".to_string(),
-                    message: format!("closed={} kept_port={} alive={:?}", closed, port, alive),
-                });
+                self.log_event(
+                    Some(&session_id),
+                    None,
+                    "warn",
+                    "BROWSER_ENFORCED_SINGLE",
+                    format!("closed={} kept_port={} alive={:?}", closed, port, alive),
+                );
                 tokio::time::sleep(Duration::from_millis(600)).await;
             }
         }
+
+        let mut port = port;
+        let mut session = match self.open_session(platform, &mut port, &session_id).await {
+            Some(session) => session,
+            None => {
+                self.set_runtime_error(
+                    "CDP_UNAVAILABLE",
+                    "小狗专用浏览器调试接口连不上（重连 3 次、重启浏览器也没成功），本轮已停止。",
+                );
+                self.close_browser_instance();
+                self.finish(&app, StopReason::BrowserUnavailable, false);
+                return;
+            }
+        };
+
+        // 初始候选：先回推荐流 / 首页，批量抓链接（之后只直接导航，不再点击卡片）。
+        if session.navigate(adapter.feed_url()).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(1800)).await;
+        }
+        let mut queue = CandidateQueue::new();
+        let mut rounds: u64 = 0;
+        let mut collected_rounds: u32 = 0;
+        let mut failed_urls: u32 = 0;
+        let mut empty_fills: u32 = 0;
+        let mut cdp_failures = 0u32;
+        let mut last_housekeeping_at = now_seconds();
         let mut last_progress_at = now_seconds();
         let mut stall_logged = false;
-        let mut last_housekeeping_at = 0u64;
-        let mut no_progress_rounds = 0u32;
-        let mut pending_heal = false;
-        let connect_deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            match CdpSession::connect(port, platform).await {
-                Ok(mut cdp) => {
-                    if cdp.navigate(adapter.feed_url()).await.is_ok() {
-                        session = Some(cdp);
-                        break;
-                    }
-                }
-                Err(_) => {
-                    if Instant::now() >= connect_deadline {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        }
-
-        if session.is_some() {
-            if let Ok(mut channel) = self.channel.lock() {
-                channel.record_success(now_seconds());
-                let state = channel.active();
-                drop(channel);
-                if let Ok(mut runtime) = self.state.lock() {
-                    runtime.channel = state;
-                }
-            }
-        } else {
-            if let Ok(mut channel) = self.channel.lock() {
-                channel.record_failure(FailureReason::NoResponse, now_seconds());
-                let state = channel.active();
-                drop(channel);
-                if let Ok(mut runtime) = self.state.lock() {
-                    runtime.channel = state;
-                    runtime.degraded = true;
-                }
-            }
-            self.set_runtime_error(
-                "CDP_UNAVAILABLE",
-                "小狗专用浏览器没有在 15 秒内打开调试接口，本轮已停止。请点「打开登录窗」确认浏览器能正常启动，或在高级设置里先「关闭专用浏览器」再重试。",
-            );
-            self.close_browser_instance();
-            self.finish(&app, StopReason::BrowserUnavailable, false);
-            return;
-        }
-
-        let mut cdp_failures = 0u32;
-        let mut reconnect_failures = 0u32;
-        let mut nav_failures = 0u32;
-        let mut last_nav_at = 0u64;
-        let mut advance_failures = 0u32;
-        let mut commented_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut commented_urls: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut last_comment_at = 0u64;
         let mut comment_count = 0u32;
         let mut last_skip_reason: Option<String> = None;
         let mut login_risk_logged = false;
-        let mut last_advance_at = 0u64;
-        let mut current_video_url = String::new();
-        // 刚导航到的视频页 URL：每轮采样前用它复核 target 是否还停在视频页。
-        let mut expect_video_url = String::new();
-        let mut non_video_rounds = 0u32;
-        let mut browser_restart_requested = false;
-        let mut last_collect_key = String::new();
 
         loop {
             if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
                 break;
             }
-
             let config = self.config();
             let (phase, started_at, item_count) = {
                 let state = lock_state(&self.state);
                 (state.phase, state.started_at, state.items.len())
             };
-            if !matches!(phase, Phase::Collecting | Phase::AwaitingLogin | Phase::UserTakeover) {
+            if !matches!(
+                phase,
+                Phase::Collecting | Phase::AwaitingLogin | Phase::UserTakeover
+            ) {
                 break;
             }
-
             if !self.browser_alive() {
-                self.set_runtime_error("BROWSER_CLOSED", "小狗浏览器已关闭，已停止本轮并保留已采集内容。");
+                self.set_runtime_error(
+                    "BROWSER_CLOSED",
+                    "小狗浏览器已关闭，已停止本轮并保留已采集内容。",
+                );
                 self.finish(&app, StopReason::BrowserClosed, false);
                 break;
             }
-
             if now_seconds().saturating_sub(started_at) >= config.max_minutes.saturating_mul(60) {
                 self.finish(&app, StopReason::DurationLimit, true);
                 break;
@@ -1374,35 +1645,25 @@ impl SessionEngine {
             }
 
             let now = now_seconds();
-            if now.saturating_sub(last_progress_at) >= 8 {
-                no_progress_rounds = no_progress_rounds.saturating_add(1);
-                if no_progress_rounds >= 2 && !pending_heal {
-                    pending_heal = true;
-                }
-            }
+            // 停滞看门狗：只记一笔 + 让补货逻辑重新抓候选，不清空队列
+            // （清空会丢掉本轮已采集合与黑名单，导致 ROUND 计数回退）。
             if now.saturating_sub(last_progress_at) >= 30 && !stall_logged {
                 stall_logged = true;
-                self.store.log(DiagnosticEntry {
-                    at: now,
-                    session_id: Some(self.snapshot().session_id),
-                    channel: None,
-                    level: "error".to_string(),
-                    code: "SESSION_STALLED".to_string(),
-                    message: format!(
-                        "no_progress_for={}s url={} waiting_for_browser={}",
+                let url = self.snapshot().current_url;
+                self.log_event(
+                    Some(&session_id),
+                    None,
+                    "warn",
+                    "STALL_WATCH",
+                    format!(
+                        "no_progress_for={}s url={} queue={} action=refill",
                         now.saturating_sub(last_progress_at),
-                        self.snapshot().current_url,
-                        self.snapshot().waiting_for_browser
+                        url,
+                        queue.remaining()
                     ),
-                });
-                self.set_runtime_error(
-                    "SESSION_STALLED",
-                    "30 秒没有采集到任何变化：可能页面没加载完、遇到登录墙，或浏览器窗口被关掉了；已停止本轮。",
                 );
-                self.finish(&app, StopReason::Crash, true);
-                break;
             }
-            // A1：每 10s 做一次单实例体检（软件运行中也可能被重新拉起第二个实例）。
+            // A1：每 10s 一次单实例体检（运行中也可能被拉起第二个实例）。
             if now.saturating_sub(last_housekeeping_at) >= 10 {
                 last_housekeeping_at = now;
                 let mut alive: Vec<u16> = Vec::new();
@@ -1421,925 +1682,569 @@ impl SessionEngine {
                             closed += 1;
                         }
                     }
-                    self.store.log(DiagnosticEntry {
-                        at: now,
-                        session_id: Some(self.snapshot().session_id),
-                        channel: None,
-                        level: "warn".to_string(),
-                        code: "BROWSER_ENFORCED_SINGLE".to_string(),
-                        message: format!("closed={} kept_port={} alive={:?}", closed, port, alive),
-                    });
+                    self.log_event(
+                        Some(&session_id),
+                        None,
+                        "warn",
+                        "BROWSER_ENFORCED_SINGLE",
+                        format!("closed={} kept_port={} alive={:?}", closed, port, alive),
+                    );
                 }
             }
-            let should_sample = {
-                let mut channel = match self.channel.lock() {
-                    Ok(channel) => channel,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                channel.allow_answer(now)
-            };
 
-            if should_sample {
-                let mut facts_result: Option<Result<(PageFacts, usize), ExtractIssue>> = None;
-                if session.is_none() {
-                    match CdpSession::connect(port, platform).await {
-                        Ok(cdp) => {
-                            session = Some(cdp);
-                            reconnect_failures = 0;
-                        }
-                        Err(_) => {
-                            reconnect_failures = reconnect_failures.saturating_add(1);
-                            if reconnect_failures >= MAX_RECONNECT_FAILURES {
-                                self.set_runtime_error("CDP_RECONNECT_FAILED", "小狗浏览器连接连续失败，已停止本轮。");
-                                self.close_browser_instance();
-                                self.finish(&app, StopReason::Crash, false);
-                                break;
-                            }
-                        }
+            // CDP 坏了先重连；重连 3 次仍失败才重启浏览器（restart 里会重建队列）。
+            if cdp_failures >= MAX_CDP_FAILURES {
+                cdp_failures = 0;
+                self.log_event(
+                    Some(&session_id),
+                    None,
+                    "warn",
+                    "CDP_RECOVER",
+                    format!("port={} action=reconnect", port),
+                );
+                match self.open_session(platform, &mut port, &session_id).await {
+                    Some(next) => {
+                        session = next;
+                        // 重启 / 重连后必须重建候选队列。
+                        queue = CandidateQueue::new();
+                        let _ = session.navigate(adapter.feed_url()).await;
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        self.fill_candidate_queue(
+                            &mut session,
+                            adapter,
+                            platform,
+                            &mut queue,
+                            &session_id,
+                        )
+                        .await;
+                        continue;
+                    }
+                    None => {
+                        self.set_runtime_error(
+                            "CDP_UNAVAILABLE",
+                            "小狗专用浏览器调试接口连不上，本轮已停止。",
+                        );
+                        self.finish(&app, StopReason::BrowserUnavailable, true);
+                        break;
                     }
                 }
-                // A2：每轮采集前复核 target；同时无条件记录 TARGET_HEALTH（读了哪个 URL/title）。
-                if let Some(cdp) = session.as_mut() {
-                    let health_url = cdp.current_url().await;
-                    let health_title = cdp
-                        .evaluate("document.title", EVALUATE_TIMEOUT)
-                        .await
-                        .ok()
-                        .and_then(|value| value.as_str().map(str::to_string))
-                        .unwrap_or_default();
-                    self.store.log(DiagnosticEntry {
-                        at: now,
-                        session_id: Some(self.snapshot().session_id),
-                        channel: Some(ChannelType::Cdp),
-                        level: "info".to_string(),
-                        code: "TARGET_HEALTH".to_string(),
-                        message: format!(
-                            "url={} title={} target={} expect={}",
-                            health_url,
-                            health_title,
-                            cdp.page_id(),
-                            expect_video_url
-                        ),
-                    });
-                    if expect_video_url.is_empty() || !health_url.contains("/video/") {
-                        non_video_rounds = if health_url.contains("/video/") { 0 } else { non_video_rounds.saturating_add(1) };
-                        if non_video_rounds >= 2 {
-                            non_video_rounds = 0;
-                            browser_restart_requested = true;
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: Some(ChannelType::Cdp),
-                                level: "warn".to_string(),
-                                code: "BROWSER_RESTART".to_string(),
-                                message: format!("reason=non_video_url url={}", health_url),
-                            });
-                        }
-                    }
-                    if !expect_video_url.is_empty() {
-                        let before = cdp.current_url().await;
-                        if !before.contains("/video/") {
-                            let from = if before.is_empty() { "(empty)".to_string() } else { before.clone() };
-                            let mut after = before.clone();
-                            if cdp.reconnect().await.is_ok() {
-                                after = cdp.current_url().await;
-                            }
-                            // 页面自己跳回首页时：记录原因（referrer/history）并最多重导航 3 次。
-                            let mut attempts = 0u32;
-                            while !after.contains("/video/") && attempts < 3 {
-                                attempts += 1;
-                                let referrer = cdp
-                                    .evaluate("document.referrer", EVALUATE_TIMEOUT)
-                                    .await
-                                    .ok()
-                                    .and_then(|value| value.as_str().map(str::to_string))
-                                    .unwrap_or_default();
-                                let history_length = cdp
-                                    .evaluate("history.length", EVALUATE_TIMEOUT)
-                                    .await
-                                    .ok()
-                                    .and_then(|value| value.as_i64())
-                                    .unwrap_or(0);
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "warn".to_string(),
-                                    code: "NAV_REVERT".to_string(),
-                                    message: format!(
-                                        "from={} to={} expect={} referrer={} history={} attempt={}",
-                                        after, from, expect_video_url, referrer, history_length, attempts
-                                    ),
-                                });
-                                if cdp.navigate(&expect_video_url.clone()).await.is_ok() {
-                                    tokio::time::sleep(Duration::from_millis(800)).await;
-                                    after = cdp.current_url().await;
-                                }
-                            }
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: Some(ChannelType::Cdp),
-                                level: if after.contains("/video/") { "info" } else { "warn" }.to_string(),
-                                code: "TARGET_REPICK".to_string(),
-                                message: format!(
-                                    "from={} to={} expect={} alive={:?}",
-                                    from,
-                                    after,
-                                    expect_video_url,
-                                    {
-                                        let mut ports = Vec::new();
-                                        for candidate in 9333u16..=9338 {
-                                            if port_alive(candidate).await {
-                                                ports.push(candidate);
-                                            }
-                                        }
-                                        ports
-                                    }
-                                ),
-                            });
-                        }
-                    }
-                }
-                // BROWSER_RESTART：关闭旧实例 → 重新 launch → 等 CDP → 重新进视频页；
-                // 任一步失败就记录原因并停止本轮，不再空转采集。
-                if browser_restart_requested {
-                    browser_restart_requested = false;
-                    self.close_browser_instance();
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    let profile = self
-                        .accounts
-                        .lock()
-                        .ok()
-                        .and_then(|accounts| accounts.active())
-                        .map(|account| std::path::PathBuf::from(account.profile_dir))
-                        .unwrap_or_else(browser::profile_dir);
-                    let mut launched: Option<BrowserInstance> = None;
-                    let mut restart_port = 0u16;
-                    for _attempt in 0..2 {
-                        let port = match browser::pick_port(browser::DEFAULT_PORT) {
-                            Ok(port) => port,
-                            Err(error) => {
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: None,
-                                    level: "error".to_string(),
-                                    code: "BROWSER_RESTART".to_string(),
-                                    message: format!("ok=false step=launch reason={}", error.message),
-                                });
-                                self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启失败（端口不可用），本轮已停止。");
-                                self.finish(&app, StopReason::Crash, true);
-                                return;
-                            }
-                        };
-                        match browser::launch(platform, port, &profile, false) {
-                            Ok(process) => {
-                                let handle = process.handle.clone();
-                                if browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
-                                    browser::write_marker(&handle);
-                                    restart_port = port;
-                                    launched = Some(BrowserInstance::Owned(process));
-                                    break;
-                                }
-                                let mut process = process;
-                                process.close();
-                            }
-                            Err(error) => {
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: None,
-                                    level: "warn".to_string(),
-                                    code: "BROWSER_RESTART".to_string(),
-                                    message: format!("ok=false step=launch reason={}", error.message),
-                                });
-                            }
-                        }
-                    }
-                    let Some(instance) = launched else {
-                        self.store.log(DiagnosticEntry {
-                            at: now,
-                            session_id: Some(self.snapshot().session_id),
-                            channel: None,
-                            level: "error".to_string(),
-                            code: "BROWSER_RESTART".to_string(),
-                            message: format!("ok=false step=cdp port={restart_port}"),
-                        });
-                        self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启后 CDP 没起来，本轮已停止。");
-                        self.finish(&app, StopReason::Crash, true);
-                        return;
-                    };
-                    self.install_browser(instance);
-                    match CdpSession::connect(restart_port, platform).await {
-                        Ok(mut cdp) => {
-                            let outcome = force_enter_video_page(&mut cdp).await;
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: Some(ChannelType::Cdp),
-                                level: if outcome.ok { "info" } else { "error" }.to_string(),
-                                code: "BROWSER_RESTART".to_string(),
-                                message: format!(
-                                    "ok={} port={} url={} attempts={:?}",
-                                    outcome.ok, restart_port, outcome.final_url, outcome.attempts
-                                ),
-                            });
-                            if !outcome.ok {
-                                self.set_runtime_error(
-                                    "BROWSER_RESTART_FAILED",
-                                    "浏览器重启成功但进不去视频页，本轮已停止（详见 BROWSER_RESTART 日志）。",
-                                );
-                                self.finish(&app, StopReason::Crash, true);
-                                return;
-                            }
-                            expect_video_url = outcome.final_url.clone();
-                            session = Some(cdp);
-                        }
-                        Err(_) => {
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: None,
-                                level: "error".to_string(),
-                                code: "BROWSER_RESTART".to_string(),
-                                message: format!("ok=false step=cdp port={restart_port}"),
-                            });
-                            self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启后连不上 CDP，本轮已停止。");
-                            self.finish(&app, StopReason::Crash, true);
-                            return;
-                        }
-                    }
-                }
-                let evaluate_result = if let Some(cdp) = session.as_mut() {
-                    Some(cdp.evaluate(adapter.extract_script(), EVALUATE_TIMEOUT).await)
-                } else {
-                    None
-                };
-                if let Some(result) = evaluate_result {
-                    match result {
-                        Ok(value) => {
-                            cdp_failures = 0;
-                            facts_result = Some(normalize_value(&value, platform, 1.0));
-                            if let Ok(mut channel) = self.channel.lock() {
-                                channel.record_success(now);
-                            }
-                        }
-                        Err(reason) => {
+            }
+
+            // 队列见底就补货；补不到就回热门/排行榜兜底。
+            if queue.remaining() < REFILL_THRESHOLD {
+                self.fill_candidate_queue(
+                    &mut session,
+                    adapter,
+                    platform,
+                    &mut queue,
+                    &session_id,
+                )
+                .await;
+                if queue.remaining() == 0 {
+                    for fallback in fallback_candidate_pages(platform) {
+                        if session.navigate(fallback).await.is_err() {
                             cdp_failures = cdp_failures.saturating_add(1);
-                            let _action = {
-                                let mut channel = match self.channel.lock() {
-                                    Ok(channel) => channel,
-                                    Err(poisoned) => poisoned.into_inner(),
-                                };
-                                channel.record_failure(reason, now)
-                            };
-                            session = None;
-                            if cdp_failures >= MAX_CDP_FAILURES {
-                                self.set_runtime_error("CDP_STALLED", "页面连续无响应，已停止本轮以避免桌宠卡死。");
-                                self.close_browser_instance();
-                                self.finish(&app, StopReason::Crash, false);
-                                break;
-                            }
+                            continue;
+                        }
+                        tokio::time::sleep(Duration::from_millis(1600)).await;
+                        self.fill_candidate_queue(
+                            &mut session,
+                            adapter,
+                            platform,
+                            &mut queue,
+                            &session_id,
+                        )
+                        .await;
+                        if queue.remaining() >= REFILL_THRESHOLD {
+                            break;
                         }
                     }
-                }
-
-                if facts_result.is_none() {
-                    // 弱通道：只读前台窗口标题，不推断时长与互动。
-                    if let Some((title, process)) = foreground_title_process() {
-                        if super::rules::title_matches(&title, platform) {
-                            let raw = RawFacts {
-                                title: title.clone(),
-                                url: String::new(),
-                                duration_seconds: 0,
-                                playing: false,
-                                visible: true,
-                                on_feed: true,
-                                ..RawFacts::default()
-                            };
-                            facts_result = Some(normalize_value(
-                                &serde_json::to_value(raw).unwrap_or_default(),
-                                platform,
-                                0.3,
-                            ));
-                        } else {
+                    if queue.remaining() == 0 {
+                        empty_fills = empty_fills.saturating_add(1);
+                        let url = session.current_url().await;
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "CANDIDATES_EMPTY",
+                            format!("fills={} url={}", empty_fills, url),
+                        );
+                        // 弱通道：只读前台窗口标题，让面板显示「在等浏览器」。
+                        if let Some((title, process)) = foreground_title_process() {
                             let mut state = lock_state(&self.state);
                             state.foreground_title = title;
                             state.foreground_process = process;
                             state.waiting_for_browser = true;
                         }
-                    }
-                }
-
-                if let Some(Ok((facts, _unknown))) = facts_result {
-                    let kind = adapter.classify_page(&facts);
-                    let mut pending_advance = false;
-                    let mut pending_persist = false;
-                    let mut pending_comment: Option<PageFacts> = None;
-                    // N5：Feed/首页时先在 state 锁之外做导航尝试（await 期间不能持有 MutexGuard）。
-                    let mut nav_result: Option<NavOutcome> = None;
-                    {
-                        let items_empty = lock_state(&self.state).items.is_empty();
-                        if matches!(kind, PageKind::Feed)
-                            && items_empty
-                            && nav_failures < 3
-                            && now.saturating_sub(last_nav_at) >= 5
-                        {
-                            last_nav_at = now;
-                            if let Some(cdp) = session.as_mut() {
-                                nav_result = Some(force_enter_video_page(cdp).await);
-                            }
-                        }
-                    }
-                    let mut auto_comment: Option<PageFacts> = None;
-                    {
-                        let mut state = lock_state(&self.state);
-                        state.foreground_title = facts.title.clone();
-                        state.foreground_process.clear();
-                        state.waiting_for_browser = false;
-                        if let Some(url) = facts.canonical_url.clone() {
-                            state.current_url = url;
-                        }
-                        match kind {
-                        PageKind::RiskControl => {
-                            state.error_code = Some("RISK_CONTROL".to_string());
-                            state.error_message = Some("平台要求验证，小狗已停下来。".to_string());
-                            drop(state);
-                            self.finish(&app, StopReason::RiskControl, false);
+                        if empty_fills >= 3 {
+                            self.set_runtime_error(
+                                "NO_CANDIDATES",
+                                "连续 3 次抓不到候选视频链接（页面结构可能变了），本轮已停止。",
+                            );
+                            self.finish(&app, StopReason::Crash, false);
                             break;
                         }
-                        PageKind::Login => {
-                            let mut diagnostics = 0;
-                            try_transition(&mut state.phase, Phase::AwaitingLogin, &mut diagnostics);
-                            state.error_code = Some("LOGIN_REQUIRED".to_string());
-                            state.error_message = Some("请在小狗专用窗口登录一次。".to_string());
-                        }
-                        PageKind::Other => {
-                            state.waiting_for_browser = true;
-                        }
-                        PageKind::Feed => {
-                            // N5：使用锁外完成的导航结果（成功记 NAV_OK；三次失败 → NAV_FAILED + 停止）。
-                            if let Some(outcome) = nav_result.take() {
-                                if outcome.ok {
-                                    nav_failures = 0;
-                                    expect_video_url = outcome.final_url.clone();
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(state.session_id.clone()),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "info".to_string(),
-                                        code: "NAV_OK".to_string(),
-                                        message: format!("url={} attempts={:?}", outcome.final_url, outcome.attempts),
-                                    });
-                                    // P0：导航后复核（导航与采集用同一 target 的结果）。
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(state.session_id.clone()),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: if outcome.final_url.contains("/video/") { "info" } else { "warn" }.to_string(),
-                                        code: "NAV_VERIFIED".to_string(),
-                                        message: format!("url={} title={}", outcome.final_url, outcome.title),
-                                    });
-                                } else {
-                                    nav_failures = nav_failures.saturating_add(1);
-                                    if nav_failures >= 3 {
-                                        self.store.log(DiagnosticEntry {
-                                            at: now,
-                                            session_id: Some(state.session_id.clone()),
-                                            channel: Some(ChannelType::Cdp),
-                                            level: "error".to_string(),
-                                            code: "NAV_FAILED".to_string(),
-                                            message: format!(
-                                                "final_url={} title={} attempts={:?}",
-                                                outcome.final_url, outcome.title, outcome.attempts
-                                            ),
-                                        });
-                                        drop(state);
-                                        self.set_runtime_error(
-                                            "NAV_FAILED",
-                                            "进不去视频页：可能停在登录页、遇到风控，或页面结构变了（详见 video/logs 里的 NAV_FAILED）。",
-                                        );
-                                        self.finish(&app, StopReason::Crash, false);
-                                        return;
-                                    }
-                                }
-                            }
-                            if state.phase == Phase::AwaitingLogin {
-                                let mut diagnostics = 0;
-                                try_transition(&mut state.phase, Phase::Collecting, &mut diagnostics);
-                                state.error_code = None;
-                                state.error_message = None;
-                            }
-                            match merge_facts(&mut state.items, &facts, now) {
-                                MergeOutcome::Filtered => {
-                                    state.filtered_count = state.filtered_count.saturating_add(1);
-                                    last_progress_at = now;
-                                    // N3：丢弃原因必须落到 video/logs/video-<date>.jsonl
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(state.session_id.clone()),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "info".to_string(),
-                                        code: "ITEM_DISCARDED".to_string(),
-                                        message: format!(
-                                            "{} | reason={} | url={}",
-                                            facts.title,
-                                            facts.filter_reason.clone().unwrap_or_else(|| "not_video_page".to_string()),
-                                            facts.canonical_url.clone().unwrap_or_default()
-                                        ),
-                                    });
-                                }
-                                other => {
-                                    // N5 验收：真正采到视频条目时落 ITEM_COLLECTED（含 /video/ URL）。
-                                    if matches!(other, MergeOutcome::New | MergeOutcome::Updated) {
-                                        let url = facts.canonical_url.clone().unwrap_or_default();
-                                        if url.contains("/video/") {
-                                            last_collect_key = facts.item_key.clone();
-                                            if current_video_url.is_empty() {
-                                                current_video_url = url.clone();
-                                            }
-                                            expect_video_url = url.clone();
-                                            self.store.log(DiagnosticEntry {
-                                                at: now,
-                                                session_id: Some(state.session_id.clone()),
-                                                channel: Some(ChannelType::Cdp),
-                                                level: "info".to_string(),
-                                                code: "ITEM_COLLECTED".to_string(),
-                                                message: format!("url={} watched_ms={} title={}", url, facts.position_seconds.saturating_mul(1000), facts.title),
-                                            });
-                                            pending_persist = true;
-                                            last_progress_at = now;
-                                            stall_logged = false;
-                                            no_progress_rounds = 0;
-                                            // N11：锁外做自动评论（去重/间隔/预演都在锁外判断）。
-                                            pending_comment = Some(facts.clone());
-                                            // N6：同一条重复采集且停留够 20s → 换下一条（标记，锁外执行）。
-                                            if !last_collect_key.is_empty()
-                                                && url == current_video_url
-                                                && now.saturating_sub(last_advance_at) >= 20
-                                            {
-                                                pending_advance = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if state.items.len() > config.max_items as usize {
-                                state.items.truncate(config.max_items as usize);
-                            }
-                            // 旧 auto_comment 路径已停用：由新评论块接管（dry-run 优先），避免双发。
-                        }
-                        }
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        continue;
                     }
-                    // A3：连续两轮没进展 → 立即重导航，不等下一轮。
-                    if pending_heal {
-                        pending_heal = false;
-                        no_progress_rounds = 0;
-                        if let Some(cdp) = session.as_mut() {
-                            let outcome = force_enter_video_page(cdp).await;
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: Some(ChannelType::Cdp),
-                                level: if outcome.ok { "info" } else { "warn" }.to_string(),
-                                code: "SELF_HEAL_NAV".to_string(),
-                                message: format!(
-                                    "ok={} url={} attempts={:?}",
-                                    outcome.ok, outcome.final_url, outcome.attempts
-                                ),
-                            });
-                        }
-                    }
-                    // N11：自动评论（默认 dry-run：只生成 + 日志 + 气泡，不真正发送）。
-                    if let Some(facts) = pending_comment.take() {
-                        let config = self.config();
-                        let url = facts.canonical_url.clone().unwrap_or_default();
-                        // 定位打点：无条件记录「评论块确实被执行 + 读到配置」。
-                        self.store.log(DiagnosticEntry {
-                            at: now,
-                            session_id: Some(self.snapshot().session_id),
-                            channel: Some(ChannelType::Cdp),
-                            level: "info".to_string(),
-                            code: "COMMENT_EVAL".to_string(),
-                            message: format!(
-                                "url={} auto={} dry={} watched_ms={} login={} risk={}",
-                                url,
-                                config.auto_comment,
-                                config.comment_dry_run,
-                                facts.position_seconds.saturating_mul(1000),
-                                facts.hints.login_visible,
-                                facts.hints.captcha_visible || facts.hints.risk_banner
-                            ),
-                        });
-                        let is_login_or_risk = facts.hints.login_visible
-                            || facts.hints.captcha_visible
-                            || facts.hints.risk_banner;
-                        if is_login_or_risk && !login_risk_logged {
-                            login_risk_logged = true;
-                            self.store.log(DiagnosticEntry {
-                                at: now,
-                                session_id: Some(self.snapshot().session_id),
-                                channel: Some(ChannelType::Cdp),
-                                level: "warn".to_string(),
-                                code: "COMMENT_SKIPPED".to_string(),
-                                message: format!("url={} reason=login_or_risk", url),
-                            });
-                        } else if url.contains("/video/") && !is_login_or_risk {
-                            let watched_ms = facts.position_seconds.saturating_mul(1000);
-                            let allowed = config.auto_comment
-                                && comment_count < 10
-                                && watched_ms >= 8_000
-                                && !commented_urls.contains(&url)
-                                && (last_comment_at == 0
-                                    || now.saturating_sub(last_comment_at) >= 180);
-                            if allowed {
-                                let model = lock_state(&self.state).comment_model.clone();
-                                let generated = match model.as_ref() {
-                                    Some(model) => {
-                                        tokio::time::timeout(
-                                            std::time::Duration::from_secs(30),
-                                            generate_content_comment(&app, &facts, model),
-                                        )
-                                        .await
-                                        .unwrap_or_else(|_| Err("评论生成超时".to_string()))
-                                    }
-                                    None => {
-                                        self.store.log(DiagnosticEntry {
-                                            at: now,
-                                            session_id: Some(self.snapshot().session_id),
-                                            channel: Some(ChannelType::Cdp),
-                                            level: "warn".to_string(),
-                                            code: "COMMENT_SKIPPED".to_string(),
-                                            message: format!("url={} reason=no_model", url),
-                                        });
-                                        Err("未配置评论模型".to_string())
-                                    }
-                                };
-                                let comment = sanitize_comment(&generated.unwrap_or_default());
-                                let mut last_verified = true;
-                                if config.comment_dry_run {
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(self.snapshot().session_id),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "info".to_string(),
-                                        code: "COMMENT_DRY_RUN".to_string(),
-                                        message: format!("url={} text={}", url, comment),
-                                    });
-                                    let _ = app.emit(
-                                        "video-comment-bubble",
-                                        serde_json::json!({
-                                            "kind": "dry-run",
-                                            "text": comment_bubble(&facts.title, &comment),
-                                        }),
-                                    );
-                                } else {
-                                    // 前置校验：登录/风控 / 当前是否视频页。
-                                    let blocked = if facts.hints.login_visible
-                                        || facts.hints.captcha_visible
-                                        || facts.hints.risk_banner
-                                    {
-                                        Some("login_or_risk")
-                                    } else {
-                                        None
-                                    };
-                                    let url_ok = if let Some(cdp) = session.as_mut() {
-                                        cdp.current_url().await.contains("/video/")
-                                    } else {
-                                        false
-                                    };
-                                    if let Some(reason) = blocked {
-                                        self.store.log(DiagnosticEntry {
-                                            at: now,
-                                            session_id: Some(self.snapshot().session_id),
-                                            channel: Some(ChannelType::Cdp),
-                                            level: "warn".to_string(),
-                                            code: "COMMENT_SKIPPED".to_string(),
-                                            message: format!("url={} reason={}", url, reason),
-                                        });
-                                        last_verified = false;
-                                    } else if !url_ok {
-                                        self.store.log(DiagnosticEntry {
-                                            at: now,
-                                            session_id: Some(self.snapshot().session_id),
-                                            channel: Some(ChannelType::Cdp),
-                                            level: "warn".to_string(),
-                                            code: "COMMENT_SKIPPED".to_string(),
-                                            message: format!("url={} reason=not_video_page", url),
-                                        });
-                                        last_verified = false;
-                                    } else {
-                                        match self.post_comment(&comment).await {
-                                            Ok(_report) => {
-                                                // 回读验证：发送后 3 次 × 1.5s 匹配评论区文本。
-                                                let mut verified = false;
-                                                if let Some(cdp) = session.as_mut() {
-                                                    for _ in 0..3 {
-                                                        tokio::time::sleep(Duration::from_millis(1500)).await;
-                                                        if let Ok(text) = cdp.evaluate_text("document.body.innerText").await {
-                                                            if comment_in_text(&text, &comment) {
-                                                                verified = true;
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                last_verified = verified;
-                                                self.store.log(DiagnosticEntry {
-                                                    at: now,
-                                                    session_id: Some(self.snapshot().session_id),
-                                                    channel: Some(ChannelType::Cdp),
-                                                    level: if verified { "info" } else { "warn" }.to_string(),
-                                                    code: if verified { "COMMENT_POSTED" } else { "COMMENT_UNVERIFIED" }.to_string(),
-                                                    message: format!("url={} verified={} text={}", url, verified, comment),
-                                                });
-                                                if !verified {
-                                                    self.set_runtime_error(
-                                                        "COMMENT_UNVERIFIED",
-                                                        "评论可能没发出去：没在评论区回读到这条内容。",
-                                                    );
-                                                }
-                                                let _ = app.emit(
-                                                    "video-comment-bubble",
-                                                    serde_json::json!({
-                                                        "kind": if verified { "posted" } else { "unverified" },
-                                                        "text": comment_bubble(&facts.title, &comment),
-                                                    }),
-                                                );
-                                            }
-                                            Err(error) => {
-                                                let reason = comment_error_reason(&error.to_string());
-                                                last_verified = false;
-                                                self.store.log(DiagnosticEntry {
-                                                    at: now,
-                                                    session_id: Some(self.snapshot().session_id),
-                                                    channel: Some(ChannelType::Cdp),
-                                                    level: "warn".to_string(),
-                                                    code: "COMMENT_SKIPPED".to_string(),
-                                                    message: format!("url={} reason={}", url, reason),
-                                                });
-                                                let _ = app.emit(
-                                                    "video-comment-bubble",
-                                                    serde_json::json!({ "kind": "failed", "text": format!("评论没发出去（{}），先不发了。", reason) }),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                commented_urls.insert(url.clone());
-                                last_comment_at = now;
-                                comment_count = comment_count.saturating_add(1);
-                                {
-                                    let mut state = lock_state(&self.state);
-                                    state.comment_count = state.comment_count.saturating_add(1);
-                                    state.last_comment_text = comment.clone();
-                                    state.last_comment_dry_run = config.comment_dry_run;
-                                    state.last_comment_verified = last_verified;
-                                    state.last_comment_at = now;
-                                    if config.comment_dry_run {
-                                        state.comment_dry_run_count =
-                                            state.comment_dry_run_count.saturating_add(1);
-                                    }
-                                }
-                            } else {
-                                let reason = if !config.auto_comment {
-                                    "disabled"
-                                } else if comment_count >= 10 {
-                                    "session_limit"
-                                } else if watched_ms < 8_000 {
-                                    "not_watched_enough"
-                                } else if commented_urls.contains(&url) {
-                                    "duplicate"
-                                } else {
-                                    "interval"
-                                };
-                                if last_skip_reason.as_deref() != Some(reason) {
-                                    last_skip_reason = Some(reason.to_string());
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(self.snapshot().session_id),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "info".to_string(),
-                                        code: "COMMENT_SKIPPED".to_string(),
-                                        message: format!("url={} reason={}", url, reason),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    if pending_persist {
-                        pending_persist = false;
-                        self.persist_runtime_session();
-                    }
-                    // N6：锁外执行「换下一个视频」，避免 MutexGuard 跨 await。
-                    if pending_advance {
-                        pending_advance = false;
-                        last_advance_at = now;
-                        if let Some(cdp) = session.as_mut() {
-                            let from_url = current_video_url.clone();
-                            let outcome = advance_to_next_video(cdp, &from_url).await;
-                            if outcome.ok {
-                                advance_failures = 0;
-                                let to_url = outcome.final_url.clone();
-                                current_video_url = to_url.clone();
-                                // 切换视频后同步更新期望 URL，避免下一轮 repick 回到旧视频。
-                                expect_video_url = to_url.clone();
-                                // 立即复核新页面；不是 /video/ 就当场重导航（不等下一轮）。
-                                let actual = cdp.current_url().await;
-                                if !actual.contains("/video/") {
-                                    let retried_ok = cdp.navigate(&expect_video_url).await.is_ok();
-                                    let retried = cdp.current_url().await;
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(self.snapshot().session_id),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "warn".to_string(),
-                                        code: "ADVANCE_RENAV".to_string(),
-                                        message: format!(
-                                            "at={} expect={} renav_ok={} retried={}",
-                                            actual, expect_video_url, retried_ok, retried
-                                        ),
-                                    });
-                                }
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "info".to_string(),
-                                    code: "ITEM_ADVANCED".to_string(),
-                                    message: format!(
-                                        "from={} to={} attempts={:?}",
-                                        from_url, to_url, outcome.attempts
-                                    ),
-                                });
-                            } else {
-                                advance_failures = advance_failures.saturating_add(1);
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "warn".to_string(),
-                                    code: "ADVANCE_FAILED".to_string(),
-                                    message: format!(
-                                        "count={} from={} attempts={:?}",
-                                        advance_failures, from_url, outcome.attempts
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    if let Some(facts) = auto_comment {
-                        let session_id = self.snapshot().session_id;
-                        let model = {
-                            let state = lock_state(&self.state);
-                            state.comment_model.clone()
-                        };
-                        let generated = match model.as_ref() {
-                            Some(model) => match tokio::time::timeout(
-                                Duration::from_secs(35),
-                                generate_content_comment(&app, &facts, model),
-                            )
-                            .await
-                            {
-                                Ok(result) => result,
-                                Err(_) => Err("评论模型响应超时，未发送评论".to_string()),
-                            },
-                            None => Err("没有传入当前聊天模型配置，未生成评论".to_string()),
-                        };
-                        match generated {
-                            Err(error) => {
-                                let message = format!("{}：{}", facts.title, error);
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(session_id.clone()),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "warn".to_string(),
-                                    code: "AUTO_COMMENT_MODEL_FAILED".to_string(),
-                                    message: message.clone(),
-                                });
-                                let _ = app.emit(
-                                    "video-auto-comment",
-                                    serde_json::json!({
-                                        "sessionId": session_id,
-                                        "itemKey": facts.item_key,
-                                        "ok": false,
-                                        "message": message,
-                                    }),
-                                );
-                            }
-                            Ok(comment) => match self.post_comment(&comment).await {
-                                Ok(report) => {
-                                    let code = if report.ok {
-                                        "AUTO_COMMENT_SENT"
-                                    } else {
-                                        "AUTO_COMMENT_SKIPPED"
-                                    };
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(session_id.clone()),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: if report.ok { "info" } else { "warn" }.to_string(),
-                                        code: code.to_string(),
-                                        message: format!("{}：{}", facts.title, report.message),
-                                    });
-                                    let _ = app.emit(
-                                        "video-auto-comment",
-                                        serde_json::json!({
-                                            "sessionId": session_id,
-                                            "itemKey": facts.item_key,
-                                            "ok": report.ok,
-                                            "message": report.message,
-                                        }),
-                                    );
-                                }
-                                Err(error) => {
-                                    let message = error.to_string();
-                                    self.store.log(DiagnosticEntry {
-                                        at: now,
-                                        session_id: Some(session_id.clone()),
-                                        channel: Some(ChannelType::Cdp),
-                                        level: "warn".to_string(),
-                                        code: "AUTO_COMMENT_FAILED".to_string(),
-                                        message: message.clone(),
-                                    });
-                                    let _ = app.emit(
-                                        "video-auto-comment",
-                                        serde_json::json!({
-                                            "sessionId": session_id,
-                                            "itemKey": facts.item_key,
-                                            "ok": false,
-                                            "message": message,
-                                        }),
-                                    );
-                                }
-                            },
-                        }
-                    }
-                }
-
-                if last_emit.elapsed() >= Duration::from_millis(SNAPSHOT_THROTTLE_MS) {
-                    last_emit = Instant::now();
-                    let snapshot = self.snapshot();
-                    let _ = app.emit("video-session-updated", snapshot);
+                    empty_fills = 0;
                 }
             }
 
-            let turn_delay = if first_turn {
-                FIRST_ACTION_DELAY_SECONDS
-            } else {
-                config.page_interval_seconds
+            let Some(target) = queue.next_candidate() else {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                continue;
             };
-            if last_turn.elapsed() >= Duration::from_secs(turn_delay) {
-                last_turn = Instant::now();
-                first_turn = false;
-                let mut turned = false;
-                let next_result = if let Some(cdp) = session.as_mut() {
-                    Some(cdp.evaluate(adapter.next_action_script(), EVALUATE_TIMEOUT).await)
-                } else {
-                    None
-                };
-                match next_result {
-                    Some(Ok(value)) => {
-                        turned = value.as_bool().unwrap_or(false);
-                        cdp_failures = 0;
+            self.log_event(
+                Some(&session_id),
+                Some(ChannelType::Cdp),
+                "info",
+                "NAV_ATTEMPT",
+                format!(
+                    "url={} id={} queue={}",
+                    target.url,
+                    target.id,
+                    queue.remaining()
+                ),
+            );
+            let mut nav_error = false;
+            if session.navigate(&target.url).await.is_err() {
+                nav_error = true;
+                cdp_failures = cdp_failures.saturating_add(1);
+            }
+            let ready = if nav_error {
+                None
+            } else {
+                wait_page_ready(&mut session, &target.id).await
+            };
+            let probe = match ready {
+                Some(probe) => probe,
+                None => {
+                    if nav_error {
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "NAV_FAILED",
+                            format!("url={} reason=cdp_navigate_error", target.url),
+                        );
+                    } else {
+                        let href = session.current_url().await;
+                        let title = session
+                            .evaluate("document.title", EVALUATE_TIMEOUT)
+                            .await
+                            .ok()
+                            .and_then(|value| value.as_str().map(str::to_string))
+                            .unwrap_or_default();
+                        // 视频页被重定向到登录页时不要计成「URL 失败」，先进入等待登录。
+                        if href.contains("passport.bilibili.com") || title.contains("登录") {
+                            {
+                                let mut state = lock_state(&self.state);
+                                let mut diagnostics = 0;
+                                try_transition(
+                                    &mut state.phase,
+                                    Phase::AwaitingLogin,
+                                    &mut diagnostics,
+                                );
+                                state.error_code = Some("LOGIN_REQUIRED".to_string());
+                                state.error_message =
+                                    Some("请在小狗专用窗口登录一次。".to_string());
+                            }
+                            self.log_event(
+                                Some(&session_id),
+                                Some(ChannelType::Cdp),
+                                "warn",
+                                "LOGIN_REQUIRED",
+                                format!("url={} action=wait_login", href),
+                            );
+                            queue.requeue(target.clone());
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "NAV_TIMEOUT",
+                            format!(
+                                "url={} expect={} actual={} title={} wait={}s",
+                                target.url, target.id, href, title, PAGE_READY_WAIT_SECONDS
+                            ),
+                        );
                     }
-                    Some(Err(_)) => {
+                    self.record_url_failure(
+                        &mut queue,
+                        &target,
+                        &session_id,
+                        &mut rounds,
+                        &mut failed_urls,
+                    );
+                    continue;
+                }
+            };
+            cdp_failures = 0;
+
+            // 页面关键信息就绪 → 取事实（标题/时长/作者/互动）。
+            // 刚到位时 video 元数据可能还没来（duration=0 会被误判成「短且无作者」），
+            // 因此对可重试的伪条目判定最多再试 3 次（约 2 秒）。
+            let mut facts: Option<PageFacts> = None;
+            for attempt in 0..3u32 {
+                match session.evaluate(adapter.extract_script(), EVALUATE_TIMEOUT).await {
+                    Ok(value) => match normalize_value(&value, platform, 1.0) {
+                        Ok((candidate, _unknown)) => {
+                            let retryable = candidate.filtered
+                                && matches!(
+                                    candidate.filter_reason.as_deref(),
+                                    Some("short_without_author") | Some("empty_title")
+                                );
+                            facts = Some(candidate);
+                            if !retryable {
+                                break;
+                            }
+                        }
+                        Err(issue) => {
+                            self.log_event(
+                                Some(&session_id),
+                                Some(ChannelType::Cdp),
+                                "warn",
+                                "EXTRACT_FAILED",
+                                format!("url={} issue={} attempt={}", target.url, issue, attempt),
+                            );
+                        }
+                    },
+                    Err(_) => {
                         cdp_failures = cdp_failures.saturating_add(1);
-                        session = None;
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "EXTRACT_FAILED",
+                            format!(
+                                "url={} issue=cdp_evaluate attempt={}",
+                                target.url, attempt
+                            ),
+                        );
+                        break;
                     }
-                    None => {}
                 }
-                if let Some(cdp) = session.as_mut() {
-                    if !turned {
-                        turned = cdp.dispatch_key(super::rules::page_key(platform)).await.is_ok();
+                tokio::time::sleep(Duration::from_millis(800)).await;
+            }
+            let facts = facts;
+            let Some(facts) = facts else {
+                self.record_url_failure(
+                    &mut queue,
+                    &target,
+                    &session_id,
+                    &mut rounds,
+                    &mut failed_urls,
+                );
+                continue;
+            };
+
+            // 页面分类：风控直接停；登录墙进入等待登录；视频页（含平台适配器判成 Feed 的详情页）继续采集。
+            match adapter.classify_page(&facts) {
+                PageKind::RiskControl => {
+                    {
+                        let mut state = lock_state(&self.state);
+                        state.error_code = Some("RISK_CONTROL".to_string());
+                        state.error_message = Some("平台要求验证，小狗已停下来。".to_string());
                     }
-                }
-                if cdp_failures >= MAX_CDP_FAILURES {
-                    self.set_runtime_error("CDP_STALLED", "翻页页面连续无响应，已停止本轮以避免桌宠卡死。");
-                    self.finish(&app, StopReason::Crash, false);
+                    self.finish(&app, StopReason::RiskControl, false);
                     break;
                 }
-                if turned {
-                    let mut state = lock_state(&self.state);
-                    state.steps = state.steps.saturating_add(1);
-                    state.last_action_at = Some(now_seconds());
-                    state.waiting_for_browser = false;
-                } else {
-                    let mut state = lock_state(&self.state);
-                    state.waiting_for_browser = true;
+                PageKind::Login => {
+                    {
+                        let mut state = lock_state(&self.state);
+                        let mut diagnostics = 0;
+                        try_transition(&mut state.phase, Phase::AwaitingLogin, &mut diagnostics);
+                        state.error_code = Some("LOGIN_REQUIRED".to_string());
+                        state.error_message = Some("请在小狗专用窗口登录一次。".to_string());
+                    }
+                    self.log_event(
+                        Some(&session_id),
+                        Some(ChannelType::Cdp),
+                        "warn",
+                        "LOGIN_REQUIRED",
+                        format!("url={} action=wait_login", target.url),
+                    );
+                    queue.requeue(target.clone());
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                PageKind::Feed | PageKind::Other => {
+                    // 注意：适配器的 classify 会把「平台域名 + 详情页」也归到 Feed，
+                    // 这里必须再用 is_video_page 复核一遍，否则视频页会被当成首页丢掉。
+                    let canonical = facts.canonical_url.clone().unwrap_or_default();
+                    if !is_video_page(&canonical, platform) {
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "TARGET_HEALTH",
+                            format!(
+                                "url={} expect={} ok=false action=next_candidate",
+                                canonical, target.id
+                            ),
+                        );
+                        self.record_url_failure(
+                            &mut queue,
+                            &target,
+                            &session_id,
+                            &mut rounds,
+                            &mut failed_urls,
+                        );
+                        continue;
+                    }
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(config.sample_interval_seconds.max(1))).await;
+            // 采集：合并到条目列表（同 itemKey 只更新，不重复）。
+            let mut collect_ok = false;
+            {
+                let mut state = lock_state(&self.state);
+                state.foreground_title = facts.title.clone();
+                state.foreground_process.clear();
+                state.waiting_for_browser = false;
+                if let Some(url) = facts.canonical_url.clone() {
+                    state.current_url = url;
+                }
+                match merge_facts(&mut state.items, &facts, now) {
+                    MergeOutcome::Filtered => {
+                        state.filtered_count = state.filtered_count.saturating_add(1);
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "info",
+                            "ITEM_DISCARDED",
+                            format!(
+                                "{} | reason={} | url={}",
+                                facts.title,
+                                facts
+                                    .filter_reason
+                                    .clone()
+                                    .unwrap_or_else(|| "not_video_page".to_string()),
+                                facts.canonical_url.clone().unwrap_or_default()
+                            ),
+                        );
+                    }
+                    MergeOutcome::New | MergeOutcome::Updated => {
+                        collect_ok = true;
+                        collected_rounds = collected_rounds.saturating_add(1);
+                        state.collected_rounds = collected_rounds;
+                        state.collected_ids.insert(target.id.clone());
+                        state.steps = state.steps.saturating_add(1);
+                        state.last_action_at = Some(now);
+                    }
+                    MergeOutcome::Ignored => {}
+                }
+                if state.items.len() > config.max_items as usize {
+                    state.items.truncate(config.max_items as usize);
+                }
+                if state.phase == Phase::AwaitingLogin && collect_ok {
+                    let mut diagnostics = 0;
+                    try_transition(&mut state.phase, Phase::Collecting, &mut diagnostics);
+                    state.error_code = None;
+                    state.error_message = None;
+                }
+            }
+            if collect_ok {
+                queue.mark_collected(&target.id);
+                self.log_event(
+                    Some(&session_id),
+                    Some(ChannelType::Cdp),
+                    "info",
+                    "ITEM_COLLECTED",
+                    format!(
+                        "url={} bvid={} title={}",
+                        facts.canonical_url.clone().unwrap_or_else(|| target.url.clone()),
+                        target.id,
+                        facts.title
+                    ),
+                );
+                if let Ok(mut channel) = self.channel.lock() {
+                    channel.record_success(now);
+                }
+                self.persist_runtime_session();
+                last_progress_at = now_seconds();
+                stall_logged = false;
+            } else {
+                // 被过滤成伪条目：不算成功，换下一条。
+                self.record_url_failure(
+                    &mut queue,
+                    &target,
+                    &session_id,
+                    &mut rounds,
+                    &mut failed_urls,
+                );
+                continue;
+            }
+
+            // 停留看视频（同时做 TARGET_HEALTH 自愈检查）。
+            let dwell = self
+                .dwell_on_video(
+                    &mut session,
+                    &target.id,
+                    &session_id,
+                    adapter.extract_script(),
+                    platform,
+                    &config,
+                    run_id,
+                )
+                .await;
+            let final_facts = match dwell {
+                DwellOutcome::Aborted => break,
+                DwellOutcome::TargetLost => {
+                    // 页面回退/跳走：失败计数 +1，下一轮直接用队列里没采过的下一条。
+                    self.record_url_failure(
+                        &mut queue,
+                        &target,
+                        &session_id,
+                        &mut rounds,
+                        &mut failed_urls,
+                    );
+                    if let Ok(mut channel) = self.channel.lock() {
+                        channel.record_failure(FailureReason::LeftRecommendFeed, now_seconds());
+                    }
+                    continue;
+                }
+                DwellOutcome::Finished(facts) => facts,
+            };
+
+            // 本轮完成：写 ROUND（标题、已采数、剩余队列、失败数）。
+            rounds = rounds.saturating_add(1);
+            {
+                let mut state = lock_state(&self.state);
+                state.round_index = rounds;
+                state.collected_rounds = collected_rounds;
+                state.failed_urls = failed_urls;
+            }
+            let title = final_facts
+                .as_ref()
+                .map(|facts| facts.title.clone())
+                .unwrap_or_else(|| probe.title.clone());
+            let collected_distinct = {
+                let state = lock_state(&self.state);
+                state.collected_ids.len()
+            };
+            last_progress_at = now_seconds();
+            stall_logged = false;
+            self.log_event(
+                Some(&session_id),
+                Some(ChannelType::Cdp),
+                "info",
+                "ROUND",
+                format!(
+                    "n={} url={} title={} items={} queue={} failed={}",
+                    rounds,
+                    probe.href,
+                    title,
+                    collected_distinct,
+                    queue.remaining(),
+                    failed_urls
+                ),
+            );
+
+            // 评论：异步派发，绝不 await（模型慢/失败都不阻塞刷视频）。
+            if let Some(facts) = final_facts {
+                let url = facts.canonical_url.clone().unwrap_or_default();
+                let is_login_or_risk = facts.hints.login_visible
+                    || facts.hints.captcha_visible
+                    || facts.hints.risk_banner;
+                self.log_event(
+                    Some(&session_id),
+                    Some(ChannelType::Cdp),
+                    "info",
+                    "COMMENT_EVAL",
+                    format!(
+                        "url={} auto={} dry={} watched_ms={} login={} risk={}",
+                        url,
+                        config.auto_comment,
+                        config.comment_dry_run,
+                        facts.position_seconds.saturating_mul(1000),
+                        facts.hints.login_visible,
+                        facts.hints.captcha_visible || facts.hints.risk_banner
+                    ),
+                );
+                if is_login_or_risk {
+                    if !login_risk_logged {
+                        login_risk_logged = true;
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            "warn",
+                            "COMMENT_SKIPPED",
+                            format!("url={} reason=login_or_risk", url),
+                        );
+                    }
+                } else if url.contains("/video/") {
+                    let watched_ms = facts.position_seconds.saturating_mul(1000);
+                    let allowed = config.auto_comment
+                        && comment_count < 10
+                        && watched_ms >= 8_000
+                        && !commented_urls.contains(&url)
+                        && (last_comment_at == 0
+                            || now_seconds().saturating_sub(last_comment_at) >= 180);
+                    if allowed {
+                        commented_urls.insert(url);
+                        last_comment_at = now_seconds();
+                        comment_count = comment_count.saturating_add(1);
+                        self.spawn_auto_comment(
+                            app.clone(),
+                            facts,
+                            run_id,
+                            config.comment_dry_run,
+                        );
+                    } else {
+                        let reason = if !config.auto_comment {
+                            "disabled"
+                        } else if comment_count >= 10 {
+                            "session_limit"
+                        } else if watched_ms < 8_000 {
+                            "not_watched_enough"
+                        } else if commented_urls.contains(&url) {
+                            "duplicate"
+                        } else {
+                            "interval"
+                        };
+                        if last_skip_reason.as_deref() != Some(reason) {
+                            last_skip_reason = Some(reason.to_string());
+                            self.log_event(
+                                Some(&session_id),
+                                Some(ChannelType::Cdp),
+                                "info",
+                                "COMMENT_SKIPPED",
+                                format!("url={} reason={}", url, reason),
+                            );
+                        }
+                    }
+                }
+            }
+
+            if last_emit.elapsed() >= Duration::from_millis(SNAPSHOT_THROTTLE_MS) {
+                last_emit = Instant::now();
+                let snapshot = self.snapshot();
+                let _ = app.emit("video-session-updated", snapshot);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
+        // 兜底收尾：异常 break 时 phase 不能卡在 Collecting。
+        let still_collecting = {
+            let mut state = lock_state(&self.state);
+            matches!(
+                state.phase,
+                Phase::Collecting | Phase::AwaitingLogin | Phase::UserTakeover
+            )
+        };
+        if still_collecting && !self.stop.load(Ordering::SeqCst) {
+            self.finish(&app, StopReason::Crash, true);
+        }
     }
 
     fn finish(&self, app: &AppHandle, reason: StopReason, produce_digest: bool) {
         let config = self.config();
         let profile = self.store.profile();
-        let (mut session, items, platform, ended_at) = {
+        let (mut session, items, platform, ended_at, summary) = {
             let mut state = lock_state(&self.state);
             // 0 条时不要笼统记成「异常崩溃」（QA U5）：按真实原因细分。
             let reason = if produce_digest && state.items.is_empty() {
@@ -2361,6 +2266,13 @@ impl SessionEngine {
             } else {
                 try_transition(&mut state.phase, Phase::Interrupted, &mut diagnostics);
             }
+            let summary = format!(
+                "collected={} distinct={} failed={} reason={:?}",
+                state.collected_rounds,
+                state.collected_ids.len(),
+                state.failed_urls,
+                reason
+            );
             let session = VideoSession {
                 session_id: state.session_id.clone(),
                 platform: state.platform,
@@ -2376,9 +2288,11 @@ impl SessionEngine {
                 schema_version: SCHEMA_VERSION,
                 items: state.items.clone(),
                 digest: None,
+                comments: state.comments.clone(),
             };
-            (session, state.items.clone(), state.platform, ended_at)
+            (session, state.items.clone(), state.platform, ended_at, summary)
         };
+        self.log_event(Some(&session.session_id), None, "info", "SESSION_SUMMARY", summary);
 
         if produce_digest {
             let mut scored = items.clone();
@@ -2455,6 +2369,13 @@ impl SessionEngine {
                     let mut pending = self.store.pending();
                     pending.enqueue(draft.clone(), ended_at);
                     self.store.save_pending(&pending);
+                    self.log_event(
+                        Some(&session.session_id),
+                        None,
+                        "info",
+                        "DELIVERY_QUEUED",
+                        format!("digest_items={} pending={}", draft.items.len(), pending.items.len()),
+                    );
                     let _ = app.emit(
                         "video-summary-pending",
                         serde_json::json!({ "sessionId": session.session_id, "digest": draft }),
@@ -2530,6 +2451,234 @@ impl SessionEngine {
         let _ = app.emit("video-session-updated", snapshot);
     }
 
+    fn comment_run_active(&self, run_id: u64) -> bool {
+        if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
+            return false;
+        }
+        let state = lock_state(&self.state);
+        matches!(state.phase, Phase::Collecting | Phase::AwaitingLogin | Phase::UserTakeover)
+    }
+
+    /// 在独立任务中完成模型生成、预演/发送和回读验证。
+    ///
+    /// 评论不能占住采集循环：模型服务可能需要几十秒，CDP 发送后还要等待页面
+    /// 渲染。这里通过 run_id 复核会话生命周期，停止或切换会话后不会再写页面。
+    fn spawn_auto_comment(
+        self: &Arc<Self>,
+        app: AppHandle,
+        facts: PageFacts,
+        run_id: u64,
+        dry_run: bool,
+    ) {
+        let engine = self.clone();
+        tauri::async_runtime::spawn(async move {
+            if !engine.comment_run_active(run_id) {
+                return;
+            }
+            let model = {
+                let state = lock_state(&engine.state);
+                state.comment_model.clone()
+            };
+            let generated = match model.as_ref() {
+                Some(model) => match tokio::time::timeout(
+                    Duration::from_secs(30),
+                    generate_content_comment(&app, &facts, model),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err("评论模型响应超时，未发送评论".to_string()),
+                },
+                None => Err("没有传入当前聊天模型配置，未生成评论".to_string()),
+            };
+            let comment = match generated.and_then(|raw| sanitize_comment(&raw)) {
+                Ok(comment) => comment,
+                Err(error) => {
+                    let message = format!("{}：{}", facts.title, error);
+                    engine.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: Some(engine.snapshot().session_id.clone()),
+                        channel: Some(ChannelType::Cdp),
+                        level: "warn".to_string(),
+                        code: "COMMENT_MODEL_FAILED".to_string(),
+                        message: message.clone(),
+                    });
+                    let _ = app.emit(
+                        "video-auto-comment",
+                        serde_json::json!({
+                            "ok": false,
+                            "message": message,
+                        }),
+                    );
+                    let _ = app.emit(
+                        "video-comment-bubble",
+                        serde_json::json!({
+                            "kind": "failed",
+                            "text": "模型没有生成评论，本轮没有发送。",
+                        }),
+                    );
+                    return;
+                }
+            };
+            if !engine.comment_run_active(run_id) {
+                return;
+            }
+
+            if dry_run {
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "info".to_string(),
+                    code: "COMMENT_DRY_RUN".to_string(),
+                    message: format!("url={} text={}", facts.canonical_url.clone().unwrap_or_default(), comment),
+                });
+                {
+                    let mut state = lock_state(&engine.state);
+                    state.comment_count = state.comment_count.saturating_add(1);
+                    state.comment_dry_run_count = state.comment_dry_run_count.saturating_add(1);
+                    state.last_comment_text = comment.clone();
+                    state.last_comment_dry_run = true;
+                    state.last_comment_verified = false;
+                    state.last_comment_at = now_seconds();
+                    state.comments.push(SessionComment {
+                        text: comment.clone(),
+                        url: facts.canonical_url.clone().unwrap_or_default(),
+                        title: facts.title.clone(),
+                        dry_run: true,
+                        verified: false,
+                        at: now_seconds(),
+                    });
+                }
+                let _ = app.emit(
+                    "video-comment-bubble",
+                    serde_json::json!({
+                        "kind": "dry-run",
+                        "text": comment_bubble(&facts.title, &comment),
+                    }),
+                );
+                let _ = app.emit(
+                    "video-auto-comment",
+                    serde_json::json!({ "ok": true, "message": "评论预演已生成，未发送" }),
+                );
+                let _ = app.emit("video-session-updated", engine.snapshot());
+                return;
+            }
+
+            // 模型生成期间页面可能已经翻页；再次确认当前 target 仍是视频详情页。
+            let (port, platform) = {
+                let state = lock_state(&engine.state);
+                (state.cdp_port, state.platform)
+            };
+            let page_ready = if port == 0 {
+                false
+            } else if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
+                cdp.current_url().await.contains("/video/")
+            } else {
+                false
+            };
+            if !page_ready || !engine.comment_run_active(run_id) {
+                let message = "视频页面已变化，未发送评论".to_string();
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "info".to_string(),
+                    code: "COMMENT_SKIPPED".to_string(),
+                    message: message.clone(),
+                });
+                let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                return;
+            }
+
+            let report = match engine.post_comment(&comment).await {
+                Ok(report) if report.ok => report,
+                Ok(report) => {
+                    let message = format!("评论未提交：{}", report.message);
+                    engine.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: Some(engine.snapshot().session_id.clone()),
+                        channel: Some(ChannelType::Cdp),
+                        level: "warn".to_string(),
+                        code: "COMMENT_SKIPPED".to_string(),
+                        message: message.clone(),
+                    });
+                    let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                    return;
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    engine.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: Some(engine.snapshot().session_id.clone()),
+                        channel: Some(ChannelType::Cdp),
+                        level: "warn".to_string(),
+                        code: "COMMENT_FAILED".to_string(),
+                        message: message.clone(),
+                    });
+                    let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                    return;
+                }
+            };
+
+            let mut verified = false;
+            if port != 0 {
+                if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
+                    for _ in 0..3 {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        if let Ok(text) = cdp.evaluate_text("document.body.innerText").await {
+                            if comment_in_text(&text, &comment) {
+                                verified = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if !verified {
+                engine.set_runtime_error("COMMENT_UNVERIFIED", "评论可能没发出去：没在评论区回读到这条内容。");
+            }
+            let message = if verified { "评论已提交并回读验证" } else { "评论已尝试提交，但回读未验证" };
+            engine.store.log(DiagnosticEntry {
+                at: now_seconds(),
+                session_id: Some(engine.snapshot().session_id.clone()),
+                channel: Some(ChannelType::Cdp),
+                level: if verified { "info" } else { "warn" }.to_string(),
+                code: if verified { "COMMENT_POSTED" } else { "COMMENT_UNVERIFIED" }.to_string(),
+                message: format!("url={} verified={} text={}", facts.canonical_url.clone().unwrap_or_default(), verified, comment),
+            });
+            {
+                let mut state = lock_state(&engine.state);
+                state.comment_count = state.comment_count.saturating_add(1);
+                state.last_comment_text = comment.clone();
+                state.last_comment_dry_run = false;
+                state.last_comment_verified = verified;
+                state.last_comment_at = now_seconds();
+                state.comments.push(SessionComment {
+                    text: comment.clone(),
+                    url: facts.canonical_url.clone().unwrap_or_default(),
+                    title: facts.title.clone(),
+                    dry_run: false,
+                    verified,
+                    at: now_seconds(),
+                });
+            }
+            let _ = app.emit(
+                "video-comment-bubble",
+                serde_json::json!({
+                    "kind": if verified { "posted" } else { "unverified" },
+                    "text": comment_bubble(&facts.title, &comment),
+                }),
+            );
+            let _ = app.emit(
+                "video-auto-comment",
+                serde_json::json!({ "ok": verified, "message": message }),
+            );
+            let _ = app.emit("video-session-updated", engine.snapshot());
+            let _ = report;
+        });
+    }
+
     /// 在当前视频页面里发一条评论（只有用户点发送时才会调用）。
     pub async fn post_comment(&self, text: &str) -> VideoResult<CommentReport> {
         let (port, platform, phase) = {
@@ -2591,7 +2740,18 @@ impl SessionEngine {
         })
     }
     pub fn list_sessions(&self, limit: u32) -> Vec<SessionSummary> {
-        self.store.list_sessions(limit)
+        let pending_ids: std::collections::HashSet<String> = self
+            .store
+            .pending()
+            .items
+            .iter()
+            .map(|entry| entry.digest.session_id.clone())
+            .collect();
+        let mut sessions = self.store.list_sessions(limit);
+        for session in &mut sessions {
+            session.has_pending = pending_ids.contains(&session.session_id);
+        }
+        sessions
     }
 
     pub fn get_session(&self, session_id: &str) -> VideoResult<VideoSession> {
@@ -2750,7 +2910,7 @@ impl SessionEngine {
     ///
     /// 成功判据（QA U2）：真的出现一个可见的浏览器窗口且 CDP 可用；否则报中文错误、
     /// 关掉本次启动的进程并写诊断日志，绝不「提示成功但没窗口」。
-    pub fn open_login_window(&self, platform: Platform, account_id: Option<&str>) -> VideoResult<()> {
+    pub async fn open_login_window(&self, platform: Platform, account_id: Option<&str>) -> VideoResult<()> {
         let profile = if let Some(account_id) = account_id {
             let mut accounts = self.accounts.lock().map_err(|_| VideoError::new("ACCOUNT_ERROR", "小狗账号状态不可用。"))?;
             let account = accounts
@@ -2785,7 +2945,7 @@ impl SessionEngine {
                 return Ok(());
             }
             let _ = browser::open_target(port, platform.feed_url());
-            std::thread::sleep(Duration::from_millis(600));
+            tokio::time::sleep(Duration::from_millis(600)).await;
             if browser::focus_browser_window(platform) {
                 return Ok(());
             }
@@ -2795,7 +2955,7 @@ impl SessionEngine {
             let port = handle.port;
             self.install_browser(BrowserInstance::External(handle));
             let _ = browser::open_target(port, platform.feed_url());
-            std::thread::sleep(Duration::from_millis(600));
+            tokio::time::sleep(Duration::from_millis(600)).await;
             if browser::focus_browser_window(platform) {
                 return Ok(());
             }
@@ -2808,7 +2968,7 @@ impl SessionEngine {
         let port = browser::pick_port(browser::DEFAULT_PORT)?;
         let mut process = browser::launch(platform, port, &profile, true)?;
         let pid = process.handle.pid;
-        if !browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+        if !browser::wait_for_cdp_async(port, browser::CDP_READY_TIMEOUT).await {
             process.close();
             browser::clear_marker();
             self.abort_start(
@@ -2822,7 +2982,7 @@ impl SessionEngine {
                 format!("port={port} profile={}", profile.display()),
             ));
         }
-        if !browser::wait_for_visible_window(pid, browser::LOGIN_WINDOW_TIMEOUT) {
+        if !browser::wait_for_visible_window_async(pid, browser::LOGIN_WINDOW_TIMEOUT).await {
             // CDP 起来了但没有可见窗口：多半被旧实例转交/最小化了，关掉并报错。
             process.close();
             browser::clear_marker();
@@ -2936,6 +3096,7 @@ fn foreground_title_process() -> Option<(String, String)> {
 mod tests {
     use super::*;
     use crate::video::extract::normalize_facts;
+    use crate::video::extract::RawFacts;
     use crate::video::model::Platform;
 
     #[test]
@@ -3058,7 +3219,19 @@ mod tests {
 
 #[cfg(test)]
 mod comment_match_tests {
-    use super::comment_in_text;
+    use super::{comment_in_text, sanitize_comment};
+
+    #[test]
+    fn empty_model_output_is_rejected_without_template() {
+        assert!(sanitize_comment("   ").is_err());
+        assert!(sanitize_comment("求关注 https://example.com").is_err());
+    }
+
+    #[test]
+    fn model_comment_is_cleaned_before_send() {
+        let cleaned = sanitize_comment("看完了 求关注 @某人 https://example.com").unwrap();
+        assert_eq!(cleaned, "看完了");
+    }
 
     #[test]
     fn comment_in_text_matches() {

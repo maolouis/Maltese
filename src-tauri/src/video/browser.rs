@@ -136,6 +136,20 @@ pub fn wait_for_cdp(port: u16, timeout: Duration) -> bool {
     }
 }
 
+/// 异步版本：给 `#[tauri::command]` / 异步会话用，等待期间不阻塞线程（UI 主线程不会假死）。
+pub async fn wait_for_cdp_async(port: u16, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        if cdp_ready(port) {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
 /// pid 还活着、且进程镜像确实是 Chrome / Edge（防止 pid 被系统复用后误杀/误判）。
 pub fn pid_alive_browser(pid: u32) -> bool {
     let Some(name) = process_image_name(pid) else {
@@ -341,6 +355,20 @@ pub fn wait_for_visible_window(pid: u32, timeout: Duration) -> bool {
             return false;
         }
         std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// 异步版本：登录窗等待用，不阻塞命令线程。
+pub async fn wait_for_visible_window_async(pid: u32, timeout: Duration) -> bool {
+    let started = Instant::now();
+    loop {
+        if visible_window_count_for_pid(pid) > 0 {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
 }
 

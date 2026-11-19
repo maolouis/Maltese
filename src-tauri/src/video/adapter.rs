@@ -15,7 +15,8 @@ pub trait PlatformAdapter: Send + Sync {
     fn id(&self) -> Platform;
     fn feed_url(&self) -> &'static str;
     fn extract_script(&self) -> &'static str;
-    fn next_action_script(&self) -> &'static str;
+    /// 批量抓候选视频链接（不再用点击/滚动翻页）。
+    fn candidate_script(&self) -> &'static str;
     fn interact_script(&self, action: InteractAction) -> Option<&'static str>;
     fn classify_page(&self, facts: &PageFacts) -> PageKind;
 }
@@ -46,7 +47,12 @@ const BILIBILI_EXTRACT: &str = r#"
   const pick = (sel) => document.querySelector(sel);
   const text = (sel) => (pick(sel)?.textContent || '').trim();
   const meta = (name) => (document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.content || '').trim();
-  const title = text('h1.video-title') || text('.video-title') || meta('og:title') || document.title;
+  // 标题优先 og:title / h1，避免把「_哔哩哔哩bilibili / _哔哩哔哩_bilibili」站点后缀当成视频标题（会被当成伪条目丢弃）。
+  const clean = (value) => (value || '')
+    .replace(/\s*[-_–—]\s*哔哩哔哩.*$/i, '')
+    .replace(/\s*[-_–—]\s*bilibili.*$/i, '')
+    .trim();
+  const title = clean(text('h1.video-title') || meta('og:title') || text('.video-title') || document.title);
   const description = text('.desc-info') || text('.video-desc') || meta('og:description') || meta('description');
   const author = text('.up-name') || text('.username') || meta('author');
   const tags = Array.from(document.querySelectorAll('.tag, .video-tag, a[href*="/search?keyword="]'))
@@ -56,7 +62,7 @@ const BILIBILI_EXTRACT: &str = r#"
   const duration = Number.isFinite(video?.duration) ? Math.round(video.duration) : 0;
   const position = Number.isFinite(video?.currentTime) ? Math.round(video.currentTime) : 0;
   return {
-    itemId: location.pathname.match(/\/video\/([^/?#]+|BV[^/?#]+)/)?.[1] || '',
+    itemId: location.pathname.match(/\/video\/([^/?#]+)/)?.[1] || '',
     title, description, author, durationSeconds: duration, positionSeconds: position,
     playing: !!video && !video.paused && !video.ended,
     visible: document.visibilityState === 'visible',
@@ -73,46 +79,39 @@ const BILIBILI_EXTRACT: &str = r#"
 })()
 "#;
 
-const BILIBILI_NEXT: &str = r#"
+/// 批量候选：`__INITIAL_STATE__` 的 bvid 优先，DOM 里的视频链接兜底。
+/// 返回 `{state:[bvid…], hrefs:[…]}`；Rust 侧去重并按优先级入队。
+const BILIBILI_CANDIDATES: &str = r#"
 (() => {
-  const visible = (el) => {
-    if (!el) return false;
-    const box = el.getBoundingClientRect();
-    const style = window.getComputedStyle(el);
-    return box.width > 20 && box.height > 20 && style.display !== 'none' && style.visibility !== 'hidden';
+  const out = { state: [], hrefs: [] };
+  const pushState = (value) => {
+    if (typeof value !== 'string') return;
+    const id = value.trim();
+    if (!/^(BV[0-9A-Za-z]{8,}|av[0-9]{4,})$/.test(id)) return;
+    if (out.state.length < 60 && !out.state.includes(id)) out.state.push(id);
   };
-  const detail = /\/video\//.test(location.pathname);
-  if (!detail) {
-    const seen = window.__malteseOpenedVideoHrefs || (window.__malteseOpenedVideoHrefs = {});
-    const links = Array.from(document.querySelectorAll('a[href*="/video/"]'))
-      .filter(visible)
-      .map((link) => ({ link, href: link.href.split('#')[0] }))
-      .filter(({ href }) => href && !seen[href]);
-    if (links.length) {
-      const target = links[0];
-      seen[target.href] = true;
-      target.link.click();
-      return true;
+  try {
+    const state = window.__INITIAL_STATE__ || {};
+    const lists = [state.recommendList, state.related, state.relatedList, state.bangumi, state.seasonList];
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list.slice(0, 40)) {
+        if (!item || typeof item !== 'object') continue;
+        pushState(item.bvid || item.bvid_str || (item.videoData && item.videoData.bvid) || '');
+      }
     }
-  }
-  if (detail) {
-    const nextVideo = document.querySelector('.bpx-player-ctrl-next, .next-button, [aria-label="下一个"]');
-    if (nextVideo && visible(nextVideo)) {
-      nextVideo.click();
-      return true;
+    const videoData = state.videoData || {};
+    if (videoData.bvid) pushState(videoData.bvid);
+  } catch (e) {}
+  try {
+    const links = document.querySelectorAll('a[href*="/video/BV"], a[href*="/video/av"]');
+    for (const link of links) {
+      if (out.hrefs.length >= 60) break;
+      const href = link.getAttribute('href') || '';
+      if (href && !out.hrefs.includes(href)) out.hrefs.push(href);
     }
-    history.back();
-    return true;
-  }
-  const video = document.querySelector('video');
-  if (!video) return false;
-  const next = document.querySelector('.bpx-player-ctrl-next, .next-button, [aria-label="下一个"]');
-  if (next && /下一个|next/i.test((next.getAttribute('aria-label') || next.textContent || ''))) {
-    next.click();
-    return true;
-  }
-  window.scrollBy({ top: Math.round(window.innerHeight * 0.85), behavior: 'smooth' });
-  return true;
+  } catch (e) {}
+  return out;
 })()
 "#;
 
@@ -164,45 +163,18 @@ const DOUYIN_EXTRACT: &str = r#"
 })()
 "#;
 
-const DOUYIN_NEXT: &str = r#"
+const DOUYIN_CANDIDATES: &str = r#"
 (() => {
-  const visible = (el) => {
-    if (!el) return false;
-    const box = el.getBoundingClientRect();
-    const style = window.getComputedStyle(el);
-    return box.width > 20 && box.height > 20 && style.display !== 'none' && style.visibility !== 'hidden';
-  };
-  const detail = /\/video\//.test(location.pathname);
-  if (!detail) {
-    const seen = window.__malteseOpenedVideoHrefs || (window.__malteseOpenedVideoHrefs = {});
-    const links = Array.from(document.querySelectorAll('a[href*="/video/"]'))
-      .filter(visible)
-      .map((link) => ({ link, href: link.href.split('#')[0] }))
-      .filter(({ href }) => href && !seen[href]);
-    if (links.length) {
-      const target = links[0];
-      seen[target.href] = true;
-      target.link.click();
-      return true;
+  const out = { state: [], hrefs: [] };
+  try {
+    const links = document.querySelectorAll('a[href*="/video/"]');
+    for (const link of links) {
+      if (out.hrefs.length >= 60) break;
+      const href = link.getAttribute('href') || '';
+      if (href && !out.hrefs.includes(href)) out.hrefs.push(href);
     }
-  }
-  if (detail) {
-    const nextVideo = document.querySelector('[data-e2e="video-next"], .arrow-next');
-    if (nextVideo && visible(nextVideo)) {
-      nextVideo.click();
-      return true;
-    }
-    history.back();
-    return true;
-  }
-  const container = document.querySelector('#slidelist, .slidelist, [data-e2e="feed-list"]');
-  if (container) {
-    container.scrollBy({ top: Math.round(container.clientHeight * 0.9), behavior: 'smooth' });
-    return true;
-  }
-  const next = document.querySelector('[data-e2e="video-next"], .arrow-next');
-  if (next) { next.click(); return true; }
-  return false;
+  } catch (e) {}
+  return out;
 })()
 "#;
 
@@ -225,8 +197,8 @@ impl PlatformAdapter for BilibiliAdapter {
         BILIBILI_EXTRACT
     }
 
-    fn next_action_script(&self) -> &'static str {
-        BILIBILI_NEXT
+    fn candidate_script(&self) -> &'static str {
+        BILIBILI_CANDIDATES
     }
 
     fn interact_script(&self, action: InteractAction) -> Option<&'static str> {
@@ -254,8 +226,8 @@ impl PlatformAdapter for DouyinAdapter {
         DOUYIN_EXTRACT
     }
 
-    fn next_action_script(&self) -> &'static str {
-        DOUYIN_NEXT
+    fn candidate_script(&self) -> &'static str {
+        DOUYIN_CANDIDATES
     }
 
     fn interact_script(&self, action: InteractAction) -> Option<&'static str> {
@@ -320,11 +292,21 @@ mod tests {
     fn scripts_stay_within_budget() {
         for adapter in [adapter_for(Platform::Bilibili), adapter_for(Platform::Douyin)] {
             assert!(adapter.extract_script().len() < 4096);
-            assert!(adapter.next_action_script().len() < 4096);
+            assert!(adapter.candidate_script().len() < 4096);
             assert!(adapter.extract_script().contains("description"));
-            assert!(adapter.next_action_script().contains("target.link.click"));
-            assert!(adapter.next_action_script().contains("history.back"));
+            // 稳定性改造后不再点击卡片/滚轮翻页，候选脚本只抓链接。
+            assert!(!adapter.candidate_script().contains(".click("));
+            assert!(!adapter.candidate_script().contains("scrollBy"));
+            assert!(adapter.candidate_script().contains("hrefs"));
         }
+    }
+
+    #[test]
+    fn bilibili_candidate_script_reads_initial_state_first() {
+        let script = adapter_for(Platform::Bilibili).candidate_script();
+        assert!(script.contains("__INITIAL_STATE__"));
+        assert!(script.contains("recommendList"));
+        assert!(script.contains("a[href*=\"/video/BV\"]"));
     }
 
     #[test]
