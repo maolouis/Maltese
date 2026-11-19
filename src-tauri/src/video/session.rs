@@ -1341,6 +1341,7 @@ impl SessionEngine {
         // 刚导航到的视频页 URL：每轮采样前用它复核 target 是否还停在视频页。
         let mut expect_video_url = String::new();
         let mut non_video_rounds = 0u32;
+        let mut browser_restart_requested = false;
         let mut last_collect_key = String::new();
 
         loop {
@@ -1484,6 +1485,7 @@ impl SessionEngine {
                         non_video_rounds = if health_url.contains("/video/") { 0 } else { non_video_rounds.saturating_add(1) };
                         if non_video_rounds >= 2 {
                             non_video_rounds = 0;
+                            browser_restart_requested = true;
                             self.store.log(DiagnosticEntry {
                                 at: now,
                                 session_id: Some(self.snapshot().session_id),
@@ -1492,7 +1494,6 @@ impl SessionEngine {
                                 code: "BROWSER_RESTART".to_string(),
                                 message: format!("reason=non_video_url url={}", health_url),
                             });
-                            self.close_browser_instance();
                         }
                     }
                     if !expect_video_url.is_empty() {
@@ -1557,6 +1558,116 @@ impl SessionEngine {
                                     }
                                 ),
                             });
+                        }
+                    }
+                }
+                // BROWSER_RESTART：关闭旧实例 → 重新 launch → 等 CDP → 重新进视频页；
+                // 任一步失败就记录原因并停止本轮，不再空转采集。
+                if browser_restart_requested {
+                    browser_restart_requested = false;
+                    self.close_browser_instance();
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let profile = self
+                        .accounts
+                        .lock()
+                        .ok()
+                        .and_then(|accounts| accounts.active())
+                        .map(|account| std::path::PathBuf::from(account.profile_dir))
+                        .unwrap_or_else(browser::profile_dir);
+                    let mut launched: Option<BrowserInstance> = None;
+                    let mut restart_port = 0u16;
+                    for _attempt in 0..2 {
+                        let port = match browser::pick_port(browser::DEFAULT_PORT) {
+                            Ok(port) => port,
+                            Err(error) => {
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: None,
+                                    level: "error".to_string(),
+                                    code: "BROWSER_RESTART".to_string(),
+                                    message: format!("ok=false step=launch reason={}", error.message),
+                                });
+                                self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启失败（端口不可用），本轮已停止。");
+                                self.finish(&app, StopReason::Crash, true);
+                                return;
+                            }
+                        };
+                        match browser::launch(platform, port, &profile, false) {
+                            Ok(process) => {
+                                let handle = process.handle.clone();
+                                if browser::wait_for_cdp(port, browser::CDP_READY_TIMEOUT) {
+                                    browser::write_marker(&handle);
+                                    restart_port = port;
+                                    launched = Some(BrowserInstance::Owned(process));
+                                    break;
+                                }
+                                let mut process = process;
+                                process.close();
+                            }
+                            Err(error) => {
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: None,
+                                    level: "warn".to_string(),
+                                    code: "BROWSER_RESTART".to_string(),
+                                    message: format!("ok=false step=launch reason={}", error.message),
+                                });
+                            }
+                        }
+                    }
+                    let Some(instance) = launched else {
+                        self.store.log(DiagnosticEntry {
+                            at: now,
+                            session_id: Some(self.snapshot().session_id),
+                            channel: None,
+                            level: "error".to_string(),
+                            code: "BROWSER_RESTART".to_string(),
+                            message: format!("ok=false step=cdp port={restart_port}"),
+                        });
+                        self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启后 CDP 没起来，本轮已停止。");
+                        self.finish(&app, StopReason::Crash, true);
+                        return;
+                    };
+                    self.install_browser(instance);
+                    match CdpSession::connect(restart_port, platform).await {
+                        Ok(mut cdp) => {
+                            let outcome = force_enter_video_page(&mut cdp).await;
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: Some(ChannelType::Cdp),
+                                level: if outcome.ok { "info" } else { "error" }.to_string(),
+                                code: "BROWSER_RESTART".to_string(),
+                                message: format!(
+                                    "ok={} port={} url={} attempts={:?}",
+                                    outcome.ok, restart_port, outcome.final_url, outcome.attempts
+                                ),
+                            });
+                            if !outcome.ok {
+                                self.set_runtime_error(
+                                    "BROWSER_RESTART_FAILED",
+                                    "浏览器重启成功但进不去视频页，本轮已停止（详见 BROWSER_RESTART 日志）。",
+                                );
+                                self.finish(&app, StopReason::Crash, true);
+                                return;
+                            }
+                            expect_video_url = outcome.final_url.clone();
+                            session = Some(cdp);
+                        }
+                        Err(_) => {
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: None,
+                                level: "error".to_string(),
+                                code: "BROWSER_RESTART".to_string(),
+                                message: format!("ok=false step=cdp port={restart_port}"),
+                            });
+                            self.set_runtime_error("BROWSER_RESTART_FAILED", "浏览器重启后连不上 CDP，本轮已停止。");
+                            self.finish(&app, StopReason::Crash, true);
+                            return;
                         }
                     }
                 }
