@@ -422,6 +422,61 @@ fn lock_state(state: &Mutex<RuntimeState>) -> std::sync::MutexGuard<'_, RuntimeS
 }
 
 
+
+/// N6：从当前视频页的推荐列表取**下一个** /video/BV 链接并导航过去。
+pub async fn advance_to_next_video(cdp: &mut CdpSession, current_url: &str) -> NavOutcome {
+    const NEXT_JS: &str = r#"(function(){
+      try{
+        var cur=location.href;
+        var curBv=(cur.match(/\/video\/(BV[0-9A-Za-z]+|av\d+)/)||[])[1]||'';
+        var s=window.__INITIAL_STATE__;
+        if(s){
+          var lists=[s.related,s.recommendList,s.relatedList];
+          for(var i=0;i<lists.length;i++){
+            var list=lists[i]||[];
+            for(var j=0;j<list.length;j++){
+              var bv=(list[j]&&(list[j].bvid||list[j].bvid_str))||'';
+              if(bv && bv!==curBv) return 'https://www.bilibili.com/video/'+bv;
+            }
+          }
+        }
+        var as=document.querySelectorAll('a[href*="/video/BV"]');
+        for(var k=0;k<as.length;k++){
+          var m=(as[k].href||'').match(/\/video\/(BV[0-9A-Za-z]+)/);
+          if(m && m[1]!==curBv) return 'https://www.bilibili.com/video/'+m[1];
+        }
+        return '';
+      }catch(e){return ''}})()"#;
+    let mut attempts: Vec<String> = Vec::new();
+    if let Ok(value) = cdp.evaluate(NEXT_JS, EVALUATE_TIMEOUT).await {
+        if let Some(url) = value.as_str().map(str::to_string).filter(|url| url.contains("/video/")) {
+            if url != current_url {
+                attempts.push(format!("next:{url}"));
+                if cdp.navigate(&url).await.is_ok() {
+                    let (final_url, title) = wait_for_video_url(cdp).await;
+                    if final_url.contains("/video/") && final_url != current_url {
+                        return NavOutcome { ok: true, attempts, final_url, title };
+                    }
+                }
+            } else {
+                attempts.push("next:same_url".to_string());
+            }
+        } else {
+            attempts.push("next:empty".to_string());
+        }
+    }
+    // 兜底：回排行榜再走 N5 的三段降级
+    attempts.push("fallback:force_enter_video_page".to_string());
+    let outcome = force_enter_video_page(cdp).await;
+    attempts.extend(outcome.attempts.clone());
+    NavOutcome {
+        ok: outcome.ok && outcome.final_url != current_url,
+        attempts,
+        final_url: outcome.final_url,
+        title: outcome.title,
+    }
+}
+
 /// N5：把页面强制带进视频详情页（三段降级）。
 pub struct NavOutcome {
     pub ok: bool,
@@ -542,6 +597,40 @@ pub async fn force_enter_video_page(cdp: &mut CdpSession) -> NavOutcome {
 }
 
 impl SessionEngine {
+
+    /// 采集过程中增量落盘（历史记录不再只有启动时的空快照）。
+    fn persist_runtime_session(&self) {
+        let state = lock_state(&self.state);
+        if state.session_id.is_empty() {
+            return;
+        }
+        let session = VideoSession {
+            session_id: state.session_id.clone(),
+            platform: state.platform,
+            account_id: state.account_id.clone(),
+            started_at: state.started_at,
+            ended_at: None,
+            stop_reason: None,
+            channel_capability: state.channel.capability,
+            item_count: state.items.len() as u32,
+            strong_count: state
+                .items
+                .iter()
+                .filter(|item| {
+                    item.verdict.as_ref().and_then(|verdict| verdict.level)
+                        == Some(InterestLevel::Strong)
+                })
+                .count() as u32,
+            filtered_count: state.filtered_count,
+            error_code: state.error_code.clone(),
+            schema_version: SCHEMA_VERSION,
+            items: state.items.clone(),
+            digest: None,
+        };
+        drop(state);
+        self.store.save_session(&session);
+    }
+
     pub fn snapshot(&self) -> VideoSnapshot {
         let state = lock_state(&self.state);
         VideoSnapshot {
@@ -1090,6 +1179,10 @@ impl SessionEngine {
         let mut reconnect_failures = 0u32;
         let mut nav_failures = 0u32;
         let mut last_nav_at = 0u64;
+        let mut advance_failures = 0u32;
+        let mut last_advance_at = 0u64;
+        let mut current_video_url = String::new();
+        let mut last_collect_key = String::new();
 
         loop {
             if self.stop.load(Ordering::SeqCst) || self.run_id.load(Ordering::SeqCst) != run_id {
@@ -1211,6 +1304,8 @@ impl SessionEngine {
 
                 if let Some(Ok((facts, _unknown))) = facts_result {
                     let kind = adapter.classify_page(&facts);
+                    let mut pending_advance = false;
+                    let mut pending_persist = false;
                     // N5：Feed/首页时先在 state 锁之外做导航尝试（await 期间不能持有 MutexGuard）。
                     let mut nav_result: Option<NavOutcome> = None;
                     {
@@ -1318,6 +1413,10 @@ impl SessionEngine {
                                     if matches!(other, MergeOutcome::New | MergeOutcome::Updated) {
                                         let url = facts.canonical_url.clone().unwrap_or_default();
                                         if url.contains("/video/") {
+                                            last_collect_key = facts.item_key.clone();
+                                            if current_video_url.is_empty() {
+                                                current_video_url = url.clone();
+                                            }
                                             self.store.log(DiagnosticEntry {
                                                 at: now,
                                                 session_id: Some(state.session_id.clone()),
@@ -1326,6 +1425,14 @@ impl SessionEngine {
                                                 code: "ITEM_COLLECTED".to_string(),
                                                 message: format!("url={} title={}", url, facts.title),
                                             });
+                                            pending_persist = true;
+                                            // N6：同一条重复采集且停留够 20s → 换下一条（标记，锁外执行）。
+                                            if !last_collect_key.is_empty()
+                                                && url == current_video_url
+                                                && now.saturating_sub(last_advance_at) >= 20
+                                            {
+                                                pending_advance = true;
+                                            }
                                         }
                                     }
                                 }
@@ -1342,6 +1449,48 @@ impl SessionEngine {
                                 auto_comment = Some(facts.clone());
                             }
                         }
+                        }
+                    }
+                    if pending_persist {
+                        pending_persist = false;
+                        self.persist_runtime_session();
+                    }
+                    // N6：锁外执行「换下一个视频」，避免 MutexGuard 跨 await。
+                    if pending_advance {
+                        pending_advance = false;
+                        last_advance_at = now;
+                        if let Some(cdp) = session.as_mut() {
+                            let from_url = current_video_url.clone();
+                            let outcome = advance_to_next_video(cdp, &from_url).await;
+                            if outcome.ok {
+                                advance_failures = 0;
+                                let to_url = outcome.final_url.clone();
+                                current_video_url = to_url.clone();
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: "info".to_string(),
+                                    code: "ITEM_ADVANCED".to_string(),
+                                    message: format!(
+                                        "from={} to={} attempts={:?}",
+                                        from_url, to_url, outcome.attempts
+                                    ),
+                                });
+                            } else {
+                                advance_failures = advance_failures.saturating_add(1);
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: "warn".to_string(),
+                                    code: "ADVANCE_FAILED".to_string(),
+                                    message: format!(
+                                        "count={} from={} attempts={:?}",
+                                        advance_failures, from_url, outcome.attempts
+                                    ),
+                                });
+                            }
                         }
                     }
                     if let Some(facts) = auto_comment {
@@ -1567,7 +1716,29 @@ impl SessionEngine {
                 .cloned()
                 .collect();
 
-            if let Some(draft) = build_digest(&session.session_id, platform, &strong, &weak, 5) {
+            // N7：需要 strong 才出摘要太苛刻；条目 ≥2 时把条目放宽成 strong 再生成。
+            let mut strong_for_digest = strong.clone();
+            if strong_for_digest.is_empty() && scored.len() >= 2 {
+                let mut relaxed = scored.clone();
+                for item in relaxed.iter_mut().take(5) {
+                    if item.verdict.is_none() {
+                        item.verdict = Some(score(item, &profile, item.source_confidence.max(0.1)));
+                    }
+                    if let Some(verdict) = item.verdict.as_mut() {
+                        verdict.level = Some(InterestLevel::Strong);
+                    }
+                }
+                strong_for_digest = relaxed;
+            }
+            if let Some(draft) = build_digest(&session.session_id, platform, &strong_for_digest, &weak, 5) {
+                self.store.log(DiagnosticEntry {
+                    at: ended_at,
+                    session_id: Some(session.session_id.clone()),
+                    channel: None,
+                    level: "info".to_string(),
+                    code: "DIGEST_BUILT".to_string(),
+                    message: format!("items={} strong={}", draft.items.len(), strong_for_digest.len()),
+                });
                 let item_keys: Vec<String> =
                     draft.items.iter().map(|item| item.item_key.clone()).collect();
                 let cluster_keys: Vec<String> = draft
