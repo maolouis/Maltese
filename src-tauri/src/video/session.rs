@@ -1456,7 +1456,7 @@ impl SessionEngine {
                                                 channel: Some(ChannelType::Cdp),
                                                 level: "info".to_string(),
                                                 code: "ITEM_COLLECTED".to_string(),
-                                                message: format!("url={} title={}", url, facts.title),
+                                                message: format!("url={} watched_ms={} title={}", url, facts.position_seconds.saturating_mul(1000), facts.title),
                                             });
                                             pending_persist = true;
                                             // N11：锁外做自动评论（去重/间隔/预演都在锁外判断）。
@@ -1490,6 +1490,23 @@ impl SessionEngine {
                     if let Some(facts) = pending_comment.take() {
                         let config = self.config();
                         let url = facts.canonical_url.clone().unwrap_or_default();
+                        // 定位打点：无条件记录「评论块确实被执行 + 读到配置」。
+                        self.store.log(DiagnosticEntry {
+                            at: now,
+                            session_id: Some(self.snapshot().session_id),
+                            channel: Some(ChannelType::Cdp),
+                            level: "info".to_string(),
+                            code: "COMMENT_EVAL".to_string(),
+                            message: format!(
+                                "url={} auto={} dry={} watched_ms={} login={} risk={}",
+                                url,
+                                config.auto_comment,
+                                config.comment_dry_run,
+                                facts.position_seconds.saturating_mul(1000),
+                                facts.hints.login_visible,
+                                facts.hints.captcha_visible || facts.hints.risk_banner
+                            ),
+                        });
                         let is_login_or_risk = facts.hints.login_visible
                             || facts.hints.captcha_visible
                             || facts.hints.risk_banner;
@@ -1522,7 +1539,17 @@ impl SessionEngine {
                                         .await
                                         .unwrap_or_else(|_| Err("评论生成超时".to_string()))
                                     }
-                                    None => Err("未配置评论模型".to_string()),
+                                    None => {
+                                        self.store.log(DiagnosticEntry {
+                                            at: now,
+                                            session_id: Some(self.snapshot().session_id),
+                                            channel: Some(ChannelType::Cdp),
+                                            level: "warn".to_string(),
+                                            code: "COMMENT_SKIPPED".to_string(),
+                                            message: format!("url={} reason=no_model", url),
+                                        });
+                                        Err("未配置评论模型".to_string())
+                                    }
                                 };
                                 let comment = sanitize_comment(&generated.unwrap_or_default());
                                 if config.comment_dry_run {
