@@ -68,6 +68,7 @@ pub async fn dsh_chat(
     session_id: Option<String>,
     character: String,
     sticker: Option<bool>,
+    memory_context: Option<String>,
     request_id: Option<String>,
 ) -> Result<DshChatReply, String> {
     let message = message.trim().to_string();
@@ -84,6 +85,7 @@ pub async fn dsh_chat(
             session_id,
             &character,
             sticker.unwrap_or(false),
+            memory_context.as_deref(),
             request_id.as_deref(),
         )
     })
@@ -98,7 +100,7 @@ pub(crate) async fn generate_video_comment(
     character: String,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        chat(&app, &prompt, None, &character, false, None).map(|reply| reply.text)
+        chat(&app, &prompt, None, &character, false, None, None).map(|reply| reply.text)
     })
     .await
     .map_err(|error| format!("评论模型线程失败：{error}"))?
@@ -110,6 +112,7 @@ fn chat(
     session_id: Option<String>,
     character: &str,
     sticker: bool,
+    memory_context: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<DshChatReply, String> {
     let cli = dsh_cli()?;
@@ -119,7 +122,13 @@ fn chat(
     } else {
         ""
     };
-    let prompt = format!("{}{}{message}", persona(character), sticker_part);
+    let memory_part = memory_context
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n\n【关于主人的记忆】{value}"))
+        .unwrap_or_default();
+    let prompt = format!("{}{}{memory_part}{message}", persona(character), sticker_part);
     match run_once(&cli, &patch, &prompt, session_id.as_deref(), app, request_id) {
         Ok(reply) => Ok(reply),
         Err(error) if session_id.is_some() && error.to_ascii_lowercase().contains("session") => {

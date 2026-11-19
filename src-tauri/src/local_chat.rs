@@ -113,12 +113,17 @@ fn build_messages(
     character: &str,
     images: Option<Vec<String>>,
     sticker: bool,
+    memory: Option<&str>,
 ) -> Vec<Value> {
-    let system = if sticker {
+    let mut system = if sticker {
         format!("{}\n\n{}", persona(character), sticker_instruction())
     } else {
         persona(character).to_string()
     };
+    if let Some(memory) = memory.filter(|value| !value.trim().is_empty()) {
+        system.push_str("\n\n【关于主人的记忆】");
+        system.push_str(memory.trim());
+    }
     let mut messages = vec![json!({ "role": "system", "content": system })];
     if let Some(history) = history {
         let mut turns = history
@@ -209,6 +214,7 @@ pub async fn local_chat(
     character: String,
     images: Option<Vec<String>>,
     sticker: Option<bool>,
+    memory_context: Option<String>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -228,7 +234,7 @@ pub async fn local_chat(
     // 思考吃光预算时要重试，所以这两份数据先克隆留底。
     let retry_history = history.clone();
     let retry_images = images.clone();
-    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false));
+    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
 
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -279,7 +285,7 @@ pub async fn local_chat(
         reasoning_effort: Some("none".to_string()),
         reasoning_budget_tokens: Some(0),
     };
-    let retry_messages = build_messages(&message, retry_history, &character, retry_images, sticker.unwrap_or(false));
+    let retry_messages = build_messages(&message, retry_history, &character, retry_images, sticker.unwrap_or(false), memory_context.as_deref());
     let mut retry_request = client
         .post(endpoint)
         .json(&generation_payload(&model, retry_messages, &retry_settings, false));
@@ -322,6 +328,7 @@ pub(crate) async fn generate_video_comment(
         character,
         None,
         Some(false),
+        None,
         Some(LocalChatGenerationSettings {
             max_tokens: Some(max_tokens.clamp(64, 256)),
             temperature: Some(temperature.clamp(0.0, 1.2)),
@@ -346,6 +353,7 @@ pub async fn local_chat_stream(
     character: String,
     images: Option<Vec<String>>,
     sticker: Option<bool>,
+    memory_context: Option<String>,
     settings: Option<LocalChatGenerationSettings>,
 ) -> Result<String, String> {
     let message = message.trim().to_string();
@@ -361,7 +369,7 @@ pub async fn local_chat_stream(
     }
     let endpoint = chat_endpoint(&base_url)?;
     let settings = settings.unwrap_or_default();
-    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false));
+    let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CHAT_TIMEOUT)

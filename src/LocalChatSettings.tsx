@@ -9,6 +9,7 @@ import {
   type LocalChatConfig,
   THINKING_DEPTHS,
 } from "./localChat";
+import { clearMemory, loadMemory, loadMemoryDepth, saveMemoryDepth, type MemoryDepth } from "./petMemory";
 import "./LocalChatSettings.css";
 
 export function LocalChatSettings({
@@ -25,6 +26,8 @@ export function LocalChatSettings({
   const [testing, setTesting] = useState(false);
   const [startingStrata, setStartingStrata] = useState(false);
   const [testStatus, setTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [memoryDepth, setMemoryDepth] = useState<MemoryDepth>(loadMemoryDepth);
+  const [memoryCleared, setMemoryCleared] = useState(false);
 
   useEffect(() => {
     const sync = () => setConfig(loadLocalChatConfig());
@@ -263,6 +266,40 @@ export function LocalChatSettings({
                   ? "当前：关 —— 不推理，回复最快。"
                   : `当前：${THINKING_DEPTHS.find((item) => item.value === config.thinkingDepth)?.label ?? "标准"} —— 先推理再回答；等待时聊天里显示「小狗正在思考…（Ns）」。`}
               </p>
+            <div className="local-chat-settings__row">
+              <span>记忆深度</span>
+              <div className="local-chat-settings__segments" role="group" aria-label="记忆深度">
+                {(["off", "normal", "deep"] as MemoryDepth[]).map((depth) => (
+                  <button
+                    key={depth}
+                    type="button"
+                    className={memoryDepth === depth ? "is-active" : ""}
+                    aria-pressed={memoryDepth === depth}
+                    onClick={() => {
+                      setMemoryDepth(depth);
+                      saveMemoryDepth(depth);
+                    }}
+                  >
+                    {depth === "off" ? "关闭" : depth === "deep" ? "深入" : "普通"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="local-chat-settings__row">
+              <span>记忆 {loadMemory().facts.length} 条</span>
+              <button
+                type="button"
+                onClick={() => {
+                  clearMemory();
+                  setMemoryCleared(true);
+                }}
+              >
+                {memoryCleared ? "已清空" : "清空记忆"}
+              </button>
+            </div>
+            <p className="local-chat-settings__hint">
+              普通：最多注入约 70 token（事实 5 条 + 最近摘要）；深入：约 300 token。清空只删摘要与事实，不删聊天记录。
+            </p>
             <label className="local-chat-settings__check">
               <input
                 type="checkbox"

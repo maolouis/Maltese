@@ -404,3 +404,14 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
 
 单测：	ests/pet-context.test.mjs 缺数据→默认值+写回；	ests/pet-state-bar.test.mjs
 默认值可见/开关关闭隐藏/文案格式。
+
+## 三层记忆（默认注入 ≤70 token）
+
+- **短期**：最近 10 条消息原文（RECENT_TURNS，从 16 收紧；按 token 估算超 6000 或轮次 >12 触发 compact，保留最近 8 条，旧内容交摘要）。
+- **中期**：当日摘要（≤200 字/天，保留 3 天），只存摘要文本，不存原始长对话。
+- **长期事实卡**：{key,value,confidence,updatedAt}，按 key 去重、上限 20 条，注入 top5。
+- **注入走 Rust**：local_chat / local_chat_stream / dsh_chat 新增 memoryContext 参数，拼进 system（本地）或 prompt（DSH），因为前端 history 里的 system 会被 uild_messages 丢掉。
+- **顺序与预算**：persona → 事实 top5（≤40 token）→ 摘要 1–2 句（≤30 token）→ 最近 8 轮 → 当前消息；总预算 normal ≤70 token、deep ≤300 token，memoryDepth: off|normal|deep 可在聊天设置里切换。
+- **存储与隐私**：localStorage 键 maltese-pet-memory（facts/summaries/updatedAt），设置页有「清空记忆」（只清摘要与事实，不动聊天记录）；深度存 maltese-pet-memory-depth。
+- **不抢单槽位**：摘要/事实抽取只在聊天 idle ≥30s 时执行，失败即放弃（canRunMaintenance）。
+- 单测：	ests/pet-memory.test.mjs（token 估算、compact 阈值、事实去重/上限、摘要裁剪、注入顺序与预算、清空、维护窗口）。
