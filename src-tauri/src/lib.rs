@@ -65,7 +65,7 @@ use windows::Win32::{
     },
 };
 use windows::core::{w, PCWSTR};
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::Shell::{ShellExecuteW, SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 
 const WINDOW_LABEL: &str = "main";
 const DEFAULT_MARGIN_Y: f64 = 0.0;
@@ -636,9 +636,10 @@ fn set_island_interaction(
     // 用它当锚点会把窗口算到别的屏/别的 x 上（用户看到「右键气泡往右跳」）。
     // 这里直接用最近一次几何落定的真实矩形（最小化漂移那套缓存）当锚点；
     // 位移动画还没落定时先等最多 150ms，避免把过渡帧当锚点。
+    let collapsing_to_expanded =
+        matches!(mode, IslandMode::Expanded) && matches!(previous_state.mode, IslandMode::Collapsed);
     let mut settled_anchor = None;
-    if matches!(mode, IslandMode::Expanded) && matches!(previous_state.mode, IslandMode::Collapsed)
-    {
+    if collapsing_to_expanded {
         let deadline = Instant::now() + Duration::from_millis(150);
         while POSITION_ANIMATING.load(Ordering::SeqCst) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(2));
@@ -652,16 +653,27 @@ fn set_island_interaction(
                 y: rect.y,
             });
     }
+    let mut anchor_source = "none";
+    if settled_anchor.is_some() {
+        anchor_source = "settled_rect";
+    }
     let restored_custom_position = settled_anchor.or_else(|| {
         previous_state.custom_position.or_else(|| {
-            custom_position.filter(|position| {
+            let filtered = custom_position.filter(|position| {
                 monitor_for_island_position(&window, *position, previous_state.collapsed_scale)
                     .ok()
                     .flatten()
                     .is_some()
-            })
+            });
+            if filtered.is_some() {
+                anchor_source = "frontend";
+            }
+            filtered
         })
     });
+    if anchor_source == "none" && previous_state.custom_position.is_some() {
+        anchor_source = "prev_state";
+    }
     if previous_state.mode != mode {
         // 切模式时丢弃可能残留的浮层快照，避免几何被跳过导致小狗停在错误位置/看不到。
         OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
@@ -703,11 +715,22 @@ fn set_island_interaction(
         }
         *state
     });
-    apply_stage_geometry(
+    // 不变量：任何展开/浮层前后，狗槽的屏幕坐标必须不变。
+    // 展开前先把当前窗口矩形记下来（收起态狗槽 = 窗口左上角）。
+    let rect_before = if collapsing_to_expanded {
+        read_sane_island_rect(&window)
+    } else {
+        None
+    };
+    let geometry = apply_stage_geometry(
         &window,
         state,
         animate_position.unwrap_or(true) && previous_state.is_tucked != state.is_tucked,
-    )?;
+    );
+    if let (Ok(()), Some(before), true) = (&geometry, rect_before, collapsing_to_expanded) {
+        correct_expanded_slot_after(&window, state, before, anchor_source);
+    }
+    geometry?;
     // Bongo「跟随小狗」按主岛**实际所在屏**解析：主岛位置刚恢复 / 切屏后重排一次（幂等）。
     if let Some(config) = desktop_extras::last_config() {
         let _ = desktop_extras::sync_extras_now(&app, &config);
@@ -785,6 +808,139 @@ fn island_geometry_frozen(window: &WebviewWindow) -> bool {
         }
     }
     false
+}
+
+/// 展开/浮层事后校正：保证「狗槽」屏幕坐标与展开前一致。
+///
+/// 锚点来源可能算错（旧 custom_position / 过渡帧），但只要事后量一次就能把窗口平移回原位，
+/// 用户侧看不到跳动。dx/dy 超过 1px 才纠正，避免无意义的 1px 抖动。
+fn correct_expanded_slot_after(
+    window: &WebviewWindow,
+    state: IslandWindowState,
+    slot_before: WindowRect,
+    anchor_source: &str,
+) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let Ok(scale) = window.scale_factor() else {
+        return;
+    };
+    let slot_w = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_h = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
+    let panel_side = LAST_PANEL_SIDE
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .unwrap_or("right");
+    let panel_vertical = LAST_PANEL_VERTICAL
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .unwrap_or("above");
+    let phys_w = size.width as i32;
+    let phys_h = size.height as i32;
+    let slot_x = if panel_side == "left" {
+        position.x + phys_w - slot_w
+    } else {
+        position.x
+    };
+    let slot_y = if panel_vertical == "above" {
+        position.y + phys_h - slot_h
+    } else {
+        position.y
+    };
+    let dx = slot_x - slot_before.x;
+    let dy = slot_y - slot_before.y;
+    let monitor_fingerprint = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| monitor_full_key(
+            monitor.name().map(|name| name.as_str()).unwrap_or(""),
+            monitor.size().width,
+            monitor.size().height,
+            monitor.position().x,
+            monitor.position().y,
+        ))
+        .unwrap_or_else(|| "?".to_string());
+    eprintln!(
+        "RC_GEOM before={},{} {}x{} after={},{} {}x{} anchor={} monitor={} panel_side={} panel_vertical={} slot_before=({},{}) slot_after=({},{}) dx={} dy={}",
+        slot_before.x, slot_before.y, slot_before.width, slot_before.height,
+        position.x, position.y, phys_w as u32, phys_h as u32,
+        anchor_source, monitor_fingerprint, panel_side, panel_vertical,
+        slot_before.x, slot_before.y, slot_x, slot_y, dx, dy
+    );
+    // 目标窗口位置：先按 slot 不变量把狗槽拉回展开前的位置。
+    let (mut target_x, mut target_y) = (position.x - dx, position.y - dy);
+    // 跨屏禁止：窗口必须完全落在**狗槽所在显示器**内（左侧副屏全部是负坐标）。
+    if let Some(monitor) = dog_monitor_for_slot(window, slot_before, slot_w, slot_h) {
+        let monitor_rect = screen_rect_of_monitor(&monitor);
+        let (clamped_x, clamped_y, _cw, _ch) = clamp_rect_to_safe(
+            target_x,
+            target_y,
+            phys_w,
+            phys_h,
+            monitor_rect,
+        );
+        if clamped_x != target_x || clamped_y != target_y {
+            eprintln!(
+                "OVERLAY_MONITOR_CLAMP wanted=({},{},{},{}) clamped=({},{},{},{}) monitor={}",
+                target_x,
+                target_y,
+                phys_w,
+                phys_h,
+                clamped_x,
+                clamped_y,
+                phys_w,
+                phys_h,
+                monitor_full_key(
+                    monitor.name().map(|name| name.as_str()).unwrap_or(""),
+                    monitor.size().width,
+                    monitor.size().height,
+                    monitor.position().x,
+                    monitor.position().y,
+                )
+            );
+            target_x = clamped_x;
+            target_y = clamped_y;
+        }
+    }
+    if target_x == position.x && target_y == position.y {
+        return;
+    }
+    let _ = window.set_position(Position::Physical(PhysicalPosition::new(target_x, target_y)));
+    eprintln!(
+        "OVERLAY_SLOT_CORRECT dx={} dy={} from=({},{}) to=({},{})",
+        dx, dy, position.x, position.y, target_x, target_y
+    );
+    remember_settled_island_rect(window);
+}
+
+/// 狗槽（展开前位置）落在哪块显示器上。
+fn dog_monitor_for_slot(
+    window: &WebviewWindow,
+    slot: WindowRect,
+    slot_w: i32,
+    slot_h: i32,
+) -> Option<Monitor> {
+    let center_x = slot.x + slot_w / 2;
+    let center_y = slot.y + slot_h / 2;
+    let monitors = window.available_monitors().ok()?;
+    monitors
+        .into_iter()
+        .find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            center_x >= position.x
+                && center_x < position.x + size.width as i32
+                && center_y >= position.y
+                && center_y < position.y + size.height as i32
+        })
+        .or_else(|| window.primary_monitor().ok().flatten())
 }
 
 /// 几何落定后记一笔真实矩形，作为「最小化前位置」的缓存来源。
@@ -1069,6 +1225,9 @@ static OVERLAY_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static OVERLAY_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 // 浮层打开时主窗口需要正常接收鼠标事件，暂停“鼠标不在岛内就穿透”的逻辑。
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
+// 最近一次展开几何用的面板方向：事后校正「狗槽屏幕坐标」时要用同一套公式。
+static LAST_PANEL_SIDE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+static LAST_PANEL_VERTICAL: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
 
 /// 浮层锚点快照是否已经存在。存在期间窗口几何由浮层独占，
 /// `apply_stage_geometry` 一律不插队（否则会把放大后的窗口缩回/挪走）。
@@ -1198,12 +1357,13 @@ fn set_island_overlay(
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
     let scale = monitor.scale_factor();
-    let work_area = monitor.work_area();
-    let mon_pos = work_area.position;
-    let mon_size = work_area.size;
-    let mon_left = mon_pos.x;
-    let mon_right = mon_pos.x + mon_size.width as i32;
-    let mon_bottom = mon_pos.y + mon_size.height as i32;
+    // 任务栏避让：面板边界用「显示器 - 任务栏」的 safe rect（自动隐藏浮出时也成立）。
+    let safe = safe_rect_for_monitor(&monitor);
+    let mon_pos = tauri::PhysicalPosition::new(safe.left, safe.top);
+    let mon_size = tauri::PhysicalSize::new(safe.width().max(1) as u32, safe.height().max(1) as u32);
+    let mon_left = safe.left;
+    let mon_right = safe.right;
+    let mon_bottom = safe.bottom;
 
     match overlay.as_deref() {
         None => {
@@ -1346,12 +1506,23 @@ fn set_island_overlay(
             };
             let _ = window.emit("maltese-panel-side", panel_side);
             let _ = window.emit("maltese-panel-vertical", panel_vertical);
+            // 任务栏浮出时整体上移，保证气泡/面板不被挡住（只平移；高度不够才缩）。
+            let (clamped_x, clamped_y, clamped_w, clamped_h) =
+                clamp_rect_to_safe(x, y, phys_w, phys_h, safe);
             // B2 排障：浮层打开前后各记一次窗口矩形，便于比对「小狗有没有被挪走」。
             eprintln!(
-                "overlay open ({mode}): anchor=({}, {}) base={:.1}x{:.1} side={panel_side} vertical={panel_vertical} -> rect=({x}, {y}) {width:.1}x{height:.1}",
-                snapshot.anchor_x, snapshot.anchor_y, snapshot.base_w, snapshot.base_h
+                "overlay open ({mode}): anchor=({}, {}) base={:.1}x{:.1} side={panel_side} vertical={panel_vertical} -> rect=({clamped_x}, {clamped_y}) {:.1}x{:.1}",
+                snapshot.anchor_x, snapshot.anchor_y, snapshot.base_w, snapshot.base_h,
+                (clamped_w as f64) / scale, (clamped_h as f64) / scale
             );
-            set_window_rect_atomic(&window, x, y, width, height, scale)
+            set_window_rect_atomic(
+                &window,
+                clamped_x,
+                clamped_y,
+                (clamped_w as f64) / scale,
+                (clamped_h as f64) / scale,
+                scale,
+            )
         }
     }
 }
@@ -1376,9 +1547,9 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
     let scale = monitor.scale_factor();
-    let work_area = monitor.work_area();
-    let mon_left = work_area.position.x;
-    let mon_right = work_area.position.x + work_area.size.width as i32;
+    let safe = safe_rect_for_monitor(&monitor);
+    let mon_left = safe.left;
+    let mon_right = safe.right;
 
     // 和 set_island_overlay 用同一份输入：这里就把锚点快照钉下来，随后
     // set_island_overlay 直接复用，不再重新读窗口 —— 两边算出的方向/基准
@@ -1411,8 +1582,8 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         base_h_phys,
         (gap * scale).round() as i32,
         (panel_h * scale).round() as i32,
-        work_area.position.y,
-        work_area.position.y + work_area.size.height as i32,
+        safe.top,
+        safe.bottom,
     );
     eprintln!(
         "overlay plan ({overlay}): side={side} vertical={vertical} anchor=({}, {}) base={base_w:.1}x{base_h:.1}",
@@ -1499,6 +1670,8 @@ async fn show_pet_bubble(
 ) -> Result<(), String> {
     let main = main_window(&app)?;
     let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
+    // 任务栏（自动隐藏浮出 / 换边）变化时重新夹取气泡位置。
+    start_taskbar_watch(app.clone());
 
     // 小狗被隐藏/最小化时，先让它在桌面上出现（不抢焦点），再浮出气泡。
     if !main.is_visible().unwrap_or(true) {
@@ -1588,9 +1761,275 @@ fn place_bubble_near_main(
 
     bubble
         .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // 任务栏（含自动隐藏浮出）可能盖住底部：统一夹进 safe rect。
+    let _ = clamp_window_above_taskbar(bubble);
+    Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 任务栏避让：气泡 / 悬停面板 / 固定页不能被任务栏挡住
+// ---------------------------------------------------------------------------
+//
+// `monitor.work_area()` 只在任务栏**固定显示**时把那条边排除掉；任务栏设成「自动隐藏」
+// 时 work_area 是整块屏幕，任务栏浮出就会盖住气泡底部。所以这里用真实的
+// SHAppBarMessage(ABM_GETTASKBARPOS) + 副屏 `Shell_SecondaryTrayWnd` 矩形，
+// 按「贴哪条边」把显示器可用区削成 safe rect，摆位后统一 clamp。
+
+const TASKBAR_MARGIN: i32 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScreenRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl ScreenRect {
+    fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+        Self { left, top, right, bottom }
+    }
+
+    fn width(self) -> i32 {
+        self.right - self.left
+    }
+
+    fn height(self) -> i32 {
+        self.bottom - self.top
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let rect = Self::new(
+            self.left.max(other.left),
+            self.top.max(other.top),
+            self.right.min(other.right),
+            self.bottom.min(other.bottom),
+        );
+        (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskbarEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// 任务栏与显示器重叠后贴在哪个边；自动隐藏收起时只剩 2px 细条 → None。
+fn taskbar_edge_on_monitor(taskbar: ScreenRect, monitor: ScreenRect) -> Option<TaskbarEdge> {
+    let overlap = taskbar.intersect(monitor)?;
+    let monitor_width = monitor.width();
+    let monitor_height = monitor.height();
+    let mut candidates: Vec<(i32, TaskbarEdge)> = Vec::new();
+    let mut push = |edge, distance, thickness, span, axis| {
+        if thickness >= 12 && span * 10 >= axis * 4 {
+            candidates.push((distance, edge));
+        }
+    };
+    push(TaskbarEdge::Top, (taskbar.top - monitor.top).abs(), overlap.height(), overlap.width(), monitor_width);
+    push(TaskbarEdge::Bottom, (monitor.bottom - taskbar.bottom).abs(), overlap.height(), overlap.width(), monitor_width);
+    push(TaskbarEdge::Left, (taskbar.left - monitor.left).abs(), overlap.width(), overlap.height(), monitor_height);
+    push(TaskbarEdge::Right, (monitor.right - taskbar.right).abs(), overlap.width(), overlap.height(), monitor_height);
+    candidates.sort_by_key(|(distance, _)| *distance);
+    candidates.first().map(|(_, edge)| *edge)
+}
+
+/// 气泡可用区 = 显示器 ∩ work_area，再减掉所有贴边任务栏（一侧留 8px）。
+fn bubble_safe_rect(monitor: ScreenRect, work: ScreenRect, taskbars: &[ScreenRect]) -> ScreenRect {
+    let mut safe = monitor.intersect(work).unwrap_or(monitor);
+    for taskbar in taskbars {
+        let Some(edge) = taskbar_edge_on_monitor(*taskbar, monitor) else {
+            continue;
+        };
+        let mut next = safe;
+        match edge {
+            TaskbarEdge::Bottom => next.bottom = next.bottom.min(taskbar.top - TASKBAR_MARGIN),
+            TaskbarEdge::Top => next.top = next.top.max(taskbar.bottom + TASKBAR_MARGIN),
+            TaskbarEdge::Left => next.left = next.left.max(taskbar.right + TASKBAR_MARGIN),
+            TaskbarEdge::Right => next.right = next.right.min(taskbar.left - TASKBAR_MARGIN),
+        }
+        if next.width() < 160 || next.height() < 120 {
+            continue;
+        }
+        safe = next;
+    }
+    safe
+}
+
+/// 只平移；高度真不够才缩高（宽度保持，避免改变内部布局）。
+fn clamp_rect_to_safe(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    safe: ScreenRect,
+) -> (i32, i32, i32, i32) {
+    let width = width.max(1).min(safe.width());
+    let height = height.max(1).min(safe.height());
+    let x = x.max(safe.left).min(safe.right - width);
+    let y = y.max(safe.top).min(safe.bottom - height);
+    (x, y, width, height)
+}
+
+fn screen_rect_of_monitor(monitor: &Monitor) -> ScreenRect {
+    let position = monitor.position();
+    let size = monitor.size();
+    ScreenRect::new(
+        position.x,
+        position.y,
+        position.x + size.width as i32,
+        position.y + size.height as i32,
+    )
+}
+
+fn work_rect_of_monitor(monitor: &Monitor) -> ScreenRect {
+    let area = monitor.work_area();
+    ScreenRect::new(
+        area.position.x,
+        area.position.y,
+        area.position.x + area.size.width as i32,
+        area.position.y + area.size.height as i32,
+    )
+}
+
+/// 当前所有任务栏矩形：主任务栏走 SHAppBarMessage，副屏任务栏枚举 Shell_SecondaryTrayWnd。
+fn taskbar_rects() -> Vec<ScreenRect> {
+    let mut rects = Vec::new();
+    unsafe {
+        let mut data: APPBARDATA = std::mem::zeroed();
+        data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
+        if SHAppBarMessage(ABM_GETTASKBARPOS, &mut data) != 0 {
+            let rect = ScreenRect::new(data.rc.left, data.rc.top, data.rc.right, data.rc.bottom);
+            if rect.width() > 0 && rect.height() > 0 {
+                rects.push(rect);
+            }
+        }
+        let mut window = HWND::default();
+        loop {
+            window = match FindWindowExW(None, Some(window), w!("Shell_SecondaryTrayWnd"), None) {
+                Ok(next) if !next.0.is_null() => next,
+                _ => break,
+            };
+            if !IsWindowVisible(window).as_bool() {
+                continue;
+            }
+            let mut raw = RECT::default();
+            if GetWindowRect(window, &mut raw).is_ok() {
+                let rect = ScreenRect::new(raw.left, raw.top, raw.right, raw.bottom);
+                if rect.width() > 0 && rect.height() > 0 {
+                    rects.push(rect);
+                }
+            }
+        }
+    }
+    rects
+}
+
+fn safe_rect_for_monitor(monitor: &Monitor) -> ScreenRect {
+    bubble_safe_rect(
+        screen_rect_of_monitor(monitor),
+        work_rect_of_monitor(monitor),
+        &taskbar_rects(),
+    )
+}
+
+/// 把窗口夹进「任务栏上方」可用区；返回是否动过窗口。
+fn clamp_window_above_taskbar(window: &tauri::WebviewWindow) -> bool {
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return false;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return false;
+    };
+    let safe = safe_rect_for_monitor(&monitor);
+    let (x, y, width, height) = clamp_rect_to_safe(
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+        safe,
+    );
+    let resized = width != size.width as i32 || height != size.height as i32;
+    let moved = x != position.x || y != position.y;
+    if resized {
+        let _ = window.set_size(tauri::Size::Physical(PhysicalSize::new(
+            width as u32,
+            height as u32,
+        )));
+    }
+    if moved {
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+    }
+    if moved || resized {
+        eprintln!(
+            "[taskbar] clamp {} -> ({x},{y}) {width}x{height} safe=({},{},{},{})",
+            window.label(),
+            safe.left,
+            safe.top,
+            safe.right,
+            safe.bottom
+        );
+    }
+    moved || resized
+}
+
+static TASKBAR_WATCH_STARTED: AtomicBool = AtomicBool::new(false);
+/// 主岛当前是否处于展开面板态（watcher 只在展开/浮层时夹取，收起的小狗不跟着动）。
+static ISLAND_EXPANDED: AtomicBool = AtomicBool::new(false);
+
+/// 主岛窗口（展开面板/浮层）按任务栏 safe rect 上移；高度真的不够才缩。
+fn clamp_island_window_to_taskbar(window: &tauri::WebviewWindow, x: i32, y: i32) -> (i32, i32) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return (x, y);
+    };
+    let safe = safe_rect_for_monitor(&monitor);
+    let Ok(size) = window.inner_size() else {
+        return (x, y);
+    };
+    let (clamped_x, clamped_y, clamped_w, clamped_h) = clamp_rect_to_safe(
+        x,
+        y,
+        size.width as i32,
+        size.height as i32,
+        safe,
+    );
+    if clamped_w != size.width as i32 || clamped_h != size.height as i32 {
+        let _ = window.set_size(tauri::Size::Physical(PhysicalSize::new(
+            clamped_w as u32,
+            clamped_h as u32,
+        )));
+    }
+    (clamped_x, clamped_y)
+}
+
+/// 任务栏会因「自动隐藏浮出 / 换位置」变化：每 500ms 检查气泡与固定页，
+/// 只在越界需要上移时动窗口；任务栏收起后不主动回落（避免来回跳）。
+fn start_taskbar_watch(app: AppHandle) {
+    if TASKBAR_WATCH_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(500));
+        for label in [BUBBLE_WINDOW_LABEL, "pinned"] {
+            if let Some(window) = app.get_webview_window(label) {
+                if window.is_visible().unwrap_or(false) {
+                    clamp_window_above_taskbar(&window);
+                }
+            }
+        }
+        // 主岛只在「展开面板 / 浮层打开」时跟着上移，收起的小狗不因为任务栏浮出而乱动。
+        if ISLAND_EXPANDED.load(Ordering::SeqCst) || OVERLAY_ACTIVE.load(Ordering::SeqCst) {
+            if let Some(island) = app.get_webview_window(WINDOW_LABEL) {
+                if island.is_visible().unwrap_or(false) {
+                    clamp_window_above_taskbar(&island);
+                }
+            }
+        }
+    });
+}
 // 前端（气泡窗口）启动后补取最后一次气泡内容，避免冷启动丢事件。
 #[tauri::command]
 fn get_pet_bubble_payload() -> Option<serde_json::Value> {
@@ -2079,6 +2518,8 @@ fn place_pinned_window(app: &AppHandle) -> Result<(), String> {
         *slot = Some(position);
     }
     PINNED_AUTO_POSITIONING.store(false, Ordering::SeqCst);
+    // 任务栏（含自动隐藏浮出）会盖住底部：固定页也夹进 safe rect。
+    let _ = clamp_window_above_taskbar(&window);
     if manual.is_some() {
         if let Ok(mut slot) = PINNED_MANUAL_POSITION.lock() {
             *slot = Some(position);
@@ -2101,6 +2542,8 @@ async fn pin_page_to_desktop(app: AppHandle, page: String) -> Result<(), String>
         *current = Some(page.clone());
     }
     let window = window_factory::ensure(&app, "pinned")?;
+    // 固定页也要避开任务栏；同一个 watcher 管气泡和固定页。
+    start_taskbar_watch(app.clone());
     // 跟随「小狗屏幕」：右下角 24px（或夹取用户拖动过的位置），尺寸按目标屏 scale 换算。
     if let Err(error) = place_pinned_window(&app) {
         eprintln!("failed to place pinned window: {error}");
@@ -3970,11 +4413,12 @@ fn apply_stage_geometry(
     // 小狗在收起态几何下的锚点（展开窗口时小狗保持不动，面板朝空闲的一侧长）。
     let slot_w_phys = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
     let slot_h_phys = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
-    let work_area = monitor.work_area();
-    let work_left = work_area.position.x;
-    let work_top = work_area.position.y;
-    let work_right = work_area.position.x + work_area.size.width as i32;
-    let work_bottom = work_area.position.y + work_area.size.height as i32;
+    // 任务栏避让：展开/浮层用的边界是「显示器 - 任务栏」的 safe rect。
+    let safe = safe_rect_for_monitor(&monitor);
+    let work_left = safe.left;
+    let work_top = safe.top;
+    let work_right = safe.right;
+    let work_bottom = safe.bottom;
     let dog_centered_x = monitor_position.x + ((monitor_size.width as i32 - slot_w_phys) / 2);
     let dog_normal_y = work_bottom - slot_h_phys - physical_top_offset;
     // 缩边方向：按小狗实际所在位置选最近的上/下边缘。
@@ -4055,6 +4499,12 @@ fn apply_stage_geometry(
             }
             let _ = window.emit("maltese-panel-side", panel_side);
             let _ = window.emit("maltese-panel-vertical", panel_vertical);
+            if let Ok(mut slot) = LAST_PANEL_SIDE.lock() {
+                *slot = Some(panel_side);
+            }
+            if let Ok(mut slot) = LAST_PANEL_VERTICAL.lock() {
+                *slot = Some(panel_vertical);
+            }
             let x = if panel_side == "left" {
                 dog_x + slot_w_phys - phys_w
             } else {
@@ -4070,6 +4520,13 @@ fn apply_stage_geometry(
         _ => (dog_x, dog_y),
     };
     let _ = (centered_x, normal_y, tucked_y);
+    ISLAND_EXPANDED.store(matches!(state.mode, IslandMode::Expanded), Ordering::SeqCst);
+    // 展开态 / 浮层打开时，任务栏浮出会把窗口底部盖住：整体上移（高度不够才缩）。
+    let (x, y) = if matches!(state.mode, IslandMode::Expanded) || overlay_snapshot_active() {
+        clamp_island_window_to_taskbar(window, x, y)
+    } else {
+        (x, y)
+    };
 
     let target = PhysicalPosition::new(x, y);
     let start = window.outer_position().map_err(|error| error.to_string())?;
@@ -4183,8 +4640,11 @@ fn expanded_panel_side(
     work_left: i32,
     work_right: i32,
 ) -> &'static str {
-    let right_space = (work_right - dog_x).max(0);
-    let left_space = (dog_x + slot_w_phys - work_left).max(0);
+    // 边界用**狗所在显示器**的 work_left/work_right（左侧副屏是负数）。
+    // 右侧放不下就翻到左侧；两侧都放不下时选空间大的一侧，最终由 monitor clamp 兜底。
+    const MARGIN: i32 = 8;
+    let right_space = (work_right - MARGIN - dog_x).max(0);
+    let left_space = (dog_x + slot_w_phys - (work_left + MARGIN)).max(0);
     if right_space >= desired_width_phys {
         "right"
     } else if left_space >= desired_width_phys {
@@ -4895,6 +5355,119 @@ mod tests {
         assert_eq!(resolve_extras_target_key(None, None, None), None);
     }
 
+    // —— 展开面板的跨屏/负坐标判定 ——
+
+    #[test]
+    fn expanded_panel_side_uses_target_monitor_bounds_when_secondary_left_is_negative() {
+        // 左侧副屏 work area: -1920..0，狗槽 259 宽，面板想要 727 宽
+        let left = -1920;
+        let right = 0;
+        // 副屏居中原位（狗在 -1090）：右侧还有 1090px → 朝右
+        assert_eq!(expanded_panel_side(-1090, 259, 727, left, right), "right");
+        // 靠副屏右边缘（狗在 -259）：右侧只有 259px → 必须翻到左侧
+        assert_eq!(expanded_panel_side(-259, 259, 727, left, right), "left");
+        // 靠副屏左边缘（狗在 -1900）：右侧 1900px → 朝右
+        assert_eq!(expanded_panel_side(-1900, 259, 727, left, right), "right");
+        // 屏太窄、两侧都放不下 → 选空间大的一侧（不跨屏，最终由 clamp 兜底）
+        assert_eq!(expanded_panel_side(-300, 259, 3000, -700, 0), "right");
+    }
+
+    #[test]
+    fn clamp_rect_to_monitor_keeps_window_on_negative_secondary() {
+        let secondary = ScreenRect::new(-1920, 0, 0, 1080);
+        // 展开后窗口跑到主屏（x=0）→ 夹回副屏右边缘
+        let (x, y, w, h) = clamp_rect_to_safe(0, 500, 727, 480, secondary);
+        assert_eq!(x, -727);
+        assert!(x + w <= 0, "窗口必须完全落在副屏（right <= 0）");
+        assert_eq!((y, h), (500, 480));
+    }
+
+    // —— 气泡避让任务栏 ——
+
+    #[test]
+    fn taskbar_edge_detects_four_sides_and_ignores_autohide_sliver() {
+        let monitor = ScreenRect::new(0, 0, 2560, 1440);
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(0, 1392, 2560, 1440), monitor),
+            Some(TaskbarEdge::Bottom)
+        );
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(0, 0, 2560, 48), monitor),
+            Some(TaskbarEdge::Top)
+        );
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(0, 0, 48, 1440), monitor),
+            Some(TaskbarEdge::Left)
+        );
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(2512, 0, 2560, 1440), monitor),
+            Some(TaskbarEdge::Right)
+        );
+        // 自动隐藏收起：只剩 2px 细条，不算占用
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(0, 1438, 2560, 1440), monitor),
+            None
+        );
+        // 另一块屏的任务栏与本屏无关
+        assert_eq!(
+            taskbar_edge_on_monitor(ScreenRect::new(-1920, 1032, 0, 1080), monitor),
+            None
+        );
+    }
+
+    #[test]
+    fn bubble_safe_rect_shaves_taskbar_side_with_margin() {
+        let monitor = ScreenRect::new(0, 0, 2560, 1440);
+        let work = ScreenRect::new(0, 0, 2560, 1392);
+        let taskbar = ScreenRect::new(0, 1392, 2560, 1440);
+        assert_eq!(
+            bubble_safe_rect(monitor, work, &[taskbar]),
+            ScreenRect::new(0, 0, 2560, 1384)
+        );
+        // top / left
+        let full = ScreenRect::new(0, 0, 2560, 1440);
+        assert_eq!(
+            bubble_safe_rect(monitor, full, &[ScreenRect::new(0, 0, 2560, 48)]),
+            ScreenRect::new(0, 56, 2560, 1440)
+        );
+        assert_eq!(
+            bubble_safe_rect(monitor, full, &[ScreenRect::new(0, 0, 48, 1440)]),
+            ScreenRect::new(56, 0, 2560, 1440)
+        );
+    }
+
+    #[test]
+    fn bubble_safe_rect_handles_autohide_popped_and_hidden() {
+        let monitor = ScreenRect::new(0, 0, 2560, 1440);
+        let full = monitor;
+        let popped = ScreenRect::new(0, 1392, 2560, 1440);
+        let hidden = ScreenRect::new(0, 1438, 2560, 1440);
+        assert_eq!(bubble_safe_rect(monitor, full, &[popped]).bottom, 1384);
+        // 收起后回到整屏，但调用方只会在越界时移动 → 已上移的位置保持不动
+        assert_eq!(bubble_safe_rect(monitor, full, &[hidden]).bottom, 1440);
+    }
+
+    #[test]
+    fn bubble_safe_rect_secondary_negative_coordinates() {
+        let secondary = ScreenRect::new(-1920, 0, 0, 1080);
+        let taskbar = ScreenRect::new(-1920, 1032, 0, 1080);
+        let safe = bubble_safe_rect(secondary, secondary, &[taskbar]);
+        assert_eq!(safe.left, -1920);
+        assert_eq!(safe.bottom, 1024);
+        let (x, y, width, height) = clamp_rect_to_safe(-500, 900, 300, 224, safe);
+        assert_eq!(y, 1024 - 224);
+        assert!(x >= -1920 && x + width <= 0);
+        assert_eq!(height, 224);
+    }
+
+    #[test]
+    fn clamp_rect_moves_up_and_shrinks_only_when_needed() {
+        let safe = ScreenRect::new(0, 0, 2560, 1384);
+        assert_eq!(clamp_rect_to_safe(100, 1300, 300, 224, safe), (100, 1160, 300, 224));
+        assert_eq!(clamp_rect_to_safe(100, -50, 300, 224, safe), (100, 0, 300, 224));
+        let tiny = ScreenRect::new(0, 0, 800, 200);
+        assert_eq!(clamp_rect_to_safe(0, 0, 300, 224, tiny), (0, 0, 300, 200));
+    }
     // —— 固定在桌面的标签页（pinned）跟随副屏 ——
 
     #[test]

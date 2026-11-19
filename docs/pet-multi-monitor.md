@@ -186,6 +186,49 @@ export function cornerRect(monitor, logicalWidth, logicalHeight, corner: "tl" | 
     `src/App.tsx`（设置项 `islandScreen`/`bongoScreen` + 下发偏好 + 缺屏气泡）、
     `src/SettingsWindow.tsx`（卡片挂载）、i18n 文案。
 
+## 10. 气泡 / 浮层避开任务栏（2026-11-19）
+
+**问题**：Windows 的 `monitor.work_area()` 只在任务栏**固定显示**时把任务栏那条边排除掉；
+任务栏设成「自动隐藏」时 work_area 是整块屏幕，任务栏一浮出就会盖住云朵气泡/悬停面板的底部。
+
+**算法**（Rust `src-tauri/src/lib.rs`，纯函数在 `src/taskbarSafe.ts` 与 Rust tests 各有一份单测）：
+
+1. **取真实任务栏矩形**：主任务栏 `SHAppBarMessage(ABM_GETTASKBARPOS)`；每块副屏任务栏枚举
+   `Shell_SecondaryTrayWnd` 窗口（`FindWindowExW` 链 + `GetWindowRect` + `IsWindowVisible`）。
+2. **判边**：任务栏矩形与显示器矩形的重叠部分必须「很薄但横跨这条边的大部分」
+   （厚度 ≥12px、跨度 ≥ 显示器该方向 40%）才算占用；自动隐藏收起时只剩 ~2px 细条 → 不算。
+   四边都支持：底 / 上 / 左 / 右。
+3. **safe rect** = 显示器矩形 ∩ work_area，再按任务栏贴的边削掉一条带并留 **8px** 间距；
+   削完不足 160×120 时放弃削边（避免把窗口挤没）。
+4. **统一 clamp**：所有走气泡窗口的路径（云朵消息、悬停互动面板、菜单）在 `place_bubble_near_main` 摆位后
+   调用 `clamp_window_above_taskbar`；固定页（pinned）在 `place_pinned_window` 里也 clamp。
+   只平移；气泡比可用区还高时才缩窗口高度，宽度与内部布局不动。
+5. **自动隐藏跟随**：`start_taskbar_watch` 每 **500ms** 检查一次气泡与固定页；任务栏浮出导致越界就上移，
+   任务栏收起后**不主动回落**（避免窗口来回跳）。
+6. 副屏任务栏同样生效：气泡在哪块屏就按那块屏的任务栏矩形算。
+
+**验证数据**：见 §10.1（本机双屏实机，任务栏固定/自动隐藏两种状态）。
+
+### 10.1 实机验证（2026-11-19，本机双屏）
+
+主屏 `DISPLAY2 2560×1440` 固定任务栏 `0,1392,2560,1440`；左侧副屏 `DISPLAY1 1920×1080`，
+副屏任务栏固定 `-1920,1032,0,1080`、自动隐藏收起时 `-1920,1078,0,1126`（只剩 2px 细边）。
+
+| 场景 | 观测（`GetWindowRect`） | 结论 |
+| --- | --- | --- |
+| 固定任务栏：📌 固定页（副屏） | pinned `-444,448,-24,1008`；副屏任务栏 top `1032` | 交集 `0×0`，底边距任务栏 24px ✅ |
+| 自动隐藏收起：📌 固定页（副屏） | pinned `-444,496,-24,1056`；任务栏 `-1920,1078,0,1126`（2px 细边） | 交集 `0×0` ✅ |
+| 自动隐藏**浮出**：鼠标移副屏底边 | 任务栏变为 `-1920,1032,0,1080`；pinned 在 **700ms 内**上移到 `-444,464,-24,1024` | 交集 `0×0`，底边距任务栏 8px ✅（`start_taskbar_watch` 500ms 轮询生效） |
+| 任务栏再收起：鼠标移开 3s | pinned 保持 `-444,464,-24,1024`（未回落） | ✅ 不来回跳 |
+| 右键展开/悬停浮层（副屏居中） | 收起 `-630,486,-371,707` → 浮层 `-630,167,-43,707` | 右边界 `-43 ≤ 0`，完全在副屏 ✅ |
+| 右键展开/悬停浮层（靠副屏右缘） | 收起 `-450,580,-191,801` → 浮层 `-778,261,-191,801` | 面板自动翻到左侧，右边界 `-191 ≤ 0` ✅ |
+
+- 顶部 / 左侧任务栏：本机是 Windows 11（build 26200），系统已移除「任务栏位置」设置，
+  `StuckRects3` 改写也不会真的把任务栏移到顶部/左侧 → **顶部/左侧任务栏只能在单测里覆盖**
+  （`taskbar_edge_on_monitor` 四边 + `bubble_safe_rect` 四边），实机未验证。
+- `RC_GEOM` / `OVERLAY_MONITOR_CLAMP` 日志格式见 §12。
+
+
 ## 11. 重启后 Bongo 跟随小狗（2026-11-19 修复）
 
 **现象**：小狗在副屏、Bongo 设为「跟随小狗」，完整退出应用再启动后 Bongo 回到主屏。
@@ -203,3 +246,42 @@ export function cornerRect(monitor, logicalWidth, logicalHeight, corner: "tl" | 
 - 启动后 **1s / 3s / 6s** 各重同步一次，等显示器枚举、前端恢复位置、偏好就绪；
 - `work_area` 的兜底从硬编码 `1920×1080` 改为**主屏真实工作区**；
 - 排障日志：`[monitor] extras sync bongo monitor=<指纹> rect=<x,y,w,h> prefer=<偏好|follow>`。
+
+## 12. 展开/右键不跨屏：狗槽不变量 + 事后校正（2026-11-19）
+
+**现象**：小狗在左侧副屏原位时点/右键展开，窗口会往右跳进主屏。
+
+**根因**：
+1. 展开面板的方向（`expanded_panel_side`）和宽度虽然用的是目标屏 work area，但锚点来源
+   （前端 `islandPositionRef` / Rust `previous_state.custom_position`）在浮层打开/回位、闲逛后不更新，
+   按旧锚点算出的 `dog_x` 可能属于另一块屏；窗口就整个被算过去。
+2. 之前只“换锚点来源”（settled rect），但锚点仍可能在过渡帧/异常状态里取到错值，属于概率性修复。
+
+**修法（不变量 + 事后纠正，一次性止血）**：
+1. **不变量**：任何展开/浮层前后，**狗槽的屏幕坐标必须不变**（收起态狗槽 = 窗口左上角；
+   展开态按 `panel_side` / `panel_vertical` 从窗口矩形反算狗槽）。
+2. **事后纠正**：`set_island_interaction` 在展开落定后计算 `slot_after - slot_before = (dx, dy)`，
+   `|dx|>1 || |dy|>1` 就 `set_position(x-dx, y-dy)` 平移回原位，并打 `OVERLAY_SLOT_CORRECT`。
+3. **跨屏禁止**：纠正后再把窗口夹进**狗槽所在显示器**的矩形（`dog_monitor_for_slot` 按狗槽中心找屏，
+   左侧副屏坐标全为负），越界打 `OVERLAY_MONITOR_CLAMP wanted=… clamped=… monitor=<指纹>`。
+4. `expanded_panel_side` 明确用目标屏 `work_left/work_right`（可为负）+ 8px 边距；
+   右侧放不下翻左侧，两侧都放不下选空间大的一侧，最终由 monitor clamp 兜底。
+5. 打点：`RC_GEOM before=<rect> after=<rect> anchor=<settled_rect|frontend|prev_state|none>
+   monitor=<指纹> panel_side=<left|right> panel_vertical=<above|below> slot_before=(x,y)
+   slot_after=(x,y) dx=… dy=…`。
+
+**实机（副屏 1920×1080，全部 `right ≤ 0`）**：
+
+| 位置 | 收起态 | 右键展开 | slot dx/dy | panel_side |
+| --- | --- | --- | --- | --- |
+| 副屏居中 | `-1020,351,259,221` | `-1020,92,727,480`（右边界 `-293`） | `0 / 0` | right |
+| 靠右边缘 | `-442,569,259,221` | `-910,310,727,480`（右边界 `-183`） | `0 / 0` | **left**（翻转） |
+| 靠左边缘 | `-1898,587,259,221` | `-1898,328,727,480`（右边界 `-1171`） | `0 / 0` | right |
+| 靠下边缘 | `-1157,726,259,221` | `-1157,467,727,480`（右边界 `-430`） | `0 / 0` | right |
+
+- 每处右键 3 次，收起位置逐像素一致（零漂移）；12 次 `RC_GEOM` 全部 `dx=0 dy=0`，
+  `OVERLAY_SLOT_CORRECT` / `OVERLAY_MONITOR_CLAMP` 在正常场景没有触发（兜底路径，异常时才动手）。
+
+**已知自动化限制**：设置里的「小狗屏幕 / Bongo 屏幕」是 HTML `<select>`，WebView2 的 UIA 会把 option
+暴露成 `ListItem`，但**不支持 `SelectionItemPattern`**，所以 UIA 自动化无法直接选；鼠标点击 + 方向键/Enter
+可以正常改（自动化脚本用这个兜底）。
