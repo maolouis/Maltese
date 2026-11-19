@@ -271,6 +271,29 @@ pub async fn local_chat(
     if let Some(text) = extract_content(&value) {
         let text = text.trim().to_string();
         if !text.is_empty() {
+            let (prompt_tokens, completion_tokens, cached_tokens, precision) =
+                match crate::usage::usage_from_value(&value) {
+                    Some((prompt, completion, cached)) => (prompt, completion, cached, "exact"),
+                    None => (
+                        crate::usage::estimate_tokens(&message),
+                        crate::usage::estimate_tokens(&text),
+                        0,
+                        "estimated",
+                    ),
+                };
+            crate::usage::record(crate::usage::UsageRecord {
+                at: crate::usage::now_seconds(),
+                source: "chat".to_string(),
+                backend: "local".to_string(),
+                model: model.clone(),
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+                precision: precision.to_string(),
+                duration_ms: 0,
+                ok: true,
+            });
             return Ok(text);
         }
     }
@@ -467,6 +490,7 @@ async fn stream_once(
     let mut stream = response.bytes_stream();
     let mut pending = String::new();
     let mut full_text = String::new();
+    let mut reported_usage: Option<(u64, u64, u64)> = None;
     while let Some(chunk) = stream.next().await {
         if is_cancelled(request_id) {
             let _ = take_cancelled(request_id);
@@ -504,6 +528,9 @@ async fn stream_once(
             if let Some(reasoning) = extract_reasoning_delta(&value) {
                 emit_stream_event(app, request_id, "reasoning", &reasoning);
             }
+            if let Some((prompt, completion, cached)) = crate::usage::usage_from_value(&value) {
+                reported_usage = Some((prompt, completion, cached));
+            }
             if let Some(delta) = extract_delta(&value) {
                 if first_token_at.is_none() {
                     first_token_at = Some(std::time::Instant::now());
@@ -516,6 +543,32 @@ async fn stream_once(
     if !full_text.trim().is_empty() {
         emit_stream_event(app, request_id, "done", &full_text);
     }
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (prompt_tokens, completion_tokens, cached_tokens, precision) = match reported_usage {
+        Some((prompt, completion, cached)) => {
+            let total = prompt + completion;
+            (prompt, completion, cached, "exact")
+        }
+        None => (
+            crate::usage::estimate_tokens(&full_text),
+            crate::usage::estimate_tokens(&full_text),
+            0,
+            "estimated",
+        ),
+    };
+    crate::usage::record(crate::usage::UsageRecord {
+        at: crate::usage::now_seconds(),
+        source: "chat".to_string(),
+        backend: "local".to_string(),
+        model: model.to_string(),
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        precision: precision.to_string(),
+        duration_ms: elapsed_ms,
+        ok: !full_text.trim().is_empty(),
+    });
     Ok(full_text)
 }
 

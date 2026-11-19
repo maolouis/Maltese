@@ -8,6 +8,7 @@ mod dsh_api;
 mod dsh_chat;
 mod instance_lock;
 mod paths;
+mod usage;
 mod local_chat;
 mod icons;
 mod lyrics;
@@ -5811,6 +5812,9 @@ pub fn run() {
             get_agent_status,
             clear_agent_status,
             install_agent_status_hooks,
+            usage::usage_record,
+            usage::usage_summary,
+            usage::usage_clear,
             data_directory_info,
             open_data_directory,
             get_media_state,
@@ -5894,6 +5898,7 @@ pub fn run() {
             video::video_close_browser,
             video::video_browser_status,
             video::video_open_external_url,
+            video::video_open_logs_dir,
             agent_hub::get_agent_registry,
             agent_hub::agent_hub_status,
             agent_hub::agent_hub_usage,

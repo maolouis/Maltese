@@ -213,6 +213,22 @@ export function AgentConsole() {
   const [registry, setRegistry] = useState<RegistrySnapshot | null>(null);
   const [status, setStatus] = useState<AgentHubStatus | null>(null);
   const [usage, setUsage] = useState<AgentUsageSummary | null>(null);
+  const [tokenDays, setTokenDays] = useState<1 | 7>(1);
+  const [tokenSummary, setTokenSummary] = useState<{
+    total: { totalTokens: number; requests: number };
+    exactRequests: number;
+    estimatedRequests: number;
+    bySource: Record<string, { totalTokens: number; requests: number }>;
+  } | null>(null);
+  const refreshTokenUsage = useCallback(() => {
+    void invoke<typeof tokenSummary>("usage_summary", { days: tokenDays })
+      .then(setTokenSummary)
+      .catch(() => setTokenSummary(null));
+  }, [tokenDays]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    refreshTokenUsage();
+  }, [refreshTokenUsage]);
   const [video, setVideo] = useState<VideoSnapshotLite | null>(null);
   const [desktop, setDesktop] = useState<DesktopAgentsSnapshot | null>(null);
   const [activeTodo, setActiveTodo] = useState<{ title: string; elapsedMs: number } | null>(null);
@@ -560,9 +576,35 @@ export function AgentConsole() {
             </div>
             <div>
               <dt>{t.agentHub.usageTokens}</dt>
-              <dd>—</dd>
+              <dd>
+                {tokenSummary
+                  ? formatCount(tokenSummary.total.totalTokens) + " tokens / " + formatCount(tokenSummary.total.requests) + " 次"
+                  : "—"}
+              </dd>
             </div>
           </dl>
+          <div className="agent-console-card__actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => setTokenDays(1)} aria-pressed={tokenDays === 1}>今日</button>
+            <button type="button" onClick={() => setTokenDays(7)} aria-pressed={tokenDays === 7}>近 7 日</button>
+            <button
+              type="button"
+              onClick={() => {
+                void invoke("usage_clear").then(refreshTokenUsage).catch(() => undefined);
+              }}
+            >
+              清空统计
+            </button>
+          </div>
+          {tokenSummary && (
+            <p className="agent-console-card__hint">
+              精确 {formatCount(tokenSummary.exactRequests)} 次 / 估算 {formatCount(tokenSummary.estimatedRequests)} 次
+              {tokenSummary.bySource && Object.keys(tokenSummary.bySource).length > 0
+                ? " · 来源：" + Object.entries(tokenSummary.bySource)
+                    .map(([source, stats]) => source + " " + formatCount(stats.totalTokens))
+                    .join("、")
+                : ""}
+            </p>
+          )}
           {usage && usage.runs === 0 && <p className="agent-console-card__empty">{t.agentHub.noUsage}</p>}
         </article>
 
