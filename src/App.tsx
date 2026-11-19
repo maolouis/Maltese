@@ -9247,14 +9247,23 @@ function IslandApp({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        collapseIsland();
+      if (event.key !== "Escape") {
+        return;
       }
+      // 浮层（云朵气泡 / 悬停面板）开着时，Esc 必须走和「点击外部」同一条收尾路径：
+      // hidePetOverlay → applyPetOverlay(null) → set_island_overlay(None)，
+      // 由 Rust 用 OVERLAY_SNAPSHOT 恢复收起态矩形。
+      // 旧实现只 collapseIsland()（本来就已收起），浮层窗口会停在 587×540 尺寸。
+      if (petOverlayRef.current) {
+        hidePetOverlay();
+        return;
+      }
+      collapseIsland();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [collapseIsland]);
+  }, [collapseIsland, hidePetOverlay]);
 
   useEffect(() => {
     if (!isTauri()) {
