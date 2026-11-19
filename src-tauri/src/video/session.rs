@@ -1503,9 +1503,35 @@ impl SessionEngine {
                             if cdp.reconnect().await.is_ok() {
                                 after = cdp.current_url().await;
                             }
-                            if !after.contains("/video/") {
-                                let target = expect_video_url.clone();
-                                if cdp.navigate(&target).await.is_ok() {
+                            // 页面自己跳回首页时：记录原因（referrer/history）并最多重导航 3 次。
+                            let mut attempts = 0u32;
+                            while !after.contains("/video/") && attempts < 3 {
+                                attempts += 1;
+                                let referrer = cdp
+                                    .evaluate("document.referrer", EVALUATE_TIMEOUT)
+                                    .await
+                                    .ok()
+                                    .and_then(|value| value.as_str().map(str::to_string))
+                                    .unwrap_or_default();
+                                let history_length = cdp
+                                    .evaluate("history.length", EVALUATE_TIMEOUT)
+                                    .await
+                                    .ok()
+                                    .and_then(|value| value.as_i64())
+                                    .unwrap_or(0);
+                                self.store.log(DiagnosticEntry {
+                                    at: now,
+                                    session_id: Some(self.snapshot().session_id),
+                                    channel: Some(ChannelType::Cdp),
+                                    level: "warn".to_string(),
+                                    code: "NAV_REVERT".to_string(),
+                                    message: format!(
+                                        "from={} to={} expect={} referrer={} history={} attempt={}",
+                                        after, from, expect_video_url, referrer, history_length, attempts
+                                    ),
+                                });
+                                if cdp.navigate(&expect_video_url.clone()).await.is_ok() {
+                                    tokio::time::sleep(Duration::from_millis(800)).await;
                                     after = cdp.current_url().await;
                                 }
                             }
