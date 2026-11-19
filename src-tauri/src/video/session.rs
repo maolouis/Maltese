@@ -477,6 +477,32 @@ pub async fn advance_to_next_video(cdp: &mut CdpSession, current_url: &str) -> N
     }
 }
 
+
+/// N11：评论清洗（≤40 字、去 @/链接/禁词、空则模板兜底）。
+fn sanitize_comment(raw: &str) -> String {
+    const BANNED: [&str; 7] = ["三连", "求关注", "互关", "点个赞", "投币", "私信", "加微信"];
+    let mut text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    for word in BANNED {
+        text = text.replace(word, "");
+    }
+    text = text
+        .split_whitespace()
+        .filter(|part| !part.starts_with("http://") && !part.starts_with("https://") && !part.starts_with('@'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let text: String = text.trim().chars().take(40).collect();
+    if text.trim().is_empty() {
+        "这个讲得挺细的，先码住。".to_string()
+    } else {
+        text.trim().to_string()
+    }
+}
+
+fn comment_bubble(title: &str, comment: &str) -> String {
+    let short: String = title.trim().chars().take(12).collect();
+    format!("刚给《{short}》评论了一句：{comment}")
+}
+
 /// N5：把页面强制带进视频详情页（三段降级）。
 pub struct NavOutcome {
     pub ok: bool,
@@ -1181,6 +1207,11 @@ impl SessionEngine {
         let mut nav_failures = 0u32;
         let mut last_nav_at = 0u64;
         let mut advance_failures = 0u32;
+        let mut commented_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut last_comment_at = 0u64;
+        let mut comment_count = 0u32;
+        let mut last_skip_reason: Option<String> = None;
+        let mut login_risk_logged = false;
         let mut last_advance_at = 0u64;
         let mut current_video_url = String::new();
         let mut last_collect_key = String::new();
@@ -1307,6 +1338,7 @@ impl SessionEngine {
                     let kind = adapter.classify_page(&facts);
                     let mut pending_advance = false;
                     let mut pending_persist = false;
+                    let mut pending_comment: Option<PageFacts> = None;
                     // N5：Feed/首页时先在 state 锁之外做导航尝试（await 期间不能持有 MutexGuard）。
                     let mut nav_result: Option<NavOutcome> = None;
                     {
@@ -1427,6 +1459,8 @@ impl SessionEngine {
                                                 message: format!("url={} title={}", url, facts.title),
                                             });
                                             pending_persist = true;
+                                            // N11：锁外做自动评论（去重/间隔/预演都在锁外判断）。
+                                            pending_comment = Some(facts.clone());
                                             // N6：同一条重复采集且停留够 20s → 换下一条（标记，锁外执行）。
                                             if !last_collect_key.is_empty()
                                                 && url == current_video_url
@@ -1450,6 +1484,133 @@ impl SessionEngine {
                                 auto_comment = Some(facts.clone());
                             }
                         }
+                        }
+                    }
+                    // N11：自动评论（默认 dry-run：只生成 + 日志 + 气泡，不真正发送）。
+                    if let Some(facts) = pending_comment.take() {
+                        let config = self.config();
+                        let url = facts.canonical_url.clone().unwrap_or_default();
+                        let is_login_or_risk = facts.hints.login_visible
+                            || facts.hints.captcha_visible
+                            || facts.hints.risk_banner;
+                        if is_login_or_risk && !login_risk_logged {
+                            login_risk_logged = true;
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: Some(ChannelType::Cdp),
+                                level: "warn".to_string(),
+                                code: "COMMENT_SKIPPED".to_string(),
+                                message: format!("url={} reason=login_or_risk", url),
+                            });
+                        } else if url.contains("/video/") && !is_login_or_risk {
+                            let watched_ms = facts.position_seconds.saturating_mul(1000);
+                            let allowed = config.auto_comment
+                                && comment_count < 10
+                                && watched_ms >= 8_000
+                                && !commented_urls.contains(&url)
+                                && (last_comment_at == 0
+                                    || now.saturating_sub(last_comment_at) >= 180);
+                            if allowed {
+                                let model = lock_state(&self.state).comment_model.clone();
+                                let generated = match model.as_ref() {
+                                    Some(model) => {
+                                        tokio::time::timeout(
+                                            std::time::Duration::from_secs(30),
+                                            generate_content_comment(&app, &facts, model),
+                                        )
+                                        .await
+                                        .unwrap_or_else(|_| Err("评论生成超时".to_string()))
+                                    }
+                                    None => Err("未配置评论模型".to_string()),
+                                };
+                                let comment = sanitize_comment(&generated.unwrap_or_default());
+                                if config.comment_dry_run {
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(self.snapshot().session_id),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "info".to_string(),
+                                        code: "COMMENT_DRY_RUN".to_string(),
+                                        message: format!("url={} text={}", url, comment),
+                                    });
+                                    let _ = app.emit(
+                                        "video-comment-bubble",
+                                        serde_json::json!({
+                                            "kind": "dry-run",
+                                            "text": comment_bubble(&facts.title, &comment),
+                                        }),
+                                    );
+                                } else {
+                                    match self.post_comment(&comment).await {
+                                        Ok(report) => {
+                                            self.store.log(DiagnosticEntry {
+                                                at: now,
+                                                session_id: Some(self.snapshot().session_id),
+                                                channel: Some(ChannelType::Cdp),
+                                                level: "info".to_string(),
+                                                code: "COMMENT_POSTED".to_string(),
+                                                message: format!("url={} text={} ok={}", url, comment, report.ok),
+                                            });
+                                            let _ = app.emit(
+                                                "video-comment-bubble",
+                                                serde_json::json!({
+                                                    "kind": "posted",
+                                                    "text": comment_bubble(&facts.title, &comment),
+                                                }),
+                                            );
+                                        }
+                                        Err(error) => {
+                                            let message = error.to_string();
+                                            let reason = if message.contains("输入框") || message.contains("input") {
+                                                "no-input"
+                                            } else if message.contains("按钮") || message.contains("button") {
+                                                "no-button"
+                                            } else {
+                                                "comment-cdp"
+                                            };
+                                            self.store.log(DiagnosticEntry {
+                                                at: now,
+                                                session_id: Some(self.snapshot().session_id),
+                                                channel: Some(ChannelType::Cdp),
+                                                level: "warn".to_string(),
+                                                code: "COMMENT_SKIPPED".to_string(),
+                                                message: format!("url={} reason={}", url, reason),
+                                            });
+                                            let _ = app.emit(
+                                                "video-comment-bubble",
+                                                serde_json::json!({ "kind": "failed", "text": format!("评论没发出去（{}），先不发了。", reason) }),
+                                            );
+                                        }
+                                    }
+                                }
+                                commented_urls.insert(url.clone());
+                                last_comment_at = now;
+                                comment_count = comment_count.saturating_add(1);
+                            } else {
+                                let reason = if !config.auto_comment {
+                                    "disabled"
+                                } else if comment_count >= 10 {
+                                    "session_limit"
+                                } else if watched_ms < 8_000 {
+                                    "not_watched_enough"
+                                } else if commented_urls.contains(&url) {
+                                    "duplicate"
+                                } else {
+                                    "interval"
+                                };
+                                if last_skip_reason.as_deref() != Some(reason) {
+                                    last_skip_reason = Some(reason.to_string());
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(self.snapshot().session_id),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "info".to_string(),
+                                        code: "COMMENT_SKIPPED".to_string(),
+                                        message: format!("url={} reason={}", url, reason),
+                                    });
+                                }
+                            }
                         }
                     }
                     if pending_persist {

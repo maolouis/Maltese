@@ -9450,6 +9450,25 @@ function IslandApp({
       unlisten?.();
     };
   }, [triggerPetAction]);
+  // 视频自动评论气泡（N11/N12）：预演与真实发布共用同一气泡组件显示文本。
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void listen<{ kind?: string; text?: string }>("video-comment-bubble", (event) => {
+      const text = event.payload?.text?.trim();
+      if (!text) return;
+      const title = event.payload?.kind === "dry-run" ? "小狗评论（预演）" : "小狗评论";
+      showCloudBubble(title, text, undefined, "pet");
+    }).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [showCloudBubble]);
   // 设置窗口里的「试一下联动」把主狗那句转给主窗口显示（预览可能从设置窗口点）。
   useEffect(() => {
     if (!isTauri()) return;
