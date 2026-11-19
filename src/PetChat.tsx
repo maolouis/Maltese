@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Copy, Hand, ImagePlus, LoaderCircle, RotateCcw, Send, Settings2, Square, Trash2, Wrench, X } from "lucide-react";
 import { useTranslation } from "./i18n";
-import { LocalChatSettings } from "./LocalChatSettings";
-import { PetSkillsSettings } from "./PetSkillsSettings";
-import { ChatText } from "./ChatText";
-import { ChatReasoning } from "./ChatReasoning";
 import {
   loadCustomSkills,
   loadEnabledSkills,
@@ -38,109 +33,32 @@ import {
   shouldAbortStream,
   shouldPersistReply,
 } from "./chatGuard";
-import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
+import { buildChatVitalsContext, loadVitalsSummary } from "./petContext";
 import { RECENT_TURNS, buildMemoryContext, loadMemory, loadMemoryDepth } from "./petMemory";
-import { scheduleMemoryMaintenance } from "./petMemoryMaintenance";
-import { PetStateBar } from "./PetStateBar";
 import {
   isStickerId,
   splitAssistantReply,
   STICKER_IDS,
-  stickerDisplayWidth,
-  stickerOfMessage,
   stickerPoolOrder,
   stripStickerMarkup,
   type StickerId,
 } from "./chatSticker";
 import { pickStickerForVitals } from "./petVitals";
+import type { ChatMessage, DshChatReply, LocalChatStreamEvent } from "./petChatTypes";
+import { PetChatView } from "./PetChatView";
 import {
-  detectThresholdCross,
-  shouldShowNotice,
-  STATE_NOTICE_AT_KEY,
-} from "./petStateBarLogic";
+  createId,
+  fileToDataUrl,
+  loadMessages,
+  MAX_IMAGES,
+  MAX_MESSAGES,
+  MESSAGES_KEY,
+  SEND_IMAGE_MAX_SIDE,
+  SESSION_KEY,
+  THUMB_IMAGE_MAX_SIDE,
+} from "./petChatStorage";
+import { usePetChatStateNotices } from "./usePetChatStateNotices";
 import "./PetChat.css";
-
-type DshChatReply = { text: string; sessionId: string | null };
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  at: number;
-  imageCount?: number;
-  /** 消息里展示的缩略图（data URL）；发送给模型的是另一份更大的图。 */
-  thumbnails?: string[];
-  /** 小狗实际执行了什么动作（例如记待办），显示成一条小提示。 */
-  toolNote?: string;
-  /** 模型的思考过程（折叠展示）。 */
-  reasoning?: string;
-  /** 模型选的表情包（白名单 id；旧记录没有该字段也正常渲染）。 */
-  sticker?: StickerId;
-  /** 消息类型：缺省=文字（兼容旧记录）；sticker=独立表情包消息。 */
-  kind?: "text" | "sticker";
-};
-
-type LocalChatStreamEvent = {
-  requestId: string;
-  kind: "delta" | "done" | "error" | "reasoning";
-  text: string;
-};
-
-const MESSAGES_KEY = "focusd-island-pet-chat-messages";
-const MAX_IMAGES = 4;
-const SEND_IMAGE_MAX_SIDE = 1280;
-const THUMB_IMAGE_MAX_SIDE = 360;
-
-/** 把图片文件压到指定最长边，返回 data URL（避免把几 MB 的原图塞进请求/存储）。 */
-async function fileToDataUrl(file: File, maxSide: number, quality: number): Promise<string> {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    bitmap.close();
-    return "";
-  }
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  return canvas.toDataURL("image/jpeg", quality);
-}
-const SESSION_KEY = "focusd-island-pet-chat-session";
-const MAX_MESSAGES = 60;
-
-function createId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-/**
- * 把小狗状态/近期互动拼成一条 system 消息放进历史（不污染用户消息）。
- * 没有状态数据时返回原历史，提示词与旧版完全一致。
- */
-function loadMessages(): ChatMessage[] {
-  try {
-    const raw = window.localStorage.getItem(MESSAGES_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is ChatMessage =>
-        Boolean(item)
-        && typeof item === "object"
-        && (item as ChatMessage).role !== undefined
-        && typeof (item as ChatMessage).text === "string",
-      )
-      .slice(-MAX_MESSAGES);
-  } catch {
-    return [];
-  }
-}
 
 export function PetChat() {
   const t = useTranslation();
@@ -210,7 +128,7 @@ export function PetChat() {
   /** 首字是否已经到达（分级超时用）。 */
   const firstDeltaRef = useRef(false);
   // 聊天里的「小狗状态条」+ 阈值跨越灰色提示（只展示，不写记录、不发给模型）。
-  const [stateNotices, setStateNotices] = useState<string[]>([]);
+  const stateNotices = usePetChatStateNotices(character);
   /** 正在加载本地模型（预热）：用来把 busy 文案从「思考」换成「加载模型…」。 */
   const [modelLoading, setModelLoading] = useState(false);
   /** 单槽位排队中（后端 processing=true 且我们还没收到任何事件）。 */
@@ -222,46 +140,6 @@ export function PetChat() {
   const [stickerPreview, setStickerPreview] = useState<string | null>(null);
   /** 内联表情包显示宽度（默认 150，onLoad 按自然尺寸修正）。 */
   const [stickerWidth, setStickerWidth] = useState(150);
-  const prevVitalsRef = useRef<VitalsSummary | null>(loadVitalsSummary());
-  const [noticeAtInitial] = useState<number>(() => {
-    try {
-      const raw = Number(window.localStorage.getItem(STATE_NOTICE_AT_KEY));
-      return Number.isFinite(raw) ? raw : 0;
-    } catch {
-      return 0;
-    }
-  });
-  const lastNoticeAtRef = useRef<number>(noticeAtInitial);
-  useEffect(() => {
-    const refresh = () => {
-      const next = loadVitalsSummary();
-      const cross = detectThresholdCross(
-        prevVitalsRef.current,
-        next,
-        PET_CHARACTER_LABELS[character as keyof typeof PET_CHARACTER_LABELS] ?? "小狗",
-      );
-      prevVitalsRef.current = next;
-      if (!cross) return;
-      const now = Date.now();
-      if (!shouldShowNotice(lastNoticeAtRef.current, now)) return;
-      lastNoticeAtRef.current = now;
-      try {
-        window.localStorage.setItem(STATE_NOTICE_AT_KEY, String(now));
-      } catch {
-        // 忽略
-      }
-      setStateNotices((current) => [...current.slice(-2), cross.text]);
-    };
-    window.addEventListener("storage", refresh);
-    window.addEventListener("maltese-pet-vitals-changed", refresh);
-    const timer = window.setInterval(refresh, 2_000);
-    return () => {
-      window.removeEventListener("storage", refresh);
-      window.removeEventListener("maltese-pet-vitals-changed", refresh);
-      window.clearInterval(timer);
-    };
-  }, [character]);
-
   // 打开聊天总是停在最新一条：挂载时直接跳到底部（不要动画），
   // 之后消息变化、窗口/面板高度变化（展开动画、聊天框高度设置）都重新贴底。
   // 之前只在 messages 变化时滚一次，面板还在播放展开动画，scrollHeight 还没长完，
@@ -351,15 +229,16 @@ export function PetChat() {
       message: string,
       history: ChatMessage[],
       images: string[] | null,
-      options?: { maxTokens?: number; temperature?: number },
+      options?: { maxTokens?: number; temperature?: number; source?: string },
     ) => {
       if (chatConfig.backend === "dsh") {
         const reply = await invoke<DshChatReply>("dsh_chat", {
           message,
           sessionId,
           character,
-          sticker: false,
           memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+          source: options?.source ?? "chat",
+          sticker: false,
         });
         if (reply.sessionId) {
           setSessionId(reply.sessionId);
@@ -380,6 +259,7 @@ export function PetChat() {
       try {
         return await invoke<string>("local_chat_stream", {
           requestId: createId(),
+          source: options?.source ?? "chat",
           baseUrl: chatConfig.baseUrl,
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
@@ -407,6 +287,7 @@ export function PetChat() {
             try {
               return await invoke<string>("local_chat_stream", {
                 requestId: createId(),
+                source: options?.source ?? "chat",
                 baseUrl: chatConfig.baseUrl,
                 model: chatConfig.model,
                 apiKey: chatConfig.apiKey.trim() || null,
@@ -430,11 +311,11 @@ export function PetChat() {
           }
         }
         return invoke<string>("local_chat", {
+          source: options?.source ?? "chat",
           baseUrl: chatConfig.baseUrl,
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
           message,
-          memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
           history: history.slice(-RECENT_TURNS).map((item) => ({ role: item.role, content: item.text })),
           character,
           sticker: false,
@@ -551,6 +432,7 @@ export function PetChat() {
             requestId,
             baseUrl: chatConfig.baseUrl,
             memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+            source: "chat",
             model: chatConfig.model,
             apiKey: chatConfig.apiKey.trim() || null,
             message,
@@ -581,6 +463,7 @@ export function PetChat() {
                   apiKey: payload.apiKey,
                   message: payload.message,
                   memoryContext: payload.memoryContext,
+                  source: payload.source,
                   history: payload.history,
                   character: payload.character,
                   sticker: true,
@@ -733,14 +616,15 @@ export function PetChat() {
       // 命中技能时由技能自己上报确定性任务，不再跑兜底模型推断。
       let skillHandled = false;
       if (agentEnabled && sendImages.length === 0 && SKILL_HINT.test(text)) {
-        const askAgent = async (prompt: string, maxTokens: number, temperature: number) => {
+        const askAgent = async (prompt: string, maxTokens: number, temperature: number, source = "chat") => {
           if (chatConfig.backend === "local") {
-            return askModel(prompt, [], null, { maxTokens, temperature });
+            return askModel(prompt, [], null, { maxTokens, temperature, source });
           }
           const reply = await invoke<DshChatReply>("dsh_chat", {
             message: prompt,
             sessionId: null,
             character,
+            source,
             requestId: null,
           });
           return reply.text;
@@ -748,7 +632,7 @@ export function PetChat() {
         // 技能判断最多等 20 秒，超时/失败都退回普通聊天，绝不挡住回复。
         const decision =
           (await withTimeout(
-            askAgent(`${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`, 128, 0.1),
+            askAgent(`${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`, 128, 0.1, "decision"),
             20_000,
           )) ?? "";
         const call = parseSkillCall(decision);
@@ -762,6 +646,7 @@ export function PetChat() {
                 `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用简洁中文回答主人；如果结果里有搜索资料，就根据资料直接回答，不要输出 JSON。`,
                 400,
                 0.7,
+                "chat",
               ),
               25_000,
             )) ?? "";
@@ -809,7 +694,7 @@ export function PetChat() {
               message: text,
               sessionId,
               character,
-              memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+              source: "chat",
               requestId,
             }),
             dshGuard,
@@ -892,13 +777,6 @@ export function PetChat() {
         // 兜底：未命中技能时才异步分类（≤100 token，不阻塞首字，不覆盖确定性状态）。
         void maybeInferTaskProgress(text, replyText ?? "");
       }
-      // 记忆维护：只在 idle ≥30s 且没有请求在跑时执行；任何失败都静默放弃。
-      scheduleMemoryMaintenance({
-        messages: [...next, ...appended].map((item) => ({ role: item.role, text: item.text })),
-        isBusy: () => activeRequestRef.current !== null || cancelRef.current,
-        lastUserAt: () => Date.now() - 30_000,
-        callModel: async (prompt) => (await askAgent(prompt, 256, 0.3)) ?? "",
-      });
       setStreamingReply("");
       setStreamingReasoning("");
     } catch (reason) {
@@ -997,349 +875,46 @@ export function PetChat() {
   }, [persist]);
 
   return (
-    <section className="pet-chat" aria-label={t.chat.title}>
-      <header className="pet-chat__header">
-        <div className="pet-chat__heading">
-          <img
-            className="pet-chat__avatar pet-chat__avatar--header"
-            src={avatarSrc}
-            alt={avatarName}
-            title={avatarName}
-            draggable={false}
-          />
-          <div>
-            <strong>{t.chat.title}</strong>
-            <small>
-              {busy
-                ? t.chat.thinking
-                : chatConfig.backend === "local"
-                  ? t.chat.modelBadgeLocal(chatConfig.model)
-                  : t.chat.hint}
-            </small>
-          </div>
-        </div>
-        <div className="pet-chat__header-actions">
-
-          <button
-            className={`pet-chat__model-toggle${agentEnabled ? " is-active" : ""}`}
-            type="button"
-            title={agentEnabled ? "动手模式：开（点一下关闭）" : "动手模式：关（点一下开启）"}
-            aria-label="动手模式"
-            aria-pressed={agentEnabled}
-            onClick={() => {
-              const nextValue = !agentEnabled;
-              setAgentEnabled(nextValue);
-              try {
-                window.localStorage.setItem("maltese-agent-mode", nextValue ? "on" : "off");
-              } catch {
-                // 忽略
-              }
-            }}
-          >
-            <Hand size={15} strokeWidth={1.8} />
-          </button>
-          <button
-            className={`pet-chat__model-toggle${showSkills ? " is-active" : ""}`}
-            type="button"
-            title="技能"
-            aria-label="技能"
-            aria-expanded={showSkills}
-            onClick={() => setShowSkills((open) => !open)}
-          >
-            <Wrench size={15} strokeWidth={1.8} />
-          </button>
-          <button
-            className={`pet-chat__model-toggle${showModelSettings ? " is-active" : ""}`}
-            type="button"
-            title={t.chat.modelSettings}
-            aria-label={t.chat.modelSettings}
-            aria-expanded={showModelSettings}
-            onClick={() => setShowModelSettings((open) => !open)}
-          >
-            <Settings2 size={15} strokeWidth={1.8} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            title={t.chat.clear}
-            aria-label={t.chat.clear}
-            disabled={busy || messages.length === 0}
-            onClick={clear}
-          >
-            <Trash2 size={15} strokeWidth={1.8} />
-          </button>
-        </div>
-      </header>
-
-      {/* 小狗状态条：一行紧凑显示体力/情绪/亲密/专注；无数据时整行不渲染。 */}
-      <PetStateBar busy={busy} waitSeconds={waitSeconds} thinkingOn={thinkingOn} />
-
-      {showModelSettings && (
-        <LocalChatSettings onClose={() => setShowModelSettings(false)} />
-      )}
-      {showSkills && (
-        <div className="pet-chat__skills">
-          <PetSkillsSettings />
-        </div>
-      )}
-
-      <div className="pet-chat__list" ref={listRef} role="log" aria-live="polite">
-        {messages.length === 0 && (
-          <div className="pet-chat__empty">
-            <img
-              className="pet-chat__avatar pet-chat__avatar--empty"
-              src={avatarSrc}
-              alt={avatarName}
-              draggable={false}
-            />
-            <p>{t.chat.empty}</p>
-            <small>{t.chat.emptyHint}</small>
-          </div>
-        )}
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`pet-chat__row pet-chat__row--${message.role}`}
-          >
-            {message.role === "assistant" && (
-              <img
-                className="pet-chat__avatar"
-                src={avatarSrc}
-                alt={avatarName}
-                title={avatarName}
-                draggable={false}
-              />
-            )}
-            <div
-              className={`pet-chat__bubble pet-chat__bubble--${message.role}`}
-            >
-              {message.thumbnails && message.thumbnails.length > 0 && (
-                <div className="pet-chat__thumbs">
-                  {message.thumbnails.map((thumb, index) => (
-                    <img key={index} src={thumb} alt={t.chat.imageAttached(index + 1)} />
-                  ))}
-                </div>
-              )}
-              {showThinking && message.reasoning ? (
-                <ChatReasoning text={message.reasoning} />
-              ) : null}
-              {message.text && <ChatText text={message.text} />}
-              {message.kind === "sticker" && !message.text ? null : null}
-              {(() => {
-                // 独立表情包消息或旧记录的内联字段都走同一套渲染。
-                const url = stickerUrl(stickerOfMessage(message));
-                return url ? (
-                  <button
-                    type="button"
-                    className="pet-chat__sticker"
-                    title="点一下放大"
-                    aria-label="表情包，点击放大"
-                    onClick={() => setStickerPreview(url)}
-                  >
-                    <img
-                      src={url}
-                      alt=""
-                      loading="lazy"
-                      style={{ width: `${stickerWidth}px`, height: `${stickerWidth}px` }}
-                      onLoad={(event) => {
-                        const natural = event.currentTarget.naturalWidth;
-                        setStickerWidth(stickerDisplayWidth(natural, 360));
-                      }}
-                      onError={(event) => {
-                        const box = event.currentTarget.closest(".pet-chat__sticker");
-                        if (box instanceof HTMLElement) box.style.display = "none";
-                      }}
-                    />
-                  </button>
-                ) : null;
-              })()}
-              {message.toolNote ? (
-                <small className="pet-chat__tool-note">{message.toolNote}</small>
-              ) : null}
-              <div className="pet-chat__meta">
-                <time dateTime={new Date(message.at).toISOString()}>
-                  {new Date(message.at).toLocaleTimeString(t.localeTag, {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </time>
-                <button
-                  type="button"
-                  className="pet-chat__copy"
-                  title="复制这条消息"
-                  aria-label="复制这条消息"
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        await navigator.clipboard.writeText(message.text);
-                      } catch {
-                        await invoke("set_clipboard_text", { text: message.text }).catch(() => undefined);
-                      }
-                    })();
-                  }}
-                >
-                  <Copy size={11} strokeWidth={2} />
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
-        {busy && (streamingReasoning || streamingReply) && (
-          <div className="pet-chat__row pet-chat__row--assistant">
-            <img
-              className="pet-chat__avatar"
-              src={avatarSrc}
-              alt={avatarName}
-              title={avatarName}
-              draggable={false}
-            />
-            <div className="pet-chat__bubble pet-chat__bubble--assistant">
-              {showThinking && streamingReasoning ? (
-                <ChatReasoning text={streamingReasoning} streaming />
-              ) : null}
-              {streamingReply ? <ChatText text={streamingReply} /> : null}
-            </div>
-          </div>
-        )}
-        {busy && (
-          <div className="pet-chat__row pet-chat__row--assistant">
-            <img
-              className="pet-chat__avatar"
-              src={avatarSrc}
-              alt={avatarName}
-              title={avatarName}
-              draggable={false}
-            />
-            <div className="pet-chat__bubble pet-chat__bubble--assistant pet-chat__bubble--typing" role="status">
-              <LoaderCircle size={15} className="pet-chat__spin" />
-              <span>
-                {modelLoading
-                  ? `正在加载本地模型…（已 ${waitSeconds}s，首次约 1–4 分钟）`
-                  : sendQueue.length > 0
-                    ? `已排队 ${sendQueue.length} 条，等前面回答完就发…`
-                    : queueing
-                    ? `前面还有请求，排队中…（已 ${waitSeconds}s）`
-                    : waitSeconds >= 3
-                    ? `小狗在加载模型或思考，稍等（${waitSeconds}s）`
-                    : thinkingOn
-                      ? "小狗正在思考…"
-                      : t.chat.thinking}
-                {!modelLoading && waitSeconds >= 1 && waitSeconds < 3 ? `（${waitSeconds}s）` : ""}
-              </span>
-              <button
-                type="button"
-                className="pet-chat__stop"
-                title="停止生成"
-                aria-label="停止生成"
-                onClick={stopGeneration}
-              >
-                <Square size={11} strokeWidth={2.4} />
-                停止
-              </button>
-            </div>
-          </div>
-        )}
-        {busy && thinkingOn && waitSeconds >= 3 && !streamingReasoning && (
-          <p className="pet-chat__hint">
-            思考深度：{thinkingLabel}，模型在推理；深度越大首字越慢，可在设置里调到「关」或「浅」加快回复。
-          </p>
-        )}
-        {/* 状态阈值跨越的灰色小字：不写进消息、不发给模型 */}
-        {stateNotices.map((notice, index) => (
-          <p key={`${notice}-${index}`} className="pet-chat__state-notice">
-            {notice}
-          </p>
-        ))}
-      </div>
-
-      {error && (
-        <p className="pet-chat__error" role="alert">
-          <span>{error}</span>
-          {failedPrompt && !busy && (
-            <button type="button" className="pet-chat__retry" onClick={retryFailed}>
-              <RotateCcw size={12} strokeWidth={2.2} />
-              重试
-            </button>
-          )}
-        </p>
-      )}
-
-      {attachments.length > 0 && (
-        <div className="pet-chat__attachments">
-          {attachments.map((item, index) => (
-            <div className="pet-chat__attachment" key={index}>
-              <img src={item.thumb} alt={t.chat.imageAttached(index + 1)} />
-              <button
-                type="button"
-                title={t.chat.imageRemove}
-                aria-label={t.chat.imageRemove}
-                onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
-              >
-                <X size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="pet-chat__composer">
-        <label className="pet-chat__attach" title={t.chat.imageAttach} aria-label={t.chat.imageAttach}>
-          <ImagePlus size={16} strokeWidth={1.9} />
-          <input
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(event) => {
-              void addImages(Array.from(event.currentTarget.files ?? []));
-              event.currentTarget.value = "";
-            }}
-          />
-        </label>
-        <textarea
-          value={draft}
-          rows={2}
-          maxLength={4000}
-          placeholder={t.chat.placeholder}
-          aria-label={t.chat.placeholder}
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          onPaste={(event) => {
-            // 直接 Ctrl+V 粘贴截图 / 复制的图片，不用先存成文件。
-            const items = Array.from(event.clipboardData?.items ?? []);
-            const files = items
-              .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-              .map((item) => item.getAsFile())
-              .filter((file): file is File => Boolean(file));
-            if (files.length > 0) {
-              event.preventDefault();
-              void addImages(files);
-            }
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <button
-          className="pet-chat__send"
-          type="button"
-          disabled={!draft.trim() && attachments.length === 0}
-          title={t.chat.send}
-          aria-label={t.chat.send}
-          onClick={() => void send()}
-        >
-          <Send size={16} strokeWidth={2} />
-        </button>
-      </div>
-      {stickerPreview && (
-        <button
-          type="button"
-          className="pet-chat__sticker-preview"
-          aria-label="关闭表情包预览"
-          onClick={() => setStickerPreview(null)}
-        >
-          <img src={stickerPreview} alt="" />
-        </button>
-      )}    </section>
+    <PetChatView
+      t={t}
+      avatarSrc={avatarSrc}
+      avatarName={avatarName}
+      busy={busy}
+      chatConfig={chatConfig}
+      agentEnabled={agentEnabled}
+      setAgentEnabled={setAgentEnabled}
+      showSkills={showSkills}
+      setShowSkills={setShowSkills}
+      showModelSettings={showModelSettings}
+      setShowModelSettings={setShowModelSettings}
+      messages={messages}
+      clear={clear}
+      thinkingOn={thinkingOn}
+      waitSeconds={waitSeconds}
+      showThinking={showThinking}
+      listRef={listRef}
+      stickerUrl={stickerUrl}
+      stickerWidth={stickerWidth}
+      setStickerWidth={setStickerWidth}
+      setStickerPreview={setStickerPreview}
+      streamingReasoning={streamingReasoning}
+      streamingReply={streamingReply}
+      modelLoading={modelLoading}
+      sendQueue={sendQueue}
+      queueing={queueing}
+      thinkingLabel={thinkingLabel}
+      stopGeneration={stopGeneration}
+      stateNotices={stateNotices}
+      error={error}
+      failedPrompt={failedPrompt}
+      retryFailed={retryFailed}
+      attachments={attachments}
+      setAttachments={setAttachments}
+      addImages={addImages}
+      draft={draft}
+      setDraft={setDraft}
+      send={send}
+      stickerPreview={stickerPreview}
+    />
   );
 }

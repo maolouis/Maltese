@@ -5635,6 +5635,7 @@ function IslandApp({
           );
           try {
             const text = await invoke<string>("local_chat_stream", {
+              source: "proactive",
               requestId,
               baseUrl: config.baseUrl,
               model: config.model,
@@ -5660,6 +5661,7 @@ function IslandApp({
           }
         }
         const reply = await invoke<{ text: string }>("dsh_chat", {
+          source: "proactive",
           message: prompt,
           sessionId: null,
           character: proactiveCharacter,

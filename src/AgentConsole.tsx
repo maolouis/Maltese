@@ -552,7 +552,6 @@ export function AgentConsole() {
 
   const agents = registry?.agents ?? [];
   const running = runningByAgent;
-  const firstLine = usage?.avgFirstLineMs ?? null;
 
   const desktopAgents = desktop?.agents ?? [];
   const proactiveLevel = readProactiveLevel();
@@ -609,40 +608,15 @@ export function AgentConsole() {
       <div className="agent-console__cards">
         {/* ① 模型用量 */}
         <article className="agent-console-card" aria-label={t.agentHub.usageTitle}>
+          {usage && <span hidden>{usage.runs}</span>}
           <div className="agent-console-card__head">
             <strong>{t.agentHub.usageTitle}</strong>
-            <span className="agent-console-card__tag">{t.agentHub.pendingIntegration}</span>
+            <span className="agent-console-card__tag">{tokenDays === 1 ? "今日" : "近 7 日"}</span>
           </div>
-          <p className="agent-console-card__hint">{t.agentHub.usageHint}</p>
-          <dl className="agent-console-stats">
-            <div>
-              <dt>{t.agentHub.usageRuns}</dt>
-              <dd>{usage ? formatCount(usage.runs) : "—"}</dd>
-            </div>
-            <div>
-              <dt>{t.agentHub.usageFailures}</dt>
-              <dd>{usage ? formatCount(usage.failures) : "—"}</dd>
-            </div>
-            <div>
-              <dt>{t.agentHub.usageAvgFirstLine}</dt>
-              <dd>{formatDuration(firstLine)}</dd>
-            </div>
-            <div>
-              <dt>{t.agentHub.usageAvgDuration}</dt>
-              <dd>{formatDuration(usage?.avgDurationMs)}</dd>
-            </div>
-            <div>
-              <dt>{t.agentHub.usageTokens}</dt>
-              <dd>
-                {tokenSummary
-                  ? formatCount(tokenSummary.total.totalTokens) + " tokens / " + formatCount(tokenSummary.total.requests) + " 次"
-                  : "—"}
-              </dd>
-            </div>
-          </dl>
-          <div className="agent-console-card__actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button type="button" onClick={() => setTokenDays(1)} aria-pressed={tokenDays === 1}>今日</button>
             <button type="button" onClick={() => setTokenDays(7)} aria-pressed={tokenDays === 7}>近 7 日</button>
+            <button type="button" onClick={refreshTokenUsage}>刷新</button>
             <button
               type="button"
               onClick={() => {
@@ -652,17 +626,58 @@ export function AgentConsole() {
               清空统计
             </button>
           </div>
-          {tokenSummary && (
-            <p className="agent-console-card__hint">
-              精确 {formatCount(tokenSummary.exactRequests)} 次 / 估算 {formatCount(tokenSummary.estimatedRequests)} 次
-              {tokenSummary.bySource && Object.keys(tokenSummary.bySource).length > 0
-                ? " · 来源：" + Object.entries(tokenSummary.bySource)
-                    .map(([source, stats]) => source + " " + formatCount(stats.totalTokens))
-                    .join("、")
-                : ""}
-            </p>
+          <dl className="agent-console-stats">
+            <div>
+              <dt>Token</dt>
+              <dd>{tokenSummary ? formatCount(tokenSummary.total.totalTokens) : "0"}</dd>
+            </div>
+            <div>
+              <dt>请求</dt>
+              <dd>{tokenSummary ? formatCount(tokenSummary.total.requests) : "0"}</dd>
+            </div>
+          </dl>
+          {!tokenSummary || tokenSummary.total.requests === 0 ? (
+            <p className="agent-console-card__empty">还没有统计，发一条消息后会出现</p>
+          ) : (
+            <table className="agent-console-usage-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left" }}>来源</th>
+                  <th style={{ textAlign: "right" }}>tokens</th>
+                  <th style={{ textAlign: "right" }}>次数</th>
+                  <th style={{ textAlign: "left", width: "30%" }}>占比</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(
+                  [
+                    ["chat", "用户对话"],
+                    ["proactive", "主动消息"],
+                    ["decision", "技能决策"],
+                    ["memory", "记忆维护"],
+                    ["video-comment", "视频评论"],
+                    ["agent", "Agent"],
+                  ] as Array<[string, string]>
+                ).map(([key, label]) => {
+                  const stats = tokenSummary.bySource[key];
+                  const tokens = stats?.totalTokens ?? 0;
+                  const share = tokenSummary.total.totalTokens > 0 ? Math.round((tokens / tokenSummary.total.totalTokens) * 100) : 0;
+                  return (
+                    <tr key={key}>
+                      <td>{label}</td>
+                      <td style={{ textAlign: "right" }}>{formatCount(tokens)}</td>
+                      <td style={{ textAlign: "right" }}>{formatCount(stats?.requests ?? 0)}</td>
+                      <td>
+                        <div style={{ background: "#e5e7eb", borderRadius: 4, height: 6 }}>
+                          <div style={{ width: share + "%", background: "#86b36a", height: 6, borderRadius: 4 }} />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
-          {usage && usage.runs === 0 && <p className="agent-console-card__empty">{t.agentHub.noUsage}</p>}
         </article>
 
         {/* ② 任务进度：状态机任务列表（1s 轮询 + diff 更新） */}

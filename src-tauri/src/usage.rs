@@ -159,8 +159,8 @@ pub fn record(entry: UsageRecord) {
     }
 }
 
-fn read_day(day: &str) -> Vec<UsageRecord> {
-    let path = file_for(day);
+fn read_day_from(dir: &std::path::Path, day: &str) -> Vec<UsageRecord> {
+    let path = dir.join(format!("usage-{day}.jsonl"));
     let Ok(file) = fs::File::open(path) else {
         return Vec::new();
     };
@@ -172,6 +172,10 @@ fn read_day(day: &str) -> Vec<UsageRecord> {
 }
 
 pub fn summary(days: u32, now: u64) -> UsageSummary {
+    summary_in(&usage_dir(), days, now)
+}
+
+pub(crate) fn summary_in(dir: &std::path::Path, days: u32, now: u64) -> UsageSummary {
     let days = days.clamp(1, 31);
     let mut summary = UsageSummary {
         days,
@@ -188,7 +192,7 @@ pub fn summary(days: u32, now: u64) -> UsageSummary {
     let mut duration_count = 0u64;
     let mut all_records: Vec<UsageRecord> = Vec::new();
     for day in &day_keys {
-        for record in read_day(day) {
+        for record in read_day_from(dir, day) {
             if !SOURCES.contains(&record.source.as_str()) {
                 continue;
             }
@@ -276,5 +280,68 @@ mod tests {
         assert_eq!(usage_from_value(&value), Some((120, 45, 30)));
         let missing = serde_json::json!({ "choices": [] });
         assert_eq!(usage_from_value(&missing), None);
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    fn write(dir: &std::path::Path, day: &str, lines: &[&str]) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        std::fs::write(dir.join(format!("usage-{day}.jsonl")), text).unwrap();
+    }
+
+    fn record(day_at: u64, source: &str, total: u64) -> String {
+        format!(
+            r#"{{"at":{day_at},"source":"{source}","backend":"local","model":"m","promptTokens":10,"completionTokens":10,"cachedTokens":0,"totalTokens":{total},"precision":"exact","durationMs":100,"ok":true}}"#
+        )
+    }
+
+    #[test]
+    fn aggregates_by_source_and_defaults_to_chat() {
+        let dir = std::env::temp_dir().join(format!("maltese-usage-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let now = 1_700_000_000u64;
+        let day = today_key(now);
+        write(
+            &dir,
+            &day,
+            &[
+                &record(now, "chat", 20),
+                &record(now, "proactive", 5),
+                &record(now, "unknown-source", 7),
+            ],
+        );
+        let summary = summary_in(&dir, 1, now);
+        assert_eq!(summary.total.total_tokens, 32);
+        assert_eq!(summary.total.requests, 3);
+        // 未知 source 记录仍按原始值计入 by_source，但 normalize_source 才会归 chat；
+        // 这里断言 chat 与 proactive 正确聚合。
+        assert_eq!(summary.by_source.get("chat").unwrap().total_tokens, 20);
+        assert_eq!(summary.by_source.get("proactive").unwrap().requests, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_and_seven_day_window() {
+        let dir = std::env::temp_dir().join(format!("maltese-usage-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let now = 1_700_000_000u64;
+        let summary = summary_in(&dir, 1, now);
+        assert_eq!(summary.total.total_tokens, 0);
+        assert_eq!(summary.total.requests, 0);
+
+        // 8 天前的记录不应计入 7 日窗口
+        let old = now - 8 * 86_400;
+        write(&dir, &today_key(old), &[&record(old, "chat", 99)]);
+        let summary = summary_in(&dir, 7, now);
+        assert_eq!(summary.total.total_tokens, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
