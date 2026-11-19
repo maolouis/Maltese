@@ -73,6 +73,10 @@ pub struct VideoSnapshot {
     pub comment_count: u32,
     /// 其中仅预演的条数。
     pub comment_dry_run_count: u32,
+    /// 最近一条评论（无头/无 UI 场景也能在面板看到）。
+    pub last_comment_text: String,
+    pub last_comment_dry_run: bool,
+    pub last_comment_at: u64,
     pub started_at: Option<u64>,
     pub ended_at: Option<u64>,
     pub last_action_at: Option<u64>,
@@ -105,6 +109,9 @@ impl Default for VideoSnapshot {
             filtered_count: 0,
             comment_count: 0,
             comment_dry_run_count: 0,
+            last_comment_text: String::new(),
+            last_comment_dry_run: false,
+            last_comment_at: 0,
             started_at: None,
             ended_at: None,
             last_action_at: None,
@@ -331,6 +338,9 @@ struct RuntimeState {
     filtered_count: u32,
     comment_count: u32,
     comment_dry_run_count: u32,
+    last_comment_text: String,
+    last_comment_dry_run: bool,
+    last_comment_at: u64,
     current_url: String,
     waiting_for_browser: bool,
     foreground_title: String,
@@ -368,6 +378,9 @@ impl Default for RuntimeState {
             filtered_count: 0,
             comment_count: 0,
             comment_dry_run_count: 0,
+            last_comment_text: String::new(),
+            last_comment_dry_run: false,
+            last_comment_at: 0,
             current_url: String::new(),
             waiting_for_browser: false,
             foreground_title: String::new(),
@@ -694,6 +707,9 @@ impl SessionEngine {
             filtered_count: state.filtered_count,
             comment_count: state.comment_count,
             comment_dry_run_count: state.comment_dry_run_count,
+            last_comment_text: state.last_comment_text.clone(),
+            last_comment_dry_run: state.last_comment_dry_run,
+            last_comment_at: state.last_comment_at,
             started_at: if state.started_at == 0 {
                 None
             } else {
@@ -1687,6 +1703,9 @@ impl SessionEngine {
                                 {
                                     let mut state = lock_state(&self.state);
                                     state.comment_count = state.comment_count.saturating_add(1);
+                                    state.last_comment_text = comment.clone();
+                                    state.last_comment_dry_run = config.comment_dry_run;
+                                    state.last_comment_at = now;
                                     if config.comment_dry_run {
                                         state.comment_dry_run_count =
                                             state.comment_dry_run_count.saturating_add(1);

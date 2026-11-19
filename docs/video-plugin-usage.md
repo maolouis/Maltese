@@ -277,3 +277,12 @@ COMMENT_POSTED 或 COMMENT_SKIPPED（no-input/no-button/comment-cdp）。
 - 实机验证（session ili-20261119-c41497）：closed=1 kept_port=9334 alive=[9333,9334]；
   修复后只剩 9334；ITEM_COLLECTED 出现 3 个不同视频：
   BV15es76gEgL、BV1rysE6HEFZ、BV1464y1F7pZ，SESSION_STALLED 未触发。
+
+### 评论气泡双形态（2026-11-19）
+
+showCloudBubble 只在 mode === "collapsed" 时显示，用户操作采集时面板是展开态 → 评论气泡看不到。
+现在两种形态都有反馈：
+- 展开态：live snapshot 新增 lastCommentText/lastCommentDryRun/lastCommentAt，面板状态区显示
+  「小狗评论（预演）：…」，不需要气泡也能看到；
+- 收起态：ideo-comment-bubble 事件触发云朵气泡，且评论属于功能反馈，**不受 bubbleOn 限制**；
+- 调试：事件与 showCloudBubble 入口都加了 console.debug（[video-comment-bubble] / [cloud-bubble]）。

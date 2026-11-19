@@ -114,6 +114,9 @@ export type VideoSnapshot = {
   commentCount: number;
   commentDryRunCount: number;
   commentDryRun: boolean;
+  lastCommentText: string;
+  lastCommentDryRun: boolean;
+  lastCommentAt: number;
   startedAt: number | null;
   endedAt: number | null;
   lastActionAt: number | null;

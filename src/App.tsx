@@ -7183,8 +7183,10 @@ function IslandApp({
   }, [scheduleBubbleHide]);
 
   // 统一的云朵气泡出口：收起态才浮出；被自动缩边（tucked）时先悄悄把小狗露出来。
-  const showCloudBubble = useCallback((title: string, body: string, image?: string, bubbleKind: "pet" | "system" = "system") => {
-    if (!isTauri() || !settings.bubbleOn || mode !== "collapsed") {
+  const showCloudBubble = useCallback((title: string, body: string, image?: string, bubbleKind: "pet" | "system" = "system", force = false) => {
+    console.debug("[cloud-bubble]", { title, mode, bubbleOn: settings.bubbleOn, force });
+    if (!isTauri() || mode !== "collapsed" || (!force && !settings.bubbleOn)) {
+      console.debug("[cloud-bubble] skip", { mode, bubbleOn: settings.bubbleOn, force });
       return;
     }
     if (isTucked) {
@@ -9456,10 +9458,12 @@ function IslandApp({
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     void listen<{ kind?: string; text?: string }>("video-comment-bubble", (event) => {
+      console.debug("[video-comment-bubble]", event.payload);
       const text = event.payload?.text?.trim();
       if (!text) return;
       const title = event.payload?.kind === "dry-run" ? "小狗评论（预演）" : "小狗评论";
-      showCloudBubble(title, text, undefined, "pet");
+      // 评论是功能反馈，不受 bubbleOn 限制；展开态由面板行显示。
+      showCloudBubble(title, text, undefined, "pet", true);
     }).then((cleanup) => {
       if (cancelled) cleanup();
       else unlisten = cleanup;
