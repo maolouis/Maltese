@@ -243,3 +243,14 @@ src/plugins/video/commentPolicy.ts（纯函数、可单测），约束：
 
 当前状态：策略/单测/文案已就绪；**真实发布尚未接线**（需要用户知情后手动验证一次），
 接线计划见 session.rs 的 post_comment 调用点（dry-run 只生成+日志+气泡，不发送）。
+
+### 自动评论配置字段（2026-11-19 预留）
+
+VideoConfig 新增 commentDryRun（默认 **true**，兼容旧配置用 serde default）；
+VideoConfigPatch 同步支持。开关语义：utoComment（默认 false，接线时改 true）控制是否评论，
+commentDryRun 控制是否只生成不发送。
+
+**当前接线状态**：策略层（commentPolicy.ts）与配置字段已就绪；session.rs 里尚未调用
+生成/发布/气泡，因此用户侧还看不到自动评论。接线顺序：ITEM_COLLECTED → canCommentNow →
+local_chat 生成 → sanitize → dry-run 时写 COMMENT_DRY_RUN + 气泡 / 否则 post_comment →
+COMMENT_POSTED 或 COMMENT_SKIPPED（no-input/no-button/comment-cdp）。

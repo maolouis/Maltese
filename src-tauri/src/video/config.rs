@@ -46,6 +46,10 @@ fn default_comment_character() -> String {
     "xiaobai".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoConfig {
@@ -59,6 +63,9 @@ pub struct VideoConfig {
     pub model_summary: bool,
     /// 允许小狗在已打开的视频详情页按内容自动发一条评论。
     pub auto_comment: bool,
+    /// 仅预演：生成评论但**不真正发送**（默认 true，等用户验收后再关）。
+    #[serde(default = "default_true")]
+    pub comment_dry_run: bool,
     pub auto_like: bool,
     pub auto_favorite: bool,
     pub auto_like_daily_limit: u32,
@@ -78,6 +85,7 @@ impl Default for VideoConfig {
             channel_priority: ChannelPriority::Auto,
             model_summary: true,
             auto_comment: false,
+            comment_dry_run: true,
             auto_like: false,
             auto_favorite: false,
             auto_like_daily_limit: 10,
@@ -101,6 +109,7 @@ pub struct VideoConfigPatch {
     pub channel_priority: Option<ChannelPriority>,
     pub model_summary: Option<bool>,
     pub auto_comment: Option<bool>,
+    pub comment_dry_run: Option<bool>,
     /// 当前聊天模型配置，仅随启动请求传递，不写入 VideoConfig。
     pub comment_model: Option<VideoCommentModelConfig>,
     pub auto_like: Option<bool>,
@@ -164,6 +173,9 @@ pub fn apply_patch(base: &VideoConfig, patch: &VideoConfigPatch) -> Result<Video
     }
     if let Some(value) = patch.auto_comment {
         next.auto_comment = value;
+    }
+    if let Some(value) = patch.comment_dry_run {
+        next.comment_dry_run = value;
     }
     if let Some(value) = patch.auto_like {
         next.auto_like = value;
