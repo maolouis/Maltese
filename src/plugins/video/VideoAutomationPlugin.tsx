@@ -15,6 +15,7 @@ import { useVideoPluginState } from "./useVideoPluginState";
 import { VideoChannelCard } from "./VideoChannelCard";
 import { VideoDigestList } from "./VideoDigestList";
 import { VideoTasteCard } from "./VideoTasteCard";
+import { XhsDraftPanel } from "./XhsDraftPanel";
 import { accountStatusLabel } from "./videoPanelLogic";
 import {
   browserStatusText,
@@ -308,6 +309,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           >
             <option value="bilibili">B站推荐流</option>
             <option value="douyin">抖音推荐流（实验）</option>
+            <option value="xiaohongshu">小红书（只读采集）</option>
           </select>
         </label>
         <span className="video-automation__login" title={selectedAccount ? "使用独立浏览器 profile" : "临时观看，不绑定账号档案"}>
@@ -343,7 +345,13 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         onLoadSessions={() => void video.loadSessions()}
       />
 
-      <VideoTasteCard taste={video.taste} busy={running} onReset={video.resetTaste} />
+      {/* 口味偏好收进折叠块：首屏只留状态条、平台登录和小结，界面更简洁。 */}
+      <details className="video-automation__taste-fold">
+        <summary>视频口味（聊天里说的偏好）</summary>
+        <VideoTasteCard taste={video.taste} busy={running} onReset={video.resetTaste} />
+      </details>
+
+      {provider === "xiaohongshu" && <XhsDraftPanel />}
 
       {/* 高级设置：参数 / 账号档案 / 自检与诊断 / 清空数据 */}
       <details className="video-automation__advanced">

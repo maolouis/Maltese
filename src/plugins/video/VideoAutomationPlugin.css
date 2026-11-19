@@ -1202,3 +1202,213 @@
   border-color: rgba(255, 255, 255, 0.4);
   color: #ffffff;
 }
+
+/* —— 2026-11-19 可读性 + 简洁化 ——
+   1) 小结区块（.video-section）此前按深色面板配色写了白字，但岛内视频页是浅色
+      卡片，白字铺浅底就是「看不清」；统一改成深字浅底。
+   2) 字号统一抬到 14–15px，次要说明 13px，不再出现 10–11px 小字。
+   3) 口味卡片折叠进 details，首屏只留状态条 / 平台登录 / 小结。 */
+.video-automation,
+.island__expanded .video-automation {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #1d2a26;
+}
+
+.video-automation p,
+.video-automation li,
+.video-automation label,
+.video-automation summary,
+.video-automation figcaption,
+.video-automation__login,
+.video-automation__provider,
+.video-automation__params label {
+  font-size: 14px !important;
+  color: #1d2a26 !important;
+}
+
+.video-automation__muted,
+.island__expanded .video-automation__muted,
+.video-section__meta,
+.island__expanded .video-section__meta {
+  font-size: 13px !important;
+  color: #3b4a44 !important;
+}
+
+.video-automation__steps,
+.island__expanded .video-automation__steps {
+  font-size: 13.5px !important;
+  color: #3b4a44 !important;
+}
+
+.video-automation__phase,
+.island__expanded .video-automation__phase {
+  font-size: 16px !important;
+  color: #14352a !important;
+}
+
+.video-automation button,
+.video-automation select,
+.video-automation input,
+.video-automation textarea {
+  font-size: 14px !important;
+  color: #16241f !important;
+}
+
+.video-automation button {
+  min-height: 34px;
+  padding: 6px 14px;
+}
+
+.video-automation select,
+.video-automation input[type="number"] {
+  min-height: 34px;
+}
+
+.video-automation details > summary,
+.island__expanded .video-automation details > summary {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #14352a !important;
+  padding: 8px 0;
+}
+
+.video-automation__error-code {
+  font-size: 12.5px !important;
+}
+
+/* 小结区块：浅色卡片上的深色标题 */
+.video-section__head,
+.island__expanded .video-section__head {
+  background: #ffffff;
+  border: 1px solid #d8e3dc;
+}
+
+.video-section__head:hover,
+.video-section__head:focus-visible,
+.island__expanded .video-section__head:hover,
+.island__expanded .video-section__head:focus-visible {
+  background: #f2f8f4;
+  border-color: #9dc4ac;
+}
+
+.video-section__title,
+.island__expanded .video-section__title {
+  font-size: 15px !important;
+  font-weight: 700;
+  color: #14352a !important;
+}
+
+.video-section__toggle,
+.island__expanded .video-section__toggle {
+  font-size: 13px !important;
+  background: #eaf4ee;
+  border-color: #9dc4ac;
+  color: #1f4d36 !important;
+}
+
+.video-section__extra .video-automation__link {
+  font-size: 13px !important;
+}
+
+/* 口味卡片：折叠后只留一行标题，展开才看标签和「恢复默认口味」 */
+.video-automation__taste-fold {
+  border-top: 1px solid #e2eae5;
+  margin-top: 6px;
+}
+
+.video-automation__taste-fold .video-taste {
+  border: 0;
+  padding: 4px 0 0;
+  background: transparent;
+}
+
+.video-automation__taste-fold .assistant-panel__label {
+  display: none;
+}
+
+/* 小红书图文草稿（MVP2：只准备文案，配图用平台文生图，人工发布） */
+.xhs-draft {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 94, 76, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.xhs-draft__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.xhs-draft__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.xhs-draft__body {
+  display: grid;
+  gap: 6px;
+}
+
+.xhs-draft__label {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: #1f4d36;
+}
+
+.xhs-draft__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: #143324;
+}
+
+.xhs-draft__text {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(63, 122, 95, 0.08);
+  color: #2b4a3b;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.xhs-draft__tags {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #1f4d36;
+}
+
+.island__expanded .xhs-draft {
+  background: rgba(22, 32, 27, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.island__expanded .xhs-draft__label,
+.island__expanded .xhs-draft__title,
+.island__expanded .xhs-draft__tags {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.island__expanded .xhs-draft__text {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.86);
+}
