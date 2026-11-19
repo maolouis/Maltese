@@ -39,6 +39,7 @@ import {
 } from "./chatGuard";
 import { buildChatVitalsContext, loadVitalsSummary, type VitalsSummary } from "./petContext";
 import { RECENT_TURNS, buildMemoryContext, loadMemory, loadMemoryDepth } from "./petMemory";
+import { scheduleMemoryMaintenance } from "./petMemoryMaintenance";
 import { PetStateBar } from "./PetStateBar";
 import {
   isStickerId,
@@ -883,6 +884,13 @@ export function PetChat() {
         });
       }
       persist([...next, ...appended]);
+      // 记忆维护：只在 idle ≥30s 且没有请求在跑时执行；任何失败都静默放弃。
+      scheduleMemoryMaintenance({
+        messages: [...next, ...appended].map((item) => ({ role: item.role, text: item.text })),
+        isBusy: () => activeRequestRef.current !== null || cancelRef.current,
+        lastUserAt: () => Date.now() - 30_000,
+        callModel: async (prompt) => (await askAgent(prompt, 256, 0.3)) ?? "",
+      });
       setStreamingReply("");
       setStreamingReasoning("");
     } catch (reason) {

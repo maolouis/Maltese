@@ -415,3 +415,14 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
 - **存储与隐私**：localStorage 键 maltese-pet-memory（facts/summaries/updatedAt），设置页有「清空记忆」（只清摘要与事实，不动聊天记录）；深度存 maltese-pet-memory-depth。
 - **不抢单槽位**：摘要/事实抽取只在聊天 idle ≥30s 时执行，失败即放弃（canRunMaintenance）。
 - 单测：	ests/pet-memory.test.mjs（token 估算、compact 阈值、事实去重/上限、摘要裁剪、注入顺序与预算、清空、维护窗口）。
+
+### 记忆维护（摘要 / 事实抽取）
+
+- src/petMemoryMaintenance.ts：uildMaintenancePrompt（最近 16 条、要求严格 JSON）、
+  parseMaintenanceReply（容错 `json` 围栏/前后解释、摘要 ≤200 字、事实 ≤3 条、confidence 0–1）、
+  pplyMaintenance（当日摘要 + 3 天裁剪 + 事实按 key 合并上限 20）。
+- **调度**：scheduleMemoryMaintenance 在每次助手回复落盘后调用；默认延迟 30s，到点复核
+  canRunMaintenance(now,lastUserAt,busy)，若 30s 内有新消息或请求在跑则直接放弃（不抢聊天单槽位）。
+  模型调用复用 skAgent（按当前后端 local/dsh），失败/超时静默降级（记忆不更新，聊天照常）。
+- 单测：	ests/pet-memory-maintenance.test.mjs（prompt 内容、坏 JSON/围栏解析、摘要与事实上限、
+  当日摘要与旧摘要淘汰、busy/近期消息/未到 idle 不调用模型）。
