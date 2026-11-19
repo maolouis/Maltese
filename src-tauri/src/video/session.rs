@@ -1304,6 +1304,7 @@ impl SessionEngine {
         let mut current_video_url = String::new();
         // 刚导航到的视频页 URL：每轮采样前用它复核 target 是否还停在视频页。
         let mut expect_video_url = String::new();
+        let mut non_video_rounds = 0u32;
         let mut last_collect_key = String::new();
 
         loop {
@@ -1420,8 +1421,44 @@ impl SessionEngine {
                         }
                     }
                 }
-                // A2：每轮采集前复核 target。刚导航过视频页却读到非 /video/ 页面 → 重选 page/重导航。
+                // A2：每轮采集前复核 target；同时无条件记录 TARGET_HEALTH（读了哪个 URL/title）。
                 if let Some(cdp) = session.as_mut() {
+                    let health_url = cdp.current_url().await;
+                    let health_title = cdp
+                        .evaluate("document.title", EVALUATE_TIMEOUT)
+                        .await
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_string))
+                        .unwrap_or_default();
+                    self.store.log(DiagnosticEntry {
+                        at: now,
+                        session_id: Some(self.snapshot().session_id),
+                        channel: Some(ChannelType::Cdp),
+                        level: "info".to_string(),
+                        code: "TARGET_HEALTH".to_string(),
+                        message: format!(
+                            "url={} title={} target={} expect={}",
+                            health_url,
+                            health_title,
+                            cdp.page_id(),
+                            expect_video_url
+                        ),
+                    });
+                    if expect_video_url.is_empty() || !health_url.contains("/video/") {
+                        non_video_rounds = if health_url.contains("/video/") { 0 } else { non_video_rounds.saturating_add(1) };
+                        if non_video_rounds >= 2 {
+                            non_video_rounds = 0;
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: Some(ChannelType::Cdp),
+                                level: "warn".to_string(),
+                                code: "BROWSER_RESTART".to_string(),
+                                message: format!("reason=non_video_url url={}", health_url),
+                            });
+                            self.close_browser_instance();
+                        }
+                    }
                     if !expect_video_url.is_empty() {
                         let before = cdp.current_url().await;
                         if !before.contains("/video/") {
@@ -1792,7 +1829,7 @@ impl SessionEngine {
                                                 channel: Some(ChannelType::Cdp),
                                                 level: "info".to_string(),
                                                 code: "COMMENT_POSTED".to_string(),
-                                                message: format!("url={} text={} ok={}", url, comment, report.ok),
+                                                message: format!("url={} text={} ok={} verified=false", url, comment, report.ok),
                                             });
                                             let _ = app.emit(
                                                 "video-comment-bubble",
@@ -1883,6 +1920,23 @@ impl SessionEngine {
                                 current_video_url = to_url.clone();
                                 // 切换视频后同步更新期望 URL，避免下一轮 repick 回到旧视频。
                                 expect_video_url = to_url.clone();
+                                // 立即复核新页面；不是 /video/ 就当场重导航（不等下一轮）。
+                                let actual = cdp.current_url().await;
+                                if !actual.contains("/video/") {
+                                    let retried_ok = cdp.navigate(&expect_video_url).await.is_ok();
+                                    let retried = cdp.current_url().await;
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(self.snapshot().session_id),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: "warn".to_string(),
+                                        code: "ADVANCE_RENAV".to_string(),
+                                        message: format!(
+                                            "at={} expect={} renav_ok={} retried={}",
+                                            actual, expect_video_url, retried_ok, retried
+                                        ),
+                                    });
+                                }
                                 self.store.log(DiagnosticEntry {
                                     at: now,
                                     session_id: Some(self.snapshot().session_id),

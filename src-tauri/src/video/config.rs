@@ -85,7 +85,7 @@ impl Default for VideoConfig {
             channel_priority: ChannelPriority::Auto,
             model_summary: true,
             auto_comment: true,
-            comment_dry_run: true,
+            comment_dry_run: false,
             auto_like: false,
             auto_favorite: false,
             auto_like_daily_limit: 10,
