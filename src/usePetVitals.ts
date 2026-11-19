@@ -108,6 +108,8 @@ export function usePetVitals(options: {
   focusRef.current = focusActive;
   /** 已结算到哪条聊天消息。 */
   const lastChatAtRef = useRef(0);
+  /** 上次处理过的视频采集条数：只在 itemCount 增长时拉 session（减少 IPC，降低卡顿风险）。 */
+  const lastVideoItemCountRef = useRef(0);
 
   const settle = useCallback((now: number) => {
     setVitals((previous) => tickVitals(previous, now, { focusActive: focusRef.current }));
@@ -165,7 +167,13 @@ export function usePetVitals(options: {
           itemCount?: number;
           sessionId?: string;
         }>("video_get_snapshot");
-        if (!snapshot?.running || !snapshot.sessionId || !(Number(snapshot.itemCount) > 0)) return;
+        if (!snapshot?.running || !snapshot.sessionId || !(Number(snapshot.itemCount) > 0)) {
+          lastVideoItemCountRef.current = 0;
+          return;
+        }
+        // 条数没变就不重复拉 session（视频插件的 snapshot 是 2s 轮询的）。
+        if (Number(snapshot.itemCount) <= lastVideoItemCountRef.current) return;
+        lastVideoItemCountRef.current = Number(snapshot.itemCount);
         const session = await invoke<{ items?: Array<{ canonicalUrl?: string | null }> }>(
           "video_get_session",
           { sessionId: snapshot.sessionId },
