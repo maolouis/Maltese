@@ -1881,6 +1881,8 @@ impl SessionEngine {
                                 advance_failures = 0;
                                 let to_url = outcome.final_url.clone();
                                 current_video_url = to_url.clone();
+                                // 切换视频后同步更新期望 URL，避免下一轮 repick 回到旧视频。
+                                expect_video_url = to_url.clone();
                                 self.store.log(DiagnosticEntry {
                                     at: now,
                                     session_id: Some(self.snapshot().session_id),

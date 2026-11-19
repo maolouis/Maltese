@@ -286,3 +286,17 @@ showCloudBubble 只在 mode === "collapsed" 时显示，用户操作采集时面
   「小狗评论（预演）：…」，不需要气泡也能看到；
 - 收起态：ideo-comment-bubble 事件触发云朵气泡，且评论属于功能反馈，**不受 bubbleOn 限制**；
 - 调试：事件与 showCloudBubble 入口都加了 console.debug（[video-comment-bubble] / [cloud-bubble]）。
+
+### 采集稳定性（2026-11-19 继续加固）
+
+- 采集会自动纠正页面：每轮采样前校验 location.href，若不在 /video/ 就按最近导航的视频页
+  TARGET_REPICK（重选 page + bringToFront + 必要时重导航），切换视频后同步更新期望 URL；
+- 多实例自动纠正：每 10s 探测 9333–9338，多于一个就关掉多余的并写 BROWSER_ENFORCED_SINGLE；
+- 卡住可见：30s 没有采集变化 → SESSION_STALLED，面板显示中文原因并停止本轮，不会让用户干等。
+
+### 抖音（douyin）现状
+
+抖音目前仍是**通用适配**（走同一套 feed 导航/采集/评论），尚未补齐专用能力：
+is_video_page 未支持 /note/<id>；首页瀑布流/登录弹窗/验证码的选择器没有专门处理；
+评论输入框/发送按钮选择器仍是 B 站为主；channelCapability 未按抖音给出真实能力说明。
+当前行为：能打开抖音首页并尝试导航/采集，但稳定性与评论不支持，UI 仍标注为实验特性。
