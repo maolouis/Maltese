@@ -7185,6 +7185,23 @@ function IslandApp({
   // 统一的云朵气泡出口：收起态才浮出；被自动缩边（tucked）时先悄悄把小狗露出来。
   const showCloudBubble = useCallback((title: string, body: string, image?: string, bubbleKind: "pet" | "system" = "system", force = false) => {
     console.debug("[cloud-bubble]", { title, mode, bubbleOn: settings.bubbleOn, force });
+    // 取证：记录 showCloudBubble 被调用/被拦截时五个关键值。
+    try {
+      window.localStorage.setItem(
+        "maltese-cloud-bubble-debug",
+        JSON.stringify({
+          at: Date.now(),
+          title,
+          mode,
+          isTucked,
+          bubbleOn: settings.bubbleOn,
+          force,
+          blocked: !isTauri() || mode !== "collapsed" || (!force && !settings.bubbleOn),
+        }),
+      );
+    } catch {
+      // 忽略
+    }
     if (!isTauri() || mode !== "collapsed" || (!force && !settings.bubbleOn)) {
       console.debug("[cloud-bubble] skip", { mode, bubbleOn: settings.bubbleOn, force });
       return;
@@ -7235,6 +7252,8 @@ function IslandApp({
   const lastProactiveChatAt = useRef(0);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  /** 展开态收到的评论气泡先暂存，等岛收起后再显示（点自检时面板必然是展开的）。 */
+  const pendingCommentBubbleRef = useRef<{ title: string; text: string } | null>(null);
   const mediaRef = useRef(mediaState);
   mediaRef.current = mediaState;
   // 状态模式用：上一次的情境、情境开始时间、上次说过的情境。
@@ -9460,8 +9479,31 @@ function IslandApp({
     void listen<{ kind?: string; text?: string }>("video-comment-bubble", (event) => {
       console.debug("[video-comment-bubble]", event.payload);
       const text = event.payload?.text?.trim();
+      // 事件到达取证：无论气泡是否显示，都把 payload 写进 localStorage。
+      try {
+        window.localStorage.setItem(
+          "maltese-last-comment-bubble",
+          JSON.stringify({
+            at: Date.now(),
+            eventKind: event.payload?.kind ?? "",
+            eventText: text ?? "",
+            mode,
+            isTucked,
+            bubbleOn: settings.bubbleOn,
+          }),
+        );
+      } catch {
+        // 忽略
+      }
       if (!text) return;
-      const title = event.payload?.kind === "dry-run" ? "小狗评论（预演）" : "小狗评论";
+      const title = event.payload?.kind === "dry-run" || event.payload?.kind === "selftest"
+        ? "小狗评论（预演）"
+        : "小狗评论";
+      // 点自检时面板必然是展开态：先暂存，等岛收起后再弹气泡（否则展态永远不显示）。
+      if (mode === "expanded") {
+        pendingCommentBubbleRef.current = { title, text };
+        return;
+      }
       // 评论是功能反馈，不受 bubbleOn 限制；展开态由面板行显示。
       showCloudBubble(title, text, undefined, "pet", true);
     }).then((cleanup) => {
@@ -9472,7 +9514,15 @@ function IslandApp({
       cancelled = true;
       unlisten?.();
     };
-  }, [showCloudBubble]);
+  }, [showCloudBubble, mode, isTucked, settings.bubbleOn]);
+  // 岛收起后补弹「暂存的评论气泡」。
+  useEffect(() => {
+    if (mode !== "collapsed") return;
+    const pending = pendingCommentBubbleRef.current;
+    if (!pending) return;
+    pendingCommentBubbleRef.current = null;
+    showCloudBubble(pending.title, pending.text, undefined, "pet", true);
+  }, [mode, showCloudBubble]);
   // 设置窗口里的「试一下联动」把主狗那句转给主窗口显示（预览可能从设置窗口点）。
   useEffect(() => {
     if (!isTauri()) return;

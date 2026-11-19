@@ -683,6 +683,14 @@ impl SessionEngine {
     /// 自检：把一条评论写进 live snapshot 并发气泡事件（不依赖采集是否成功）。
     pub fn selftest_comment(&self, app: &AppHandle, text: &str) {
         let now = now_seconds();
+        self.store.log(DiagnosticEntry {
+            at: now,
+            session_id: Some(self.snapshot().session_id),
+            channel: None,
+            level: "info".to_string(),
+            code: "COMMENT_SELFTEST".to_string(),
+            message: format!("invoked text={}", text),
+        });
         {
             let mut state = lock_state(&self.state);
             state.last_comment_text = text.to_string();
@@ -1294,6 +1302,8 @@ impl SessionEngine {
         let mut login_risk_logged = false;
         let mut last_advance_at = 0u64;
         let mut current_video_url = String::new();
+        // 刚导航到的视频页 URL：每轮采样前用它复核 target 是否还停在视频页。
+        let mut expect_video_url = String::new();
         let mut last_collect_key = String::new();
 
         loop {
@@ -1410,23 +1420,44 @@ impl SessionEngine {
                         }
                     }
                 }
-                // A2：每轮采集前复核 target。已有视频上下文却读到非 /video/ 页面 → 重选 page。
+                // A2：每轮采集前复核 target。刚导航过视频页却读到非 /video/ 页面 → 重选 page/重导航。
                 if let Some(cdp) = session.as_mut() {
-                    if !current_video_url.is_empty() {
+                    if !expect_video_url.is_empty() {
                         let before = cdp.current_url().await;
                         if !before.contains("/video/") {
-                            let from = if before.is_empty() { "(empty)" } else { before.as_str() };
+                            let from = if before.is_empty() { "(empty)".to_string() } else { before.clone() };
+                            let mut after = before.clone();
                             if cdp.reconnect().await.is_ok() {
-                                let after = cdp.current_url().await;
-                                self.store.log(DiagnosticEntry {
-                                    at: now,
-                                    session_id: Some(self.snapshot().session_id),
-                                    channel: Some(ChannelType::Cdp),
-                                    level: "warn".to_string(),
-                                    code: "TARGET_REPICK".to_string(),
-                                    message: format!("from={} to={}", from, after),
-                                });
+                                after = cdp.current_url().await;
                             }
+                            if !after.contains("/video/") {
+                                let target = expect_video_url.clone();
+                                if cdp.navigate(&target).await.is_ok() {
+                                    after = cdp.current_url().await;
+                                }
+                            }
+                            self.store.log(DiagnosticEntry {
+                                at: now,
+                                session_id: Some(self.snapshot().session_id),
+                                channel: Some(ChannelType::Cdp),
+                                level: if after.contains("/video/") { "info" } else { "warn" }.to_string(),
+                                code: "TARGET_REPICK".to_string(),
+                                message: format!(
+                                    "from={} to={} expect={} alive={:?}",
+                                    from,
+                                    after,
+                                    expect_video_url,
+                                    {
+                                        let mut ports = Vec::new();
+                                        for candidate in 9333u16..=9338 {
+                                            if port_alive(candidate).await {
+                                                ports.push(candidate);
+                                            }
+                                        }
+                                        ports
+                                    }
+                                ),
+                            });
                         }
                     }
                 }
@@ -1542,6 +1573,7 @@ impl SessionEngine {
                             if let Some(outcome) = nav_result.take() {
                                 if outcome.ok {
                                     nav_failures = 0;
+                                    expect_video_url = outcome.final_url.clone();
                                     self.store.log(DiagnosticEntry {
                                         at: now,
                                         session_id: Some(state.session_id.clone()),
@@ -1617,6 +1649,7 @@ impl SessionEngine {
                                             if current_video_url.is_empty() {
                                                 current_video_url = url.clone();
                                             }
+                                            expect_video_url = url.clone();
                                             self.store.log(DiagnosticEntry {
                                                 at: now,
                                                 session_id: Some(state.session_id.clone()),
