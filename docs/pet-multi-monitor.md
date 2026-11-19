@@ -285,3 +285,37 @@ export function cornerRect(monitor, logicalWidth, logicalHeight, corner: "tl" | 
 **已知自动化限制**：设置里的「小狗屏幕 / Bongo 屏幕」是 HTML `<select>`，WebView2 的 UIA 会把 option
 暴露成 `ListItem`，但**不支持 `SelectionItemPattern`**，所以 UIA 自动化无法直接选；鼠标点击 + 方向键/Enter
 可以正常改（自动化脚本用这个兜底）。
+
+## 13. 启动位置恢复：退出即快照、启动先恢复矩形（2026-11-19 P0）
+
+**问题**：应用重启后小狗初始位置没按用户设置（反复修「锚点来源」仍复现）。
+
+**根因**：启动时窗口位置依赖「设置解析链路」（前端 localStorage custom_position / islandScreen 偏好 /
+lockCorner / apply_stage_geometry 默认锚点）。任何一环在启动顺序里未就绪，窗口就先落默认锚点；
+即使后来收到 set_island_interaction，也会被再次几何重算成默认位置（P0 第三次复现）。
+
+**修法（确定性快照）**：
+- 每次**几何落定**（set_island_interaction / 拖拽结束 / 锁角 / 切屏 / 缩边唤醒后）把最终物理矩形
+  `(x,y,w,h,mode,monitor指纹,scale)` 原子写盘（临时文件 + rename）到 `E:\MalteseData\island-rect.json`
+  （不可写回退 `%APPDATA%\com.maolouis.maltese`），同一矩形去重；应用正常退出时再写一次。
+- 启动在 `show_island` 之前读该文件并 **直接 set_window_rect_atomic**：
+  - 显示器指纹仍存在 → 逐像素恢复（含目标屏 scale 换算），不再走默认锚点；
+  - 指纹不存在（拔屏/换显示器）→ 用最近显示器 work_area 夹取后落位（`STARTUP_RESTORE_CLAMP`）；
+  - 文件缺失/损坏 → 才回落 custom_position → lockCorner → 默认。
+- 启动后 **3s 内** `STARTUP_RESTORED` 窗口期：`apply_stage_geometry` / `ensure_island_on_screen` 的
+  **收起态重算直接跳过**（`STARTUP_SKIP_RECALC reason=startup_window`），避免先恢复对又被重算覆盖；3s 后恢复正常。
+- 日志：`STARTUP_RESTORE source=file rect=… monitor=… scale=… mode=… ok=…`、
+  `STARTUP_RESTORE_CLAMP from=… to=… monitor=…`、`STARTUP_SKIP_RECALC reason=startup_window`。
+- 单测（`src-tauri/src/island_rect_store.rs`）：原子写/读回一致、临时文件不残留、损坏/哨兵矩形容错、
+  拔屏后夹取到工作区。
+
+**实机（本机双屏）**：
+
+| 场景 | 退出前矩形 | 重启后矩形 | 日志 |
+| --- | --- | --- | --- |
+| 副屏右下角 | `-258,855,259,221` | `-258,855,259,221`（逐像素一致） | `STARTUP_RESTORE … monitor=\\.\DISPLAY1… ok=true` |
+| 主屏左上角 | `12,11,259,221` | `12,11,259,221` | `STARTUP_RESTORE … DISPLAY2 ok=true` |
+| 任意拖动位置 | `584,540,259,221` | `584,540,259,221` | `STARTUP_RESTORE … DISPLAY2 ok=true` |
+| 拔掉副屏后重启 | 记录文件仍指向 `DISPLAY1 (-800,400)` | `0,400,259,221`（夹进主屏可见区） | `STARTUP_RESTORE_CLAMP from=(-800,400,259,221) to=(0,400) monitor=DISPLAY2` + `ok=false` |
+
+配图/复跑脚本：`work/startup-restore.ps1`、`work/sr-*.log`。

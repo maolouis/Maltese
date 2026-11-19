@@ -2,6 +2,7 @@ mod activity;
 mod clipboard_history;
 mod netease;
 mod desktop_extras;
+mod island_rect_store;
 mod desktop_icons;
 mod web_protocol;
 mod dsh_api;
@@ -742,6 +743,7 @@ fn set_island_interaction(
     }
     let glass = apply_glass_material(&window, state);
     ensure_island_on_screen(&window);
+    persist_island_snapshot(&app);
     glass
 }
 
@@ -959,6 +961,8 @@ fn remember_settled_island_rect(window: &WebviewWindow) {
     if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
         *slot = Some(rect);
     }
+    // 顺带写「退出后启动恢复」用的快照（同一矩形会去重）。
+    persist_island_snapshot(window.app_handle());
 }
 
 /// 检测到最小化：冻结真实矩形（重复的 Moved/Resized 事件不会覆盖第一次的快照）。
@@ -1017,11 +1021,149 @@ fn sync_minimize_geometry(window: &WebviewWindow) {
 
 // 保险：几何应用后窗口如果完全跑到工作区之外（多屏切换 / 异常位置），
 // 清掉自定义位置、回到默认锚点并显示，避免“点一下小狗就整个不见了”。
+// ---------------------------------------------------------------------------
+// 启动恢复：退出/几何落定时把最终矩形写盘，启动先按矩形恢复（不依赖设置解析链路）
+// ---------------------------------------------------------------------------
+static STARTUP_RESTORED: AtomicBool = AtomicBool::new(false);
+static STARTUP_RESTORE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// 上次落盘的矩形：同一矩形不重复写盘（几何事件很频繁）。
+static LAST_PERSISTED_RECT: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
+    std::sync::Mutex::new(None);
+
+fn now_unix_millis() -> u64 {
+    u64::try_from(current_unix_millis()).unwrap_or_default()
+}
+
+fn startup_restore_active() -> bool {
+    STARTUP_RESTORED.load(Ordering::SeqCst) && now_unix_millis() < STARTUP_RESTORE_UNTIL_MS.load(Ordering::SeqCst)
+}
+
+fn monitor_fingerprint_of(monitor: &Monitor) -> String {
+    monitor_full_key(
+        monitor.name().map(|name| name.as_str()).unwrap_or(""),
+        monitor.size().width,
+        monitor.size().height,
+        monitor.position().x,
+        monitor.position().y,
+    )
+}
+
+/// 把当前窗口矩形落盘（几何落定 / 拖拽结束 / 锁角 / 切屏 / 缩边唤醒 / 退出时调用）。
+fn persist_island_snapshot(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    if size.width < MIN_SANE_ISLAND_SIZE || size.height < MIN_SANE_ISLAND_SIZE {
+        return;
+    }
+    if is_sentinel_window_position(position.x, position.y) {
+        return;
+    }
+    let rect = (position.x, position.y, size.width, size.height);
+    if let Ok(slot) = LAST_PERSISTED_RECT.lock() {
+        if *slot == Some(rect) {
+            return;
+        }
+    }
+    let monitor = window.current_monitor().ok().flatten();
+    let scale = monitor.as_ref().map(|value| value.scale_factor()).unwrap_or(1.0);
+    let state = read_window_state();
+    let snapshot = island_rect_store::IslandRectSnapshot {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        mode: match state.mode {
+            IslandMode::Collapsed => "collapsed".into(),
+            IslandMode::Expanded => "expanded".into(),
+        },
+        monitor: monitor.as_ref().map(monitor_fingerprint_of).unwrap_or_default(),
+        scale,
+        updated_at: now_unix_millis(),
+    };
+    if let Err(error) = island_rect_store::save(&island_rect_store::snapshot_path(), &snapshot) {
+        eprintln!("[startup] snapshot save failed: {error}");
+        return;
+    }
+    if let Ok(mut slot) = LAST_PERSISTED_RECT.lock() {
+        *slot = Some(rect);
+    }
+}
+
+fn nearest_monitor_to_rect(app: &AppHandle, x: i32, y: i32) -> Option<Monitor> {
+    let monitors = app.available_monitors().ok()?;
+    monitors.into_iter().min_by_key(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        let center_x = position.x + size.width as i32 / 2;
+        let center_y = position.y + size.height as i32 / 2;
+        (center_x - x).abs() as i64 + (center_y - y).abs() as i64
+    })
+}
+
+/// 启动时先按磁盘上的最终矩形恢复；指纹还在就逐像素恢复，丢了就夹到最相近的屏。
+fn restore_island_rect_on_startup(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    let path = island_rect_store::snapshot_path();
+    let Some(snapshot) = island_rect_store::load(&path) else {
+        eprintln!("STARTUP_RESTORE source=file ok=false reason=missing path={}", path.display());
+        return;
+    };
+    let exact_monitor = find_monitor_by_key(app, &snapshot.monitor);
+    let exact = exact_monitor.is_some();
+    let target = exact_monitor.or_else(|| nearest_monitor_to_rect(app, snapshot.x, snapshot.y));
+    let Some(monitor) = target else {
+        eprintln!("STARTUP_RESTORE source=file ok=false reason=no_monitor");
+        return;
+    };
+    let scale = monitor.scale_factor().max(0.1);
+    let logical_w = snapshot.width as f64 / snapshot.scale.max(0.1);
+    let logical_h = snapshot.height as f64 / snapshot.scale.max(0.1);
+    let work = monitor.work_area();
+    let work_rect = (work.position.x, work.position.y, work.size.width, work.size.height);
+    let (mut x, mut y) = (snapshot.x, snapshot.y);
+    if !exact {
+        (x, y) = island_rect_store::clamp_to_work_area(
+            (snapshot.x, snapshot.y, snapshot.width, snapshot.height),
+            work_rect,
+        );
+        eprintln!(
+            "STARTUP_RESTORE_CLAMP from=({},{},{},{}) to=({x},{y}) monitor={}",
+            snapshot.x, snapshot.y, snapshot.width, snapshot.height,
+            monitor_fingerprint_of(&monitor)
+        );
+    }
+    if let Err(error) = set_window_rect_atomic(&window, x, y, logical_w, logical_h, scale) {
+        eprintln!("STARTUP_RESTORE source=file ok=false reason=set_rect: {error}");
+        return;
+    }
+    mutate_window_state(|state| {
+        state.custom_position = Some(IslandPosition { x, y });
+        *state
+    });
+    STARTUP_RESTORED.store(true, Ordering::SeqCst);
+    STARTUP_RESTORE_UNTIL_MS.store(now_unix_millis() + 3000, Ordering::SeqCst);
+    eprintln!(
+        "STARTUP_RESTORE source=file rect=({x},{y},{},{}) monitor={} scale={scale} mode={} ok={}",
+        snapshot.width, snapshot.height,
+        monitor_fingerprint_of(&monitor), snapshot.mode, exact
+    );
+}
+
 fn ensure_island_on_screen(window: &WebviewWindow) {
     // 最小化期间 `current_monitor()` / `outer_position()` 都是哨兵值，
     // 一旦在这里判定“跑出工作区”就会清掉 custom_position + 重新 apply_stage_geometry，
     // 于是「最小化一次 → 位置被重置」。最小化/还原过渡期直接跳过。
     if island_geometry_frozen(window) {
+        return;
+    }
+    if startup_restore_active() {
+        eprintln!("STARTUP_SKIP_RECALC reason=startup_window");
         return;
     }
     let Ok(Some(monitor)) = window.current_monitor() else {
@@ -4293,6 +4435,11 @@ fn apply_stage_geometry(
     {
         return Ok(());
     }
+    // 启动恢复的 3s 窗口内，收起态几何不允许被前端 syncNativeInteraction 重算覆盖。
+    if matches!(state.mode, IslandMode::Collapsed) && startup_restore_active() {
+        eprintln!("STARTUP_SKIP_RECALC reason=startup_window");
+        return Ok(());
+    }
     let generation = POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let (stage_width, stage_height) = stage_dimensions(state);
     let stage_size = LogicalSize::new(stage_width, stage_height);
@@ -5667,6 +5814,7 @@ pub fn run() {
                     return;
                 }
                 record_dragged_position(*position);
+                persist_island_snapshot(window.app_handle());
                 return;
             }
 
@@ -5720,6 +5868,7 @@ pub fn run() {
                 eprintln!("failed to initialize notification diagnostics: {error}");
             }
             if let Ok(window) = main_window(app.handle()) {
+                restore_island_rect_on_startup(app.handle());
                 if let Err(error) = apply_stage_geometry(&window, IslandWindowState::default(), false) {
                     eprintln!("failed to size and position island window: {error}");
                 }
@@ -5931,6 +6080,8 @@ pub fn run() {
                 if exit_instance_dir.is_some() {
                     instance_lock::clear_instance_info();
                 }
+                // 退出前再落盘一次最终矩形（启动恢复用）。
+                persist_island_snapshot(app);
                 // U10：退出应用时关掉刷视频专用的浏览器，避免残留实例占住 profile/端口。
                 let _ = video::session::engine(app).close_browser();
             }
