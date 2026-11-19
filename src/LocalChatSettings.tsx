@@ -9,7 +9,14 @@ import {
   type LocalChatConfig,
   THINKING_DEPTHS,
 } from "./localChat";
-import { clearMemory, loadMemory, loadMemoryDepth, saveMemoryDepth, type MemoryDepth } from "./petMemory";
+import {
+  MEMORY_UPDATED_EVENT,
+  clearMemory,
+  loadMemory,
+  loadMemoryDepth,
+  saveMemoryDepth,
+  type MemoryDepth,
+} from "./petMemory";
 import "./LocalChatSettings.css";
 
 export function LocalChatSettings({
@@ -28,6 +35,21 @@ export function LocalChatSettings({
   const [testStatus, setTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [memoryDepth, setMemoryDepth] = useState<MemoryDepth>(loadMemoryDepth);
   const [memoryCleared, setMemoryCleared] = useState(false);
+  // 渲染期不再直接读 localStorage：挂载/记忆更新时解析一次，避免每次渲染都 JSON.parse。
+  const [memoryFactCount, setMemoryFactCount] = useState(() => loadMemory().facts.length);
+  useEffect(() => {
+    const sync = () => setMemoryFactCount(loadMemory().facts.length);
+    sync();
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === "maltese-pet-memory") sync();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(MEMORY_UPDATED_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(MEMORY_UPDATED_EVENT, sync);
+    };
+  }, []);
 
   useEffect(() => {
     const sync = () => setConfig(loadLocalChatConfig());
@@ -286,7 +308,7 @@ export function LocalChatSettings({
               </div>
             </div>
             <div className="local-chat-settings__row">
-              <span>记忆 {loadMemory().facts.length} 条</span>
+              <span>记忆 {memoryFactCount} 条</span>
               <button
                 type="button"
                 onClick={() => {

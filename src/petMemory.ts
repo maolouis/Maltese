@@ -7,6 +7,8 @@
 
 export const MEMORY_STORAGE_KEY = "maltese-pet-memory";
 export const MEMORY_DEPTH_KEY = "maltese-pet-memory-depth";
+/** 记忆更新事件（同窗口内 save/clear 后通知 UI 刷新）。 */
+export const MEMORY_UPDATED_EVENT = "maltese-pet-memory-updated";
 
 export type MemoryDepth = "off" | "normal" | "deep";
 
@@ -95,6 +97,7 @@ export function saveMemory(memory: PetMemory, storage: Storage | null = safeStor
   if (!storage) return;
   try {
     storage.setItem(MEMORY_STORAGE_KEY, JSON.stringify(memory));
+    notifyMemoryUpdated(storage);
   } catch {
     // 忽略
   }
@@ -104,6 +107,18 @@ export function clearMemory(storage: Storage | null = safeStorage()): void {
   if (!storage) return;
   try {
     storage.removeItem(MEMORY_STORAGE_KEY);
+    notifyMemoryUpdated(storage);
+  } catch {
+    // 忽略
+  }
+}
+
+function notifyMemoryUpdated(storage: Storage | null): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (storage && storage === window.localStorage) {
+      window.dispatchEvent(new Event(MEMORY_UPDATED_EVENT));
+    }
   } catch {
     // 忽略
   }
