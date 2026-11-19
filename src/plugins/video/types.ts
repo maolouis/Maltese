@@ -116,6 +116,7 @@ export type VideoSnapshot = {
   commentDryRun: boolean;
   lastCommentText: string;
   lastCommentDryRun: boolean;
+  lastCommentVerified: boolean;
   lastCommentAt: number;
   startedAt: number | null;
   endedAt: number | null;

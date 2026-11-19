@@ -530,6 +530,17 @@ fn comment_bubble(title: &str, comment: &str) -> String {
     format!("刚给《{short}》评论了一句：{comment}")
 }
 
+/// post_comment 错误 → 面板/日志用的原因码。
+fn comment_error_reason(message: &str) -> &'static str {
+    if message.contains("输入框") || message.contains("input") {
+        "no-input"
+    } else if message.contains("按钮") || message.contains("button") {
+        "no-button"
+    } else {
+        "comment-cdp"
+    }
+}
+
 /// 评论回读匹配：去掉空白与标点后做子串匹配（容忍页面截断/换行差异）。
 pub fn comment_in_text(page_text: &str, comment: &str) -> bool {
     fn normalize(value: &str) -> String {
@@ -1829,6 +1840,7 @@ impl SessionEngine {
                                     }
                                 };
                                 let comment = sanitize_comment(&generated.unwrap_or_default());
+                                let mut last_verified = true;
                                 if config.comment_dry_run {
                                     self.store.log(DiagnosticEntry {
                                         at: now,
@@ -1846,45 +1858,95 @@ impl SessionEngine {
                                         }),
                                     );
                                 } else {
-                                    match self.post_comment(&comment).await {
-                                        Ok(report) => {
-                                            self.store.log(DiagnosticEntry {
-                                                at: now,
-                                                session_id: Some(self.snapshot().session_id),
-                                                channel: Some(ChannelType::Cdp),
-                                                level: "info".to_string(),
-                                                code: "COMMENT_POSTED".to_string(),
-                                                message: format!("url={} text={} ok={} verified=false", url, comment, report.ok),
-                                            });
-                                            let _ = app.emit(
-                                                "video-comment-bubble",
-                                                serde_json::json!({
-                                                    "kind": "posted",
-                                                    "text": comment_bubble(&facts.title, &comment),
-                                                }),
-                                            );
-                                        }
-                                        Err(error) => {
-                                            let message = error.to_string();
-                                            let reason = if message.contains("输入框") || message.contains("input") {
-                                                "no-input"
-                                            } else if message.contains("按钮") || message.contains("button") {
-                                                "no-button"
-                                            } else {
-                                                "comment-cdp"
-                                            };
-                                            self.store.log(DiagnosticEntry {
-                                                at: now,
-                                                session_id: Some(self.snapshot().session_id),
-                                                channel: Some(ChannelType::Cdp),
-                                                level: "warn".to_string(),
-                                                code: "COMMENT_SKIPPED".to_string(),
-                                                message: format!("url={} reason={}", url, reason),
-                                            });
-                                            let _ = app.emit(
-                                                "video-comment-bubble",
-                                                serde_json::json!({ "kind": "failed", "text": format!("评论没发出去（{}），先不发了。", reason) }),
-                                            );
+                                    // 前置校验：登录/风控 / 当前是否视频页。
+                                    let blocked = if facts.hints.login_visible
+                                        || facts.hints.captcha_visible
+                                        || facts.hints.risk_banner
+                                    {
+                                        Some("login_or_risk")
+                                    } else {
+                                        None
+                                    };
+                                    let url_ok = if let Some(cdp) = session.as_mut() {
+                                        cdp.current_url().await.contains("/video/")
+                                    } else {
+                                        false
+                                    };
+                                    if let Some(reason) = blocked {
+                                        self.store.log(DiagnosticEntry {
+                                            at: now,
+                                            session_id: Some(self.snapshot().session_id),
+                                            channel: Some(ChannelType::Cdp),
+                                            level: "warn".to_string(),
+                                            code: "COMMENT_SKIPPED".to_string(),
+                                            message: format!("url={} reason={}", url, reason),
+                                        });
+                                        last_verified = false;
+                                    } else if !url_ok {
+                                        self.store.log(DiagnosticEntry {
+                                            at: now,
+                                            session_id: Some(self.snapshot().session_id),
+                                            channel: Some(ChannelType::Cdp),
+                                            level: "warn".to_string(),
+                                            code: "COMMENT_SKIPPED".to_string(),
+                                            message: format!("url={} reason=not_video_page", url),
+                                        });
+                                        last_verified = false;
+                                    } else {
+                                        match self.post_comment(&comment).await {
+                                            Ok(_report) => {
+                                                // 回读验证：发送后 3 次 × 1.5s 匹配评论区文本。
+                                                let mut verified = false;
+                                                if let Some(cdp) = session.as_mut() {
+                                                    for _ in 0..3 {
+                                                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                                                        if let Ok(text) = cdp.evaluate_text("document.body.innerText").await {
+                                                            if comment_in_text(&text, &comment) {
+                                                                verified = true;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                last_verified = verified;
+                                                self.store.log(DiagnosticEntry {
+                                                    at: now,
+                                                    session_id: Some(self.snapshot().session_id),
+                                                    channel: Some(ChannelType::Cdp),
+                                                    level: if verified { "info" } else { "warn" }.to_string(),
+                                                    code: if verified { "COMMENT_POSTED" } else { "COMMENT_UNVERIFIED" }.to_string(),
+                                                    message: format!("url={} verified={} text={}", url, verified, comment),
+                                                });
+                                                if !verified {
+                                                    self.set_runtime_error(
+                                                        "COMMENT_UNVERIFIED",
+                                                        "评论可能没发出去：没在评论区回读到这条内容。",
+                                                    );
+                                                }
+                                                let _ = app.emit(
+                                                    "video-comment-bubble",
+                                                    serde_json::json!({
+                                                        "kind": if verified { "posted" } else { "unverified" },
+                                                        "text": comment_bubble(&facts.title, &comment),
+                                                    }),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                let reason = comment_error_reason(&error.to_string());
+                                                last_verified = false;
+                                                self.store.log(DiagnosticEntry {
+                                                    at: now,
+                                                    session_id: Some(self.snapshot().session_id),
+                                                    channel: Some(ChannelType::Cdp),
+                                                    level: "warn".to_string(),
+                                                    code: "COMMENT_SKIPPED".to_string(),
+                                                    message: format!("url={} reason={}", url, reason),
+                                                });
+                                                let _ = app.emit(
+                                                    "video-comment-bubble",
+                                                    serde_json::json!({ "kind": "failed", "text": format!("评论没发出去（{}），先不发了。", reason) }),
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -1896,6 +1958,7 @@ impl SessionEngine {
                                     state.comment_count = state.comment_count.saturating_add(1);
                                     state.last_comment_text = comment.clone();
                                     state.last_comment_dry_run = config.comment_dry_run;
+                                    state.last_comment_verified = last_verified;
                                     state.last_comment_at = now;
                                     if config.comment_dry_run {
                                         state.comment_dry_run_count =

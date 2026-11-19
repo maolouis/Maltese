@@ -263,7 +263,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         </div>
         {snapshot?.lastCommentText ? (
           <p className="video-automation__muted" aria-live="polite">
-            小狗评论{snapshot.lastCommentDryRun ? "（预演）" : ""}：{snapshot.lastCommentText}
+            小狗评论{snapshot.lastCommentDryRun ? "（预演）" : snapshot.lastCommentVerified ? "（已发）" : "（未验证）"}：{snapshot.lastCommentText}
           </p>
         ) : null}
         <button

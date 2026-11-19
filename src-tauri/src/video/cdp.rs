@@ -229,6 +229,14 @@ impl CdpSession {
         &self.page_id
     }
 
+    /// 读取页面文本（评论回读校验用）。
+    pub async fn evaluate_text(&mut self, expression: &str) -> Result<String, String> {
+        self.evaluate(expression, EVALUATE_TIMEOUT)
+            .await
+            .map_err(|error| format!("{error:?}"))
+            .map(|value| value.as_str().map(str::to_string).unwrap_or_default())
+    }
+
     /// 当前页的 location.href（导航后校验用）。
     pub async fn current_url(&mut self) -> String {
         self.evaluate("location.href", EVALUATE_TIMEOUT)
