@@ -263,3 +263,17 @@ COMMENT_POSTED 或 COMMENT_SKIPPED（no-input/no-button/comment-cdp）。
 - 面板状态区显示「评论 N 条（预演 M 条）」，数据来自 live snapshot 的 commentCount /
   commentDryRunCount（Rust RuntimeState 计数，非磁盘 session）。
 - dry-run 日志：COMMENT_DRY_RUN url=… text=…；预演时 emit ideo-comment-bubble 气泡事件。
+
+### 多实例与 target 锁定（2026-11-19，P0 修复）
+
+现场：9333/9334 两个同 profile 浏览器实例同时活着；NAV_OK 后立刻又采到首页 Feed（导航的 tab 与采集的 tab 不是同一个）。
+
+- 单实例化：采集开始前探测 9333–9338，若多于一个端口活着 → Browser.close 关掉非当前端口实例，
+  写 BROWSER_ENFORCED_SINGLE closed=N kept_port=… alive=[…]（实机 closed=1 kept_port=9334）。
+- target 锁定：pick_page 优先选 URL 含 /video/ 的 page；连接后 Page.bringToFront；
+  导航成功后用同一 target 的 location.href/document.title 复核并写 NAV_VERIFIED url=… title=…。
+- 卡住可见：30s 内既无 ITEM_COLLECTED 也无 ITEM_DISCARDED 变化 → 写 SESSION_STALLED +
+  面板中文原因并停止本轮。
+- 实机验证（session ili-20261119-c41497）：closed=1 kept_port=9334 alive=[9333,9334]；
+  修复后只剩 9334；ITEM_COLLECTED 出现 3 个不同视频：
+  BV15es76gEgL、BV1rysE6HEFZ、BV1464y1F7pZ，SESSION_STALLED 未触发。

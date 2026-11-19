@@ -115,7 +115,12 @@ pub async fn list_pages(port: u16) -> Result<Vec<PageTarget>, FailureReason> {
 pub fn pick_page(pages: &[PageTarget], platform: Platform) -> Option<PageTarget> {
     pages
         .iter()
-        .find(|page| platform.matches_url(&page.url) && !page.title.trim().is_empty())
+        .find(|page| page.url.contains("/video/"))
+        .or_else(|| {
+            pages
+                .iter()
+                .find(|page| platform.matches_url(&page.url) && !page.title.trim().is_empty())
+        })
         .or_else(|| pages.iter().find(|page| platform.matches_url(&page.url)))
         .or_else(|| pages.iter().find(|page| page.url.starts_with("about:blank")))
         .or_else(|| pages.first())
@@ -136,6 +141,30 @@ pub async fn open_page(port: u16, platform: Platform, background: bool) -> Resul
         Ok(())
     } else {
         Err(FailureReason::NavigationFailed)
+    }
+}
+
+
+/// 某个 CDP 端口是否活着（用于单实例化）。
+pub async fn port_alive(port: u16) -> bool {
+    let Ok(client) = http_client() else {
+        return false;
+    };
+    match client
+        .get(format!("http://127.0.0.1:{port}/json/version"))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+/// 让指定端口的浏览器自己关掉（Browser.close）。返回是否发出成功。
+pub async fn shutdown_browser(port: u16) -> bool {
+    match CdpSession::connect(port, Platform::Bilibili).await {
+        Ok(mut session) => session.request("Browser.close", json!({}), Duration::from_secs(2)).await.is_ok(),
+        Err(_) => false,
     }
 }
 
@@ -174,13 +203,18 @@ impl CdpSession {
         let (socket, _) = connect_async(&page.ws_url)
             .await
             .map_err(|_| FailureReason::NoResponse)?;
-        Ok(Self {
+        let mut session = Self {
             socket,
             next_id: 1,
             port,
             platform,
             page_id: page.id,
-        })
+        };
+        // 选中页面后置前，并把 URL 记到 page_id 对应的 target，避免两个实例各看一个 tab。
+        let _ = session
+            .request("Page.bringToFront", json!({}), Duration::from_secs(2))
+            .await;
+        Ok(session)
     }
 
     pub fn port(&self) -> u16 {
@@ -193,6 +227,15 @@ impl CdpSession {
 
     pub fn page_id(&self) -> &str {
         &self.page_id
+    }
+
+    /// 当前页的 location.href（导航后校验用）。
+    pub async fn current_url(&mut self) -> String {
+        self.evaluate("location.href", EVALUATE_TIMEOUT)
+            .await
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
     }
 
     async fn request(

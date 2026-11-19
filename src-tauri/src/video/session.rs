@@ -6,7 +6,7 @@
 use super::adapter::adapter_for;
 use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserInstance};
-use super::cdp::{CdpSession, EVALUATE_TIMEOUT};
+use super::cdp::{port_alive, shutdown_browser, CdpSession, EVALUATE_TIMEOUT};
 use super::channel::ChannelManager;
 use super::comment::generate_content_comment;
 use super::CommentReport;
@@ -1168,6 +1168,37 @@ impl SessionEngine {
         let mut last_turn = Instant::now();
         let mut first_turn = true;
 
+        // P0：清掉同 profile 的多余浏览器实例，只保留当前端口。
+        {
+            let mut alive: Vec<u16> = Vec::new();
+            for candidate in 9333u16..=9338 {
+                if port_alive(candidate).await {
+                    alive.push(candidate);
+                }
+            }
+            if alive.len() > 1 {
+                let mut closed = 0usize;
+                for candidate in alive.iter().copied() {
+                    if candidate == port {
+                        continue;
+                    }
+                    if shutdown_browser(candidate).await {
+                        closed += 1;
+                    }
+                }
+                self.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(self.snapshot().session_id),
+                    channel: None,
+                    level: "warn".to_string(),
+                    code: "BROWSER_ENFORCED_SINGLE".to_string(),
+                    message: format!("closed={} kept_port={} alive={:?}", closed, port, alive),
+                });
+                tokio::time::sleep(Duration::from_millis(600)).await;
+            }
+        }
+        let mut last_progress_at = now_seconds();
+        let mut stall_logged = false;
         let connect_deadline = Instant::now() + Duration::from_secs(15);
         loop {
             match CdpSession::connect(port, platform).await {
@@ -1258,6 +1289,28 @@ impl SessionEngine {
             }
 
             let now = now_seconds();
+            if now.saturating_sub(last_progress_at) >= 30 && !stall_logged {
+                stall_logged = true;
+                self.store.log(DiagnosticEntry {
+                    at: now,
+                    session_id: Some(self.snapshot().session_id),
+                    channel: None,
+                    level: "error".to_string(),
+                    code: "SESSION_STALLED".to_string(),
+                    message: format!(
+                        "no_progress_for={}s url={} waiting_for_browser={}",
+                        now.saturating_sub(last_progress_at),
+                        self.snapshot().current_url,
+                        self.snapshot().waiting_for_browser
+                    ),
+                });
+                self.set_runtime_error(
+                    "SESSION_STALLED",
+                    "30 秒没有采集到任何变化：可能页面没加载完、遇到登录墙，或浏览器窗口被关掉了；已停止本轮。",
+                );
+                self.finish(&app, StopReason::Crash, true);
+                break;
+            }
             let should_sample = {
                 let mut channel = match self.channel.lock() {
                     Ok(channel) => channel,
@@ -1405,6 +1458,15 @@ impl SessionEngine {
                                         code: "NAV_OK".to_string(),
                                         message: format!("url={} attempts={:?}", outcome.final_url, outcome.attempts),
                                     });
+                                    // P0：导航后复核（导航与采集用同一 target 的结果）。
+                                    self.store.log(DiagnosticEntry {
+                                        at: now,
+                                        session_id: Some(state.session_id.clone()),
+                                        channel: Some(ChannelType::Cdp),
+                                        level: if outcome.final_url.contains("/video/") { "info" } else { "warn" }.to_string(),
+                                        code: "NAV_VERIFIED".to_string(),
+                                        message: format!("url={} title={}", outcome.final_url, outcome.title),
+                                    });
                                 } else {
                                     nav_failures = nav_failures.saturating_add(1);
                                     if nav_failures >= 3 {
@@ -1438,6 +1500,7 @@ impl SessionEngine {
                             match merge_facts(&mut state.items, &facts, now) {
                                 MergeOutcome::Filtered => {
                                     state.filtered_count = state.filtered_count.saturating_add(1);
+                                    last_progress_at = now;
                                     // N3：丢弃原因必须落到 video/logs/video-<date>.jsonl
                                     self.store.log(DiagnosticEntry {
                                         at: now,
@@ -1471,6 +1534,8 @@ impl SessionEngine {
                                                 message: format!("url={} watched_ms={} title={}", url, facts.position_seconds.saturating_mul(1000), facts.title),
                                             });
                                             pending_persist = true;
+                                            last_progress_at = now;
+                                            stall_logged = false;
                                             // N11：锁外做自动评论（去重/间隔/预演都在锁外判断）。
                                             pending_comment = Some(facts.clone());
                                             // N6：同一条重复采集且停留够 20s → 换下一条（标记，锁外执行）。
