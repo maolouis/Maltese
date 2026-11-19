@@ -415,10 +415,13 @@ mod tests {
 
     #[test]
     fn writes_draft_json_and_readme() {
-        let root = std::env::current_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
-            .join("target")
-            .join(format!("xhs-draft-test-{}", std::process::id()));
+        let root = match std::env::var("MALTESE_XHS_DRAFT_TEST_ROOT") {
+            Ok(value) if !value.trim().is_empty() => std::path::PathBuf::from(value),
+            _ => std::env::current_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join("target")
+                .join(format!("xhs-draft-test-{}", std::process::id())),
+        };
         let _ = std::fs::remove_dir_all(&root);
         let items = vec![item("周末去海边", &["旅行"])];
         let mut draft = template_draft(&items);
@@ -431,6 +434,8 @@ mod tests {
         let readme =
             std::fs::read_to_string(std::path::Path::new(&dir).join("readme.md")).expect("readme");
         assert!(readme.contains("不包含、也不建议下载原作者的图片"));
-        let _ = std::fs::remove_dir_all(&root);
+        if std::env::var("MALTESE_XHS_DRAFT_KEEP").is_err() {
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }
