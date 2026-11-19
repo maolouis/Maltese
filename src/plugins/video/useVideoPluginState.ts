@@ -25,6 +25,7 @@ export const DEFAULT_VIDEO_CONFIG: VideoConfig = {
   channelPriority: "auto",
   modelSummary: true,
   autoComment: false,
+  commentDryRun: true,
   autoLike: false,
   autoFavorite: false,
   autoLikeDailyLimit: 10,

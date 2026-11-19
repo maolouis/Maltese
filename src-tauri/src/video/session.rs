@@ -69,6 +69,10 @@ pub struct VideoSnapshot {
     pub item_count: u32,
     pub strong_count: u32,
     pub filtered_count: u32,
+    /// 本轮已产生的评论数（含预演）。
+    pub comment_count: u32,
+    /// 其中仅预演的条数。
+    pub comment_dry_run_count: u32,
     pub started_at: Option<u64>,
     pub ended_at: Option<u64>,
     pub last_action_at: Option<u64>,
@@ -99,6 +103,8 @@ impl Default for VideoSnapshot {
             item_count: 0,
             strong_count: 0,
             filtered_count: 0,
+            comment_count: 0,
+            comment_dry_run_count: 0,
             started_at: None,
             ended_at: None,
             last_action_at: None,
@@ -323,6 +329,8 @@ struct RuntimeState {
     steps: u64,
     items: Vec<ContentItem>,
     filtered_count: u32,
+    comment_count: u32,
+    comment_dry_run_count: u32,
     current_url: String,
     waiting_for_browser: bool,
     foreground_title: String,
@@ -358,6 +366,8 @@ impl Default for RuntimeState {
             steps: 0,
             items: Vec::new(),
             filtered_count: 0,
+            comment_count: 0,
+            comment_dry_run_count: 0,
             current_url: String::new(),
             waiting_for_browser: false,
             foreground_title: String::new(),
@@ -682,6 +692,8 @@ impl SessionEngine {
                 })
                 .count() as u32,
             filtered_count: state.filtered_count,
+            comment_count: state.comment_count,
+            comment_dry_run_count: state.comment_dry_run_count,
             started_at: if state.started_at == 0 {
                 None
             } else {
@@ -1475,14 +1487,7 @@ impl SessionEngine {
                             if state.items.len() > config.max_items as usize {
                                 state.items.truncate(config.max_items as usize);
                             }
-                            if config.auto_comment
-                                && !facts.hints.on_feed
-                                && facts.canonical_url.is_some()
-                                && !state.auto_comment_attempted.contains(&facts.item_key)
-                            {
-                                state.auto_comment_attempted.insert(facts.item_key.clone());
-                                auto_comment = Some(facts.clone());
-                            }
+                            // 旧 auto_comment 路径已停用：由新评论块接管（dry-run 优先），避免双发。
                         }
                         }
                     }
@@ -1614,6 +1619,14 @@ impl SessionEngine {
                                 commented_urls.insert(url.clone());
                                 last_comment_at = now;
                                 comment_count = comment_count.saturating_add(1);
+                                {
+                                    let mut state = lock_state(&self.state);
+                                    state.comment_count = state.comment_count.saturating_add(1);
+                                    if config.comment_dry_run {
+                                        state.comment_dry_run_count =
+                                            state.comment_dry_run_count.saturating_add(1);
+                                    }
+                                }
                             } else {
                                 let reason = if !config.auto_comment {
                                     "disabled"

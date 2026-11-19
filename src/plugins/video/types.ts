@@ -111,6 +111,9 @@ export type VideoSnapshot = {
   itemCount: number;
   strongCount: number;
   filteredCount: number;
+  commentCount: number;
+  commentDryRunCount: number;
+  commentDryRun: boolean;
   startedAt: number | null;
   endedAt: number | null;
   lastActionAt: number | null;
@@ -178,6 +181,7 @@ export type VideoConfig = {
   channelPriority: "auto" | "cdpOnly" | "noExtension";
   modelSummary: boolean;
   autoComment: boolean;
+  commentDryRun: boolean;
   autoLike: boolean;
   autoFavorite: boolean;
   autoLikeDailyLimit: number;

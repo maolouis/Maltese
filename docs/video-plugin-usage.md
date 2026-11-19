@@ -254,3 +254,12 @@ commentDryRun 控制是否只生成不发送。
 生成/发布/气泡，因此用户侧还看不到自动评论。接线顺序：ITEM_COLLECTED → canCommentNow →
 local_chat 生成 → sanitize → dry-run 时写 COMMENT_DRY_RUN + 气泡 / 否则 post_comment →
 COMMENT_POSTED 或 COMMENT_SKIPPED（no-input/no-button/comment-cdp）。
+
+### 自动评论收尾（2026-11-19）
+
+- 旧 uto_comment 路径已停用（gate 置空），只保留新评论块，避免同一 URL 双发；
+  日志中不再出现 AUTO_COMMENT_* 前缀（新会话验证 0 条）。
+- 仅预演：commentDryRun 默认 true；高级设置新增「仅预演（只生成不发送）」开关；自动评论默认开启。
+- 面板状态区显示「评论 N 条（预演 M 条）」，数据来自 live snapshot 的 commentCount /
+  commentDryRunCount（Rust RuntimeState 计数，非磁盘 session）。
+- dry-run 日志：COMMENT_DRY_RUN url=… text=…；预演时 emit ideo-comment-bubble 气泡事件。

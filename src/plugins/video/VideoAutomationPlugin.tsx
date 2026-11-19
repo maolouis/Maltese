@@ -37,6 +37,8 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [sampleInterval, setSampleInterval] = useState(2);
   const [dailyDeliveries, setDailyDeliveries] = useState(2);
   const [autoComment, setAutoComment] = useState(false);
+  // 仅预演：只生成评论、打日志、弹气泡，不真正发送（默认开）。
+  const [commentDryRun, setCommentDryRun] = useState(true);
   const [localError, setLocalError] = useState<VideoErrorInfo | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState("");
@@ -66,6 +68,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
     setMaxMinutes(snapshot.maxMinutes);
     if (!autoCommentHydrated.current && typeof snapshot.autoComment === "boolean") {
       setAutoComment(snapshot.autoComment);
+      setCommentDryRun(snapshot.commentDryRun !== false);
       autoCommentHydrated.current = true;
     }
   }, [snapshot, video.activeAccount]);
@@ -188,7 +191,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
     } catch (reason) {
       setLocalError(describeVideoError(reason, "配置超出允许范围，请检查输入。"));
     }
-  }, [autoComment, dailyDeliveries, maxMinutes, onNotice, pageInterval, provider, sampleInterval, video]);
+  }, [autoComment, commentDryRun, dailyDeliveries, maxMinutes, onNotice, pageInterval, provider, sampleInterval, video]);
 
   const closeBrowser = useCallback(async () => {
     setLocalError(null);
@@ -253,6 +256,9 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           <strong className={`video-automation__phase${running ? " is-running" : ""}`}>{statusLabel}</strong>
           <span className="video-automation__steps">
             条目 {snapshot?.itemCount ?? 0} · 强兴趣 {snapshot?.strongCount ?? 0}
+          </span>
+          <span className="video-automation__steps">
+            评论 {snapshot?.commentCount ?? 0} 条（预演 {snapshot?.commentDryRunCount ?? 0} 条）
           </span>
         </div>
         <button
