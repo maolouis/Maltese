@@ -1074,7 +1074,8 @@ impl SessionEngine {
                     message: format!("reason={:?} items={} filtered={}", stop_reason, state.items.len(), state.filtered_count),
                 });
             }
-            self.finish(app, stop_reason, false);
+            // N10：用户停止也要产出小结（digest/pending），否则历史里永远没有成果。
+            self.finish(app, stop_reason, true);
             {
                 let mut state = lock_state(&self.state);
                 state.phase = Phase::Stopped;
