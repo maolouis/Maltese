@@ -697,15 +697,24 @@ fn hidden_std_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 }
 
 /// 从 npm 的 .cmd shim 里解析出 `node <script.js>`，避免走 cmd.exe。
-fn npm_shim_target(shim: &Path) -> Option<(PathBuf, PathBuf)> {
+/// npm 全局 shim 背后真正的入口：要么是 `node <script.js>`，要么是包内的原生 exe。
+enum ShimTarget {
+    Node(PathBuf, PathBuf),
+    Exe(PathBuf),
+}
+
+/// 从 npm 的 .cmd shim 里解析出真实入口，避免走 cmd.exe 的二次解析。
+/// 兼容两种常见写法：
+/// - `"%_prog%" "%dp0%\node_modules\...\cli.js" %*`（codex 等）
+/// - `"%dp0%\node_modules\...\claude.exe" %*`（Claude Code 的原生 exe）
+fn npm_shim_target(shim: &Path) -> Option<ShimTarget> {
     let text = std::fs::read_to_string(shim).ok()?;
     if text.len() > 64 * 1024 {
         return None;
     }
     let shim_dir = shim.parent()?.to_path_buf();
     for raw in text.lines() {
-        // 只关心同时出现 %dp0%、node_modules 与 .js 的那一行。
-        if !raw.contains("node_modules") || !raw.contains(".js") {
+        if !raw.contains("node_modules") {
             continue;
         }
         let mut remaining = raw;
@@ -713,21 +722,23 @@ fn npm_shim_target(shim: &Path) -> Option<(PathBuf, PathBuf)> {
             let rest = &remaining[open + 1..];
             let Some(close) = rest.find('"') else { break };
             let candidate = &rest[..close];
-            if candidate.contains("node_modules")
-                && (candidate.ends_with(".js") || candidate.ends_with(".mjs"))
-            {
-                let expanded = candidate.replace("%dp0%", &shim_dir.display().to_string());
-                let script = PathBuf::from(expanded);
-                if script.is_file() {
-                    let node = {
-                        let sibling = shim_dir.join("node.exe");
-                        if sibling.is_file() {
-                            sibling
-                        } else {
-                            search_path("node")?
-                        }
+            if candidate.contains("node_modules") {
+                let expanded = candidate
+                    .replace("%dp0%", &shim_dir.display().to_string())
+                    .replace("%~dp0%", &shim_dir.display().to_string());
+                let target = PathBuf::from(expanded);
+                let lower = target.to_string_lossy().to_ascii_lowercase();
+                if lower.ends_with(".exe") && target.is_file() {
+                    return Some(ShimTarget::Exe(target));
+                }
+                if (lower.ends_with(".js") || lower.ends_with(".mjs")) && target.is_file() {
+                    let sibling = shim_dir.join("node.exe");
+                    let node = if sibling.is_file() {
+                        sibling
+                    } else {
+                        search_path("node")?
                     };
-                    return Some((node, script));
+                    return Some(ShimTarget::Node(node, target));
                 }
             }
             remaining = &rest[close + 1..];
@@ -804,15 +815,21 @@ fn build_command(
         .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     let (mut command, launcher) = if extension == "cmd" || extension == "bat" {
-        if let Some((node, script)) = npm_shim_target(resolved) {
-            let mut command = hidden_std_command(&node);
-            command.arg(script);
-            (command, format!("{} (npm shim)", node.display()))
-        } else {
-            validate_args_for_shell(&args)?;
-            let mut command = hidden_std_command(comspec());
-            command.arg("/C").arg(resolved);
-            (command, format!("{} /C", comspec().display()))
+        match npm_shim_target(resolved) {
+            Some(ShimTarget::Node(node, script)) => {
+                let mut command = hidden_std_command(&node);
+                command.arg(script);
+                (command, format!("{} (npm shim)", node.display()))
+            }
+            Some(ShimTarget::Exe(program)) => {
+                (hidden_std_command(&program), program.display().to_string())
+            }
+            None => {
+                validate_args_for_shell(&args)?;
+                let mut command = hidden_std_command(comspec());
+                command.arg("/C").arg(resolved);
+                (command, format!("{} /C", comspec().display()))
+            }
         }
     } else if extension == "ps1" {
         // powershell -File 的参数不会二次拼接成命令字符串，但仍拒绝明显的元字符更稳妥。
@@ -1623,6 +1640,22 @@ pub async fn agent_pipeline_run(
 mod tests {
     use super::*;
 
+    /// 测试临时目录放在工作区里：部分 Windows 环境对 `%TEMP%` 没有写权限
+    /// （os error 5），用工作区目录最稳；可用 MALTESE_AGENT_HUB_TEST_DIR 覆盖。
+    fn test_dir(tag: &str) -> PathBuf {
+        let base = std::env::var_os("MALTESE_AGENT_HUB_TEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(".tmp-agent-hub-tests")
+            });
+        let dir = base.join(format!("{tag}-{}", now_ms()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
     #[test]
     fn expands_prompt_placeholder_or_appends() {
         let args = vec!["exec".to_string(), "{{prompt}}".to_string()];
@@ -1688,7 +1721,7 @@ mod tests {
 
     #[test]
     fn npm_shim_is_parsed_to_node_script() {
-        let dir = std::env::temp_dir().join(format!("agent-hub-test-{}", now_ms()));
+        let dir = test_dir("shim");
         std::fs::create_dir_all(dir.join("node_modules/@openai/codex/bin")).unwrap();
         let script = dir.join("node_modules/@openai/codex/bin/codex.js");
         std::fs::write(&script, "// stub").unwrap();
@@ -1700,9 +1733,35 @@ mod tests {
             "@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*",
         )
         .unwrap();
-        let (resolved_node, resolved_script) = npm_shim_target(&shim).expect("should resolve");
-        assert_eq!(resolved_node, node);
-        assert_eq!(resolved_script, script);
+        match npm_shim_target(&shim).expect("should resolve") {
+            ShimTarget::Node(resolved_node, resolved_script) => {
+                assert_eq!(resolved_node, node);
+                assert_eq!(resolved_script, script);
+            }
+            ShimTarget::Exe(program) => panic!("expected node shim, got exe {}", program.display()),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn npm_shim_native_exe_is_used_directly() {
+        let dir = test_dir("shim-exe");
+        let bin = dir.join("node_modules/@anthropic-ai/claude-code/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("claude.exe");
+        std::fs::write(&exe, "").unwrap();
+        let shim = dir.join("claude.cmd");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*",
+        )
+        .unwrap();
+        match npm_shim_target(&shim).expect("should resolve exe") {
+            ShimTarget::Exe(program) => assert_eq!(program, exe),
+            ShimTarget::Node(node, script) => {
+                panic!("expected exe, got node {} {}", node.display(), script.display())
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1719,13 +1778,85 @@ mod tests {
         }
     }
 
+    /// 实机联调：两步流水线（codex → claude），验证 {{prev}} 注入。
+    /// 手动执行：`cargo test --lib agent_hub::tests::real_pipeline_codex_then_claude -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_pipeline_codex_then_claude() {
+        let dir = test_dir("pipeline");
+        let log_dir = dir.join(LOG_DIR);
+        let (codex, codex_path) = find_agent(&dir, "codex").expect("codex should be available");
+        let first = run_one_blocking(
+            None,
+            &log_dir,
+            &codex,
+            &codex_path,
+            "只输出一个词：CODEX_OK",
+            "pipe-1",
+        );
+        println!(
+            "step1 ok={} duration={}ms output={:?} error={:?}",
+            first.ok, first.duration_ms, first.output, first.error
+        );
+        assert!(first.ok, "codex 第一步失败：{:?}", first.error);
+        let (claude, claude_path) = find_agent(&dir, "claude").expect("claude should be available");
+        let prompt = fill_template(
+            "上一步的输出是：\n{{prev}}\n如果它包含 CODEX_OK，只回答 PIPELINE_OK，不要解释。",
+            "",
+            &first.output,
+        );
+        let second = run_one_blocking(None, &log_dir, &claude, &claude_path, &prompt, "pipe-2");
+        println!(
+            "step2 ok={} duration={}ms output={:?} error={:?}",
+            second.ok, second.duration_ms, second.output, second.error
+        );
+        assert!(second.ok, "claude 第二步失败：{:?}", second.error);
+        println!("pipeline log dir: {}", log_dir.display());
+    }
+
+    /// 实机联调（备用）：claude 两步流水线，验证串行 + {{prev}} 注入。
+    /// 有些受限环境里 codex 的 app-server 起不来（os error 5），但 claude 可用；
+    /// 用它证明「上一步输出注入下一步」这条编排链路是通的。
+    #[test]
+    #[ignore]
+    fn real_pipeline_claude_twice() {
+        let dir = test_dir("pipeline-claude");
+        let log_dir = dir.join(LOG_DIR);
+        let (claude, claude_path) = find_agent(&dir, "claude").expect("claude should be available");
+        let first = run_one_blocking(
+            None,
+            &log_dir,
+            &claude,
+            &claude_path,
+            "只输出一个词：READY",
+            "pipe-c1",
+        );
+        println!(
+            "step1 ok={} duration={}ms output={:?} error={:?}",
+            first.ok, first.duration_ms, first.output, first.error
+        );
+        assert!(first.ok, "claude 第一步失败：{:?}", first.error);
+        let prompt = fill_template(
+            "上一步的输出是：\n{{prev}}\n请原样复述它，并在后面加上 PIPELINE_OK，不要解释。",
+            "",
+            &first.output,
+        );
+        let second = run_one_blocking(None, &log_dir, &claude, &claude_path, &prompt, "pipe-c2");
+        println!(
+            "step2 ok={} duration={}ms output={:?} error={:?}",
+            second.ok, second.duration_ms, second.output, second.error
+        );
+        assert!(second.ok, "claude 第二步失败：{:?}", second.error);
+        println!("pipeline log dir: {}", log_dir.display());
+    }
+
     /// 实机联调用：手动执行
     /// `cargo test --lib agent_hub::tests::real_agent_run -- --ignored --nocapture`
     /// 它会真的启动 codex/claude，需要本机已安装并登录。
     #[test]
     #[ignore]
     fn real_agent_run() {
-        let dir = std::env::temp_dir().join(format!("agent-hub-real-{}", now_ms()));
+        let dir = test_dir("real");
         let registry = build_registry(&dir).expect("registry");
         println!("config: {}", registry.config_path);
         for agent in &registry.agents {

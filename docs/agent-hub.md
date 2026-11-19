@@ -193,7 +193,8 @@ AgentConsole.tsx  --invoke--> agent_hub.rs --spawn--> codex / claude / doubao ..
 3. **禁止 shell 解释器**：`cmd.exe`、`powershell.exe`、`wscript`、`mshta`、`rundll32`、`reg`、`schtasks` 等不能作为 agent 的 `command`。
 4. **禁止 shell 元字符注入**：
    - `command` 里出现 `& | < > ^ % ! " ' ; \` $` 或换行，直接拒绝；
-   - `.cmd/.bat` 优先解析成 `node <script.js>` 直接 spawn（npm 全局安装的 codex/claude 都是这种 shim），**不经过 cmd.exe**；
+   - `.cmd/.bat` 优先解析成真实入口直接 spawn：npm 包里的 `node <script.js>` 或包内原生 `.exe`
+     （codex 是 node shim，Claude Code 是包内 `claude.exe`），**不经过 cmd.exe**；
    - 解析不出来才退回 `cmd.exe /C`，此时 prompt/参数里出现任何元字符都会被拒绝执行并给出中文原因（是拒绝，不做转义）。
    - `.exe` / `.ps1` 走 `Command::new` / `powershell -File` 的参数数组，prompt 不经过命令字符串拼接。
 5. **不接受前端传来的可执行路径**：前端只能传 `agentId`，路径由 Rust 从配置文件解析。
@@ -220,6 +221,7 @@ AgentConsole.tsx  --invoke--> agent_hub.rs --spawn--> codex / claude / doubao ..
 | 控制台显示「未安装」 | 在终端确认 `codex --version` / `claude --version` 能跑；检查 PATH 是否包含 npm 目录（`%APPDATA%\npm`）；改好配置后点「刷新」 |
 | 运行后没有输出 | 该 CLI 是否支持非交互模式？试 `codex exec "hi"` / `claude -p "hi"`；看日志 `agent-<date>.jsonl` 的 `launch`/`error` |
 | 一直排队 | 全局已有 2 个在跑；等前一个结束，或取消 |
+| codex 报 `failed to initialize in-process app-server client: 拒绝访问 (os error 5)` | codex 自己的 app-server 在受限环境/临时目录 ACL/杀软下起不来（os error 5）。先在终端手动跑 `codex exec --skip-git-repo-check "hi"` 确认；能跑再看日志里的 launcher 与 stderr；受限沙箱里可先用 claude 跑流水线 |
 | 300 秒超时 | 日志里 `AGENT_TIMEOUT`；网络/登录问题最常见。可在 CLI 里先手动跑一次确认 |
 | 提示「包含 shell 元字符」 | 该 agent 解析成了 `.cmd` 兜底路径；把 command 换成真正的 `.exe`/`.ps1`，或去掉 prompt 里的 `& | % !` 等字符 |
 | 配置解析失败 | 修好 `config.json` 的 JSON 语法，或删掉它重启（会重新生成默认配置） |
@@ -232,3 +234,28 @@ AgentConsole.tsx  --invoke--> agent_hub.rs --spawn--> codex / claude / doubao ..
 - 不做聊天触发流水线（缺确认卡片，见 §6 第 6 条）。
 - 不做 agent 配置的 UI 编辑器：直接改 `config.json` + 刷新。
 - 不做流式增量「打字机」渲染：stdout 按行拼接到 `<pre>`，最后用完整输出替换。
+
+## 10. 验证记录（2026-11-19，本机）
+
+| 项 | 结果 |
+| --- | --- |
+| `node node_modules/typescript/bin/tsc --noEmit` | 0 error |
+| `cargo check --target x86_64-pc-windows-msvc` | 通过（Finished，本模块无 warning/error） |
+| `node --test tests/*.test.mjs` | 250/250 通过（在提交树 worktree 里跑；主工作区 4 个失败来自并行的宠物素材重构 WIP，与本模块无关） |
+| `cargo test --lib agent_hub::tests` | 9 passed（参数/模板/安全校验/shim 解析/日志路径/默认配置） |
+| 实机探测 | codex ✓、claude ✓、豆包 ✗（PATH 与 `%APPDATA%\npm` 都没有 `doubao`）、dsh 默认禁用 |
+| 实机单跑 claude | `ok=true exit=0 duration=2539ms firstLine=1954ms output="OK"`；日志 `agent-2026-11-19.jsonl` 有 start/end 两行，只含 prompt 前 80 字与长度 |
+| 实机 codex | 在本机受限会话里报 `failed to initialize in-process app-server client: 拒绝访问 (os error 5)`（同为 os error 5 的临时目录/ACL 限制）；终端手动 `codex exec` 可正常输出，属于环境限制，不是适配器逻辑 |
+| 实机流水线 | claude 两步流水线通过（第 2 步成功拿到第 1 步输出并复述 + `PIPELINE_OK`），证明串行与 `{{prev}}` 注入可用；`review` 流水线在本机因 codex 起不来会在第 1 步停下并显示中文原因 |
+| `vite build` | 通过（dist 产物包含 AgentConsole） |
+
+复现实机测试：
+
+```powershell
+# 单 agent（claude）
+cargo test --lib agent_hub::tests::real_agent_run -- --ignored --nocapture
+# 两步流水线（claude → claude，最稳）
+cargo test --lib agent_hub::tests::real_pipeline_claude_twice -- --ignored --nocapture
+# 两步流水线（codex → claude，需要 codex 能在当前会话里起 app-server）
+cargo test --lib agent_hub::tests::real_pipeline_codex_then_claude -- --ignored --nocapture
+```
