@@ -31,6 +31,7 @@ mod video_automation;
 mod video_rules;
 mod window_factory;
 mod actions;
+mod agent_hub;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -5874,6 +5875,13 @@ pub fn run() {
             video::video_close_browser,
             video::video_browser_status,
             video::video_open_external_url,
+            agent_hub::get_agent_registry,
+            agent_hub::agent_hub_status,
+            agent_hub::agent_hub_usage,
+            agent_hub::agent_run,
+            agent_hub::agent_cancel,
+            agent_hub::agent_pipeline,
+            agent_hub::agent_pipeline_run,
         ])
         .build(context)
         .expect("error while building Maltese")

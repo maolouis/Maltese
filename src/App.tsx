@@ -121,6 +121,7 @@ import {
   subscribeToUpdate,
 } from "./updaterController";
 import { PetChat } from "./PetChat";
+import { AgentConsole } from "./AgentConsole";
 import { PluginsPanel } from "./PluginsPanel";
 import { VideoAutomationPanel } from "./plugins/video/VideoAutomationPlugin";
 import { useVideoDelivery } from "./useVideoDelivery";
@@ -209,7 +210,17 @@ type PetOverlay = {
   bubbleKind?: "pet" | "system";
 };
 
-type IslandPage = "todo" | "music" | "clipboard" | "layout" | "qq" | "assistant" | "chat" | "video" | "onboarding";
+type IslandPage =
+  | "todo"
+  | "music"
+  | "clipboard"
+  | "layout"
+  | "qq"
+  | "assistant"
+  | "chat"
+  | "video"
+  | "agent"
+  | "onboarding";
 type PetState =
   | "idle"
   | "listening"
@@ -1534,7 +1545,7 @@ export function IslandShell({
     if (!isExpanded) {
       return;
     }
-    const order: IslandPage[] = ["todo", "music", "clipboard", "assistant", "chat", "video"];
+    const order: IslandPage[] = ["todo", "music", "clipboard", "assistant", "chat", "video", "agent"];
     const handler = (event: KeyboardEvent) => {
       if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
         return;
@@ -2287,6 +2298,16 @@ export function IslandShell({
                   onPageChange("video");
                 }}
               >{t.island.plugins}</button>
+              <button
+                className={`island-tab ${page === "agent" ? "dot-button--active" : ""}`}
+                type="button"
+                title={t.agentHub.title}
+                aria-label={t.island.agentConsole}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPageChange("agent");
+                }}
+              >{t.island.agentConsole}</button>
               <button
                 className="island-tab"
                 type="button"
@@ -9796,6 +9817,7 @@ function IslandApp({
         {page === "assistant" && <AssistantPanel onOpenSettingsWindow={openStandaloneSettings} />}
         {page === "video" && <VideoPage />}
         {page === "chat" && <PetChat />}
+        {page === "agent" && <AgentConsole />}
         {page === "onboarding" && <OnboardingPanel onFinish={finishOnboarding} />}
         {page === "todo" && (
           <TodoNotebook

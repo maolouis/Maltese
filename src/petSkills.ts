@@ -25,12 +25,14 @@ export type SkillAction =
   | "media_control"
   | "clipboard_read"
   | "clipboard_write"
+  | "agent_registry"
+  | "agent_status"
   | "current_time";
 
 export type SkillDefinition = {
   action: SkillAction;
-  /** 内置分类：待办 / 电脑 / 媒体 / 剪贴板 / 时间 */
-  group: "todo" | "system" | "media" | "clipboard" | "time" | "diary" | "settings" | "web";
+  /** 内置分类：待办 / 电脑 / 媒体 / 剪贴板 / 时间 / agent */
+  group: "todo" | "system" | "media" | "clipboard" | "time" | "diary" | "settings" | "web" | "agent";
   title: string;
   description: string;
   /** 给模型看的调用说明与示例 */
@@ -144,6 +146,20 @@ export const SKILLS: SkillDefinition[] = [
     example: '{"tool":"clipboard_write","args":{"text":"要复制的文字"}}',
   },
   {
+    action: "agent_registry",
+    group: "agent",
+    title: "看有哪些 agent",
+    description: "列出本机安装的 agent（codex / claude / 豆包 / DSH）以及是否可用、有哪些现成流水线",
+    example: '{"tool":"agent_registry","args":{}}',
+  },
+  {
+    action: "agent_status",
+    group: "agent",
+    title: "看谁在干活",
+    description: "查看当前正在运行的 agent、排队长度和最近失败原因（只读）",
+    example: '{"tool":"agent_status","args":{}}',
+  },
+  {
     action: "current_time",
     group: "time",
     title: "看时间",
@@ -201,20 +217,34 @@ const NEW_SKILL_ACTIONS: SkillAction[] = [
   "web_search",
 ];
 
+/** Agent Hub 只读技能：单独一个迁移键，避免影响上面那批老迁移。 */
+const AGENT_SKILLS_MIGRATION_KEY = "maltese-skills-migrated-20261119";
+const AGENT_SKILL_ACTIONS: SkillAction[] = ["agent_registry", "agent_status"];
+
 export function loadEnabledSkills(): SkillAction[] {
   const stored = readJson<SkillAction[] | null>(SKILLS_STORAGE_KEY, null);
   if (!stored) return SKILLS.filter((skill) => skill.group !== "clipboard").map((s) => s.action);
+  let enabled = stored;
+  // 老用户：先补 2026-11-14 那批，再补 agent 只读技能；两批互不影响。
   if (!window.localStorage.getItem(SKILL_MIGRATION_KEY)) {
-    const merged = Array.from(new Set([...stored, ...NEW_SKILL_ACTIONS]));
-    writeJson(SKILLS_STORAGE_KEY, merged);
+    enabled = Array.from(new Set([...enabled, ...NEW_SKILL_ACTIONS]));
+    writeJson(SKILLS_STORAGE_KEY, enabled);
     try {
       window.localStorage.setItem(SKILL_MIGRATION_KEY, "1");
     } catch {
       // 忽略
     }
-    return merged;
   }
-  return stored;
+  if (!window.localStorage.getItem(AGENT_SKILLS_MIGRATION_KEY)) {
+    enabled = Array.from(new Set([...enabled, ...AGENT_SKILL_ACTIONS]));
+    writeJson(SKILLS_STORAGE_KEY, enabled);
+    try {
+      window.localStorage.setItem(AGENT_SKILLS_MIGRATION_KEY, "1");
+    } catch {
+      // 忽略
+    }
+  }
+  return enabled;
 }
 
 export function saveEnabledSkills(actions: SkillAction[]) {
@@ -246,7 +276,7 @@ export function skillsPrompt(enabled: SkillAction[], custom: CustomSkill[]): str
     "可用的动作：",
     ...active.map((skill) => `- ${skill.action}：${skill.description}；示例 ${skill.example}`),
     "如果不需要动手（只是聊天），就直接用中文回答，不要输出 JSON。",
-    "判断口诀：「我要开始学/做…」→ todo_start；「休息一下 / 暂停」→ todo_pause；「记一下今天… / 写日记」→ diary_add；「今天都记了什么」→ diary_read；「放点音乐 / 播放音乐」→ music_play；「换个形象 / 换成小鸡毛」→ pet_settings；「帮我查 / 搜一下 / 网上看看…」→ web_search。",
+    "判断口诀：「我要开始学/做…」→ todo_start；「休息一下 / 暂停」→ todo_pause；「记一下今天… / 写日记」→ diary_add；「今天都记了什么」→ diary_read；「放点音乐 / 播放音乐」→ music_play；「换个形象 / 换成小鸡毛」→ pet_settings；「帮我查 / 搜一下 / 网上看看…」→ web_search；「有哪些 agent / 装了哪些模型」→ agent_registry；「谁在干活 / 有几个在跑」→ agent_status。",
     "一次只调用一个动作。动作执行完会告诉你结果，再据此用中文回答主人。",
   ];
   if (custom.length > 0) {
@@ -528,6 +558,64 @@ ${text}` };
         if (!text) return { ok: false, message: "没有要写入的文字。" };
         await invoke("set_clipboard_text", { text });
         return { ok: true, message: "已经放进剪贴板。" };
+      }
+      case "agent_registry": {
+        const registry = await invoke<{
+          agents: Array<{
+            id: string;
+            displayName: string;
+            kind: string;
+            enabled: boolean;
+            available: boolean;
+            unavailableReason: string | null;
+          }>;
+          pipelines: Array<{ id: string; title: string }>;
+        }>("get_agent_registry", { refresh: false });
+        const usable = registry.agents.filter((agent) => agent.enabled && agent.available);
+        const missing = registry.agents.filter((agent) => agent.enabled && !agent.available);
+        const lines: string[] = [];
+        lines.push(
+          usable.length > 0
+            ? `可用的 agent ${usable.length} 个：${usable.map((agent) => agent.displayName).join("、")}。`
+            : "现在没有可用的 agent，先安装 codex / claude，或在 Agent 控制台里配置。",
+        );
+        for (const agent of missing) {
+          lines.push(`${agent.displayName} 不可用：${agent.unavailableReason ?? "未安装"}`);
+        }
+        if (registry.pipelines.length > 0) {
+          lines.push(`流水线：${registry.pipelines.map((pipeline) => pipeline.title).join("、")}。`);
+        }
+        return { ok: true, message: lines.join("\n") };
+      }
+      case "agent_status": {
+        const status = await invoke<{
+          running: Array<{ agentId: string; agentName: string; promptPreview: string; startedAt: number }>;
+          queue: Record<string, number>;
+          recentErrors: Array<{ at: number; agentId: string; message: string }>;
+        }>("agent_hub_status");
+        const queueTotal = Object.values(status.queue).reduce((sum, value) => sum + value, 0);
+        if (status.running.length === 0 && queueTotal === 0) {
+          return { ok: true, message: "现在没有 agent 在跑。" };
+        }
+        const runningText = status.running
+          .map((entry) => {
+            const startedAt = entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+            return `${entry.agentName}（${startedAt} 开始）`;
+          })
+          .join("、");
+        const parts = [`正在跑 ${status.running.length} 个：${runningText || "—"}`];
+        if (queueTotal > 0) {
+          const queueText = Object.entries(status.queue)
+            .filter(([, count]) => count > 0)
+            .map(([agentId, count]) => `${agentId} ${count} 个`)
+            .join("、");
+          parts.push(`排队 ${queueTotal} 个（${queueText}）`);
+        }
+        if (status.recentErrors.length > 0) {
+          const last = status.recentErrors[status.recentErrors.length - 1];
+          parts.push(`最近错误：${last.message}`);
+        }
+        return { ok: true, message: parts.join("；") };
       }
       case "current_time": {
         const now = new Date();
