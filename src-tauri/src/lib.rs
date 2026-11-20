@@ -2260,8 +2260,28 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
     let started = Instant::now();
     let window = window_factory::ensure(&app, "settings")?;
     let already_visible = window.is_visible().unwrap_or(false);
-    let _ = window.unminimize();
-    window.show().map_err(|error| error.to_string())?;
+    // 懒创建出来的窗口是 visible(false)：WebView2 子窗口还没挂好时 show() 可能“成功但不可见”。
+    // 这里显式 unminimize + show，并用 is_visible() 复核，最多重试 3 次。
+    let mut shown = false;
+    for attempt in 1..=3 {
+        let _ = window.unminimize();
+        let _ = window.show();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let visible = window.is_visible().unwrap_or(false);
+        let rect = window
+            .outer_position()
+            .ok()
+            .zip(window.outer_size().ok())
+            .map(|(position, size)| (position.x, position.y, size.width, size.height));
+        eprintln!("SETTINGS_WINDOW_SHOW attempt={attempt} visible={visible} rect={rect:?}");
+        if visible {
+            shown = true;
+            break;
+        }
+    }
+    if !shown {
+        eprintln!("SETTINGS_WINDOW_SHOW failed after retries (visible=false)");
+    }
     // 焦点失败不影响「窗口已经显示」，不要因此让前端走 fallback。
     if let Err(error) = window.set_focus() {
         eprintln!("failed to focus the settings window: {error}");
