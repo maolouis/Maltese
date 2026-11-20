@@ -287,7 +287,13 @@ pub async fn local_chat(
                 at: crate::usage::now_seconds(),
                 source: "chat".to_string(),
                 backend: "local".to_string(),
-                model: model.clone(),
+                model: value
+                    .get("model")
+                    .and_then(|item| item.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        if model.contains('.') { "local-model".to_string() } else { model.clone() }
+                    }),
                 prompt_tokens,
                 completion_tokens,
                 cached_tokens,
@@ -404,7 +410,7 @@ pub async fn local_chat_stream(
         .build()
         .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
 
-    let text = stream_once(
+    let (text, first_usage, first_model) = stream_once(
         &app,
         &request_id,
         &client,
@@ -418,6 +424,15 @@ pub async fn local_chat_stream(
     .await?;
 
     if !text.trim().is_empty() {
+        record_stream_usage(
+            &text,
+            first_usage,
+            first_model,
+            &model,
+            request_started.elapsed().as_millis() as u64,
+            &message,
+            source.as_deref(),
+        );
         return Ok(text.trim().to_string());
     }
 
@@ -437,7 +452,7 @@ pub async fn local_chat_stream(
         reasoning_effort: Some("none".into()),
         reasoning_budget_tokens: Some(0),
     };
-    let retried = stream_once(
+    let (retried, retry_usage, retry_model) = stream_once(
         &app,
         &request_id,
         &client,
@@ -450,6 +465,18 @@ pub async fn local_chat_stream(
     )
     .await
     .unwrap_or_default();
+    // 一次用户请求只记一条 usage：主尝试 + 空正文重试合并。
+    let merged_usage = merge_stream_usage(first_usage, retry_usage);
+    let merged_model = first_model.or(retry_model);
+    record_stream_usage(
+        &retried,
+        merged_usage,
+        merged_model,
+        &model,
+        request_started.elapsed().as_millis() as u64,
+        &message,
+        source.as_deref(),
+    );
     if !retried.trim().is_empty() {
         return Ok(retried.trim().to_string());
     }
@@ -458,6 +485,62 @@ pub async fn local_chat_stream(
 }
 
 /// 发一次流式请求：带「取消 / 首字超时 / 总超时」检查，返回正文（可能为空）。
+
+/// 一次用户请求的主尝试 + 空正文重试合并为一条 usage（token 累加、prompt 取大）。
+fn merge_stream_usage(
+    first: Option<(u64, u64, u64)>,
+    retry: Option<(u64, u64, u64)>,
+) -> Option<(u64, u64, u64)> {
+    match (first, retry) {
+        (Some((p1, c1, k1)), Some((p2, c2, k2))) => Some((p1.max(p2), c1 + c2, k1.max(k2))),
+        (Some((p, c, k)), None) | (None, Some((p, c, k))) => Some((p, c, k)),
+        (None, None) => None,
+    }
+}
+
+/// 流式一次用户请求只记一条 usage；model 用服务端返回 id，拿不到用常量。
+fn record_stream_usage(
+    text: &str,
+    usage: Option<(u64, u64, u64)>,
+    server_model: Option<String>,
+    requested_model: &str,
+    duration_ms: u64,
+    prompt_text: &str,
+    source: Option<&str>,
+) {
+    let (prompt_tokens, completion_tokens, cached_tokens, precision) = match usage {
+        Some((prompt, completion, cached)) => (prompt, completion, cached, "exact"),
+        None => (
+            crate::usage::estimate_tokens(prompt_text),
+            crate::usage::estimate_tokens(text),
+            0,
+            "estimated",
+        ),
+    };
+    let model = server_model
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if requested_model.contains('.') {
+                "local-model".to_string()
+            } else {
+                requested_model.to_string()
+            }
+        });
+    crate::usage::record(crate::usage::UsageRecord {
+        at: crate::usage::now_seconds(),
+        source: crate::usage::normalize_source(source),
+        backend: "local".to_string(),
+        model,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+        precision: precision.to_string(),
+        duration_ms,
+        ok: !text.trim().is_empty(),
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn stream_once(
     app: &AppHandle,
@@ -469,7 +552,7 @@ async fn stream_once(
     messages: Vec<Value>,
     settings: LocalChatGenerationSettings,
     source: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, Option<(u64, u64, u64)>, Option<String>), String> {
     let request_started = std::time::Instant::now();
     let mut request = client
         .post(endpoint.clone())
@@ -500,6 +583,7 @@ async fn stream_once(
     let mut pending = String::new();
     let mut full_text = String::new();
     let mut reported_usage: Option<(u64, u64, u64)> = None;
+    let mut server_model: Option<String> = None;
     while let Some(chunk) = stream.next().await {
         if is_cancelled(request_id) {
             let _ = take_cancelled(request_id);
@@ -540,6 +624,9 @@ async fn stream_once(
             if let Some((prompt, completion, cached)) = crate::usage::usage_from_value(&value) {
                 reported_usage = Some((prompt, completion, cached));
             }
+            if server_model.is_none() {
+                server_model = value.get("model").and_then(|item| item.as_str()).map(str::to_string);
+            }
             if let Some(delta) = extract_delta(&value) {
                 if first_token_at.is_none() {
                     first_token_at = Some(std::time::Instant::now());
@@ -552,33 +639,8 @@ async fn stream_once(
     if !full_text.trim().is_empty() {
         emit_stream_event(app, request_id, "done", &full_text);
     }
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    let (prompt_tokens, completion_tokens, cached_tokens, precision) = match reported_usage {
-        Some((prompt, completion, cached)) => {
-            let total = prompt + completion;
-            (prompt, completion, cached, "exact")
-        }
-        None => (
-            crate::usage::estimate_tokens(&full_text),
-            crate::usage::estimate_tokens(&full_text),
-            0,
-            "estimated",
-        ),
-    };
-    crate::usage::record(crate::usage::UsageRecord {
-        at: crate::usage::now_seconds(),
-        source: crate::usage::normalize_source(source.as_deref()),
-        backend: "local".to_string(),
-        model: model.to_string(),
-        prompt_tokens,
-        completion_tokens,
-        cached_tokens,
-        total_tokens: prompt_tokens + completion_tokens,
-        precision: precision.to_string(),
-        duration_ms: request_started.elapsed().as_millis() as u64,
-        ok: !full_text.trim().is_empty(),
-    });
-    Ok(full_text)
+    let _ = started;
+    Ok((full_text, reported_usage, server_model))
 }
 
 fn emit_stream_delta(app: &AppHandle, request_id: &str, text: &str) {
@@ -1180,5 +1242,21 @@ mod tests {
             })),
             Some("你好".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod usage_merge_tests {
+    use super::merge_stream_usage;
+
+    #[test]
+    fn one_request_one_usage() {
+        // 没有重试：保持原样
+        assert_eq!(merge_stream_usage(Some((10, 5, 0)), None), Some((10, 5, 0)));
+        // 空正文重试：一次性合并（prompt 取大、completion 累加）
+        assert_eq!(merge_stream_usage(Some((10, 0, 0)), Some((10, 7, 0))), Some((10, 7, 0)));
+        // 两次都成功（异常情况）也只返回一条
+        assert_eq!(merge_stream_usage(Some((10, 5, 1)), Some((12, 3, 2))), Some((12, 8, 2)));
+        assert_eq!(merge_stream_usage(None, None), None);
     }
 }
