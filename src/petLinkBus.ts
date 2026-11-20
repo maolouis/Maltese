@@ -60,6 +60,9 @@ export type PetLinkMessage =
 
 // ---- 防线参数（增强版：一眼看得见；仍保留节流/上限/回声抑制） ----
 /** 首只陪玩狗必定触发（0.6 → 1.0）。 */
+/** 实例联动 feature flag：先下线（2026-11-20），代码/文档保留，修好后改回 true 即可。 */
+export const PET_LINK_ENABLED = false;
+
 export const PET_LINK_PROBABILITY = 1;
 /** 第二只仍按概率（0.5），单次最多 2 只。 */
 export const PET_LINK_SECOND_PROBABILITY = 0.5;
@@ -431,7 +434,7 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
   const random = options.random ?? Math.random;
   const governor = options.governor ?? createLinkGovernor({ random });
   const channel = options.channel === undefined ? createBroadcastLinkChannel() ?? createTauriLinkChannel() : options.channel;
-  const enabled = options.enabled ?? (() => readPetLinkageEnabled());
+  const enabled = options.enabled ?? (() => PET_LINK_ENABLED && readPetLinkageEnabled());
   const companionLabels = options.companionLabels ?? (() => readCompanionLabels());
   let seq = 0;
 
@@ -447,6 +450,10 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
   return {
     emitAction: (action, emitOptions) => {
       try {
+        if (!PET_LINK_ENABLED) {
+          console.info("[PET_LINK_DISABLED]", { action });
+          return [];
+        }
         if (!enabled()) return [];
         const labels = emitOptions?.labels ?? companionLabels();
         const at = emitOptions?.now ?? now();
@@ -484,6 +491,10 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
     },
     emitBongoHit: () => {
       try {
+        if (!PET_LINK_ENABLED) {
+          console.info("[PET_LINK_DISABLED]", { action: "bongo-hit" });
+          return;
+        }
         if (!enabled()) return;
         seq += 1;
         post({ kind: "bongo-hit", source: options.source, seq, at: now() });

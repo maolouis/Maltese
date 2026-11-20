@@ -62,6 +62,7 @@ import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { shouldSkipProactiveForChat } from "./chatGuard";
 import { MINIMIZE_BLUR_SETTLE_MS, shouldCollapseOnBlur } from "./islandMinimizeGuard";
 import { previewPetLinkage } from "./petLinkPreview";
+import { PET_LINK_ENABLED } from "./petLinkBus";
 // 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重 + 设置页卡片。
 import {
   buildIdlePlaylistStateful,
@@ -2940,20 +2941,24 @@ function LayoutEditor({
           checked={settings.bongoEnabled}
           onChange={(bongoEnabled) => onSettingsChange({ ...settings, bongoEnabled })}
         />
-        <ToggleControl
-          label="实例联动（陪玩狗跟着主狗动、Bongo 敲鼓呼应）"
-          checked={settings.petLinkage}
-          onChange={(petLinkage) => onSettingsChange({ ...settings, petLinkage })}
-        />
-        <p className="settings-section__hint">{t.petLink.previewHint}</p>
-        <button
-          type="button"
-          className="settings-inline-action"
-          disabled={!settings.petLinkage}
-          onClick={() => void previewPetLinkage({ scenes: t.petLink.scenes, mainCharacter: petCharacter })}
-        >
-          {t.petLink.previewButton}
-        </button>
+        {PET_LINK_ENABLED && (
+          <>
+            <ToggleControl
+              label="实例联动（陪玩狗跟着主狗动、Bongo 敲鼓呼应）"
+              checked={settings.petLinkage}
+              onChange={(petLinkage) => onSettingsChange({ ...settings, petLinkage })}
+            />
+            <p className="settings-section__hint">{t.petLink.previewHint}</p>
+            <button
+              type="button"
+              className="settings-inline-action"
+              disabled={!settings.petLinkage}
+              onClick={() => void previewPetLinkage({ scenes: t.petLink.scenes, mainCharacter: petCharacter })}
+            >
+              {t.petLink.previewButton}
+            </button>
+          </>
+        )}
         {settings.bongoEnabled && (
           <>
             <SliderControl
@@ -4837,27 +4842,29 @@ function IslandApp({
     ),
     TODO_SCROLL_START_ROWS,
   );
-  const expandedIslandHeight =
-    page === "todo"
-      ? isTodoArchivePage
-        ? TODO_ARCHIVE_EXPANDED_ISLAND_HEIGHT
-        : BASE_EXPANDED_ISLAND_HEIGHT +
-          Math.max(0, visibleTodoRows - TODO_GROW_START_ROWS) * TODO_ROW_HEIGHT
-      : page === "music"
-        ? musicSettingsOpen
-          ? MUSIC_SETTINGS_EXPANDED_ISLAND_HEIGHT
-          : MUSIC_EXPANDED_ISLAND_HEIGHT + (mediaCommandError ? 24 : 0)
-        : page === "clipboard"
-          ? CLIPBOARD_EXPANDED_ISLAND_HEIGHT
-          : page === "assistant"
-            ? 520
-          : page === "chat"
-            ? settings.chatPanelHeight
-          : page === "video"
-            ? 430
-          : page === "qq"
-            ? messagePanelHeight(messageSource, Boolean(qqMail.selectedMail))
-            : EDITOR_EXPANDED_ISLAND_HEIGHT;
+  // ① tab 切换不改变窗口高度：展开态统一用「最大内容高度」预留，页面内部滚动。
+  // 以前每个 tab 的高度不同（306~520），切 tab 会触发原生 resize → 整个窗口上下跳。
+  // 现在窗口高度与 tab / 待办行数 / 媒体报错都无关，只有用户手动拖拽调整尺寸才会变。
+  const UNIFIED_EXPANDED_ISLAND_HEIGHT = 520;
+  const expandedIslandHeight = UNIFIED_EXPANDED_ISLAND_HEIGHT;
+  void [
+    isTodoArchivePage,
+    visibleTodoRows,
+    TODO_ARCHIVE_EXPANDED_ISLAND_HEIGHT,
+    BASE_EXPANDED_ISLAND_HEIGHT,
+    TODO_ROW_HEIGHT,
+    TODO_GROW_START_ROWS,
+    musicSettingsOpen,
+    MUSIC_SETTINGS_EXPANDED_ISLAND_HEIGHT,
+    MUSIC_EXPANDED_ISLAND_HEIGHT,
+    mediaCommandError,
+    CLIPBOARD_EXPANDED_ISLAND_HEIGHT,
+    EDITOR_EXPANDED_ISLAND_HEIGHT,
+    messagePanelHeight,
+    messageSource,
+    qqMail.selectedMail,
+    settings.chatPanelHeight,
+  ];
   const layoutSync = useRef<{
     frame: number | null;
     inFlight: boolean;
@@ -7931,7 +7938,7 @@ function IslandApp({
     const check = async () => {
       if (cancelled) return;
       const ctx = linkContextRef.current;
-      if (!settings.petLinkage || ctx.mode !== "collapsed" || ctx.isTucked || ctx.sleeping) return;
+      if (!PET_LINK_ENABLED || !settings.petLinkage || ctx.mode !== "collapsed" || ctx.isTucked || ctx.sleeping) return;
       let idleSeconds = 0;
       try {
         idleSeconds = await invoke<number>("get_system_idle_seconds");

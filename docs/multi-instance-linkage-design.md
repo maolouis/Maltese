@@ -1,3 +1,6 @@
+> **状态：已下线（2026-11-20）**——feature flag PET_LINK_ENABLED = false，设置页隐藏联动区块，
+> petLinkBus 不派发事件（日志 PET_LINK_DISABLED），代码与设计文档保留，待修复后改回 true 重上。
+
 # 多实例联动设计（初版）
 
 > 记录时间：2026-11-17 · 版本 2.0.2（不改版本号）

@@ -20,6 +20,7 @@ import { TuckGifControl } from "./TuckGifControl";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { previewPetLinkage } from "./petLinkPreview";
+import { PET_LINK_ENABLED } from "./petLinkBus";
 import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
@@ -435,12 +436,14 @@ export default function SettingsWindow() {
           items={CHARACTER_ITEMS}
           onChange={(value) => savePetCharacter(value)}
         />
+        {PET_LINK_ENABLED && (
         <p className="sw-hint sw-hint--block">
           小白和小鸡毛各自有一套动作素材；选「小白和小鸡毛」时只播两只同框的动画。
         </p>
+        )}
         <Slider label="小狗数量（含主狗）" value={settings.petCount} min={1} max={5} step={1} suffix="只" onChange={(value) => update("petCount", value)} />
         <Switch label="Bongo 模式" hint="小狗趴在键盘上，跟着按键动" checked={settings.bongoEnabled} onChange={(value) => update("bongoEnabled", value)} />
-        {(settings.petCount > 1 || settings.bongoEnabled) && (
+        {PET_LINK_ENABLED && (settings.petCount > 1 || settings.bongoEnabled) && (
           <Switch
             label="实例联动"
             hint="主狗被摸头/喂食/开心时，陪玩狗会跟着动一下；Bongo 会敲鼓呼应"
@@ -452,6 +455,7 @@ export default function SettingsWindow() {
           还没看到效果？「试一下联动」会临时拉一只随从、让两只狗各说一句台词（动作 + 位移 + 气泡），
           3 秒后自动复原；不会改动你的小狗数量 / Bongo 设置（只在本地记一条台词去重历史）。
         </p>
+        {PET_LINK_ENABLED && (
         <button
           type="button"
           className="sw-secondary"
@@ -462,6 +466,7 @@ export default function SettingsWindow() {
         >
           试一下联动
         </button>
+        )}
         {settings.bongoEnabled && (
           <>
             <Slider label="Bongo 大小" value={settings.bongoSize} min={220} max={700} step={10} suffix="px" onChange={(value) => update("bongoSize", value)} />
