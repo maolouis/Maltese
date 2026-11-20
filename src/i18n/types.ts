@@ -497,6 +497,24 @@ export type Translations = {
   };
 
 /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重。 */
+  /** 几何自检（设置页「诊断」）。 */
+  geometrySelfCheck: {
+    title: string;
+    run: string;
+    running: string;
+    summary: (passed: number, total: number) => string;
+    failed: (count: number) => string;
+    empty: string;
+    failHint: string;
+    copy: string;
+    copied: string;
+    error: (message: string) => string;
+    scene: string;
+    result: string;
+    delta: string;
+    pass: string;
+    fail: string;
+  };
   petVitals: {
     title: string;
     hint: string;

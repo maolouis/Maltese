@@ -77,6 +77,7 @@ import { loadBagStore, saveBagStore } from "./petRotationBag.ts";
 import PetVitalsCard from "./PetVitalsCard";
 // 多屏放置：小狗 / Bongo 落在哪块显示器（指纹 = 名字 + 分辨率）。
 import ScreenPlacementCard from "./ScreenPlacementCard";
+import { GeometrySelfCheck } from "./GeometrySelfCheck";
 import {
   resolveBongoPreference,
   resolveMonitorPreference,
@@ -2997,6 +2998,9 @@ function LayoutEditor({
           bongoScreen={settings.bongoScreen}
           onChange={({ islandScreen, bongoScreen }) => onSettingsChange({ ...settings, islandScreen, bongoScreen })}
         />
+        <div style={{ marginTop: 12 }}>
+          <GeometrySelfCheck />
+        </div>
         <ToggleControl
           label="偷偷观察你（写代码 / 写文档 / 开会 / 看视频时陪你说一句）"
           checked={settings.observeApps}

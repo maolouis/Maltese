@@ -24,6 +24,7 @@ import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
 import ScreenPlacementCard from "./ScreenPlacementCard";
+import { GeometrySelfCheck } from "./GeometrySelfCheck";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -492,6 +493,11 @@ export default function SettingsWindow() {
             update("bongoScreen", bongoScreen);
           }}
         />
+      </section>
+
+      <section className="sw-card">
+        <h2>诊断</h2>
+        <GeometrySelfCheck />
       </section>
 
       <section className="sw-card">

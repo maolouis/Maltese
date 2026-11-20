@@ -651,6 +651,9 @@ fn set_island_interaction(
     let window = main_window(&app)?;
     let mode = IslandMode::from_value(&mode)?;
     let previous_state = read_window_state();
+    // 操作前期望的狗槽：custom_position 优先，否则最近一次落定矩形（右键/展开的锚点语义）。
+    let expected_slot_before = expected_slot_from_state(&window);
+    let overlay_rect_before = read_sane_island_rect(&window);
     // 右键/点气泡从收起态直接展开时，锚点必须是「小狗当前真正所在的位置」：
     // 前端传上来的 custom_position 可能是很久以前的（浮层打开/回位、闲逛之后都不更新），
     // 用它当锚点会把窗口算到别的屏/别的 x 上（用户看到「右键气泡往右跳」）。
@@ -770,6 +773,29 @@ fn set_island_interaction(
     if let Some(config) = desktop_extras::last_config() {
         let _ = desktop_extras::sync_extras_now(&app, &config);
     }
+    if collapsing_to_expanded {
+        let before = dog_slot_now(&window);
+        let panel_side = LAST_PANEL_SIDE
+            .lock()
+            .ok()
+            .and_then(|slot| *slot)
+            .unwrap_or("right");
+        eprintln!(
+            "RIGHTCLICK_GEOM before={:?} after={:?} anchor={} panelSide={} overlay_before={:?} monitor={:?}",
+            overlay_rect_before.map(|rect| (rect.x, rect.y, rect.width, rect.height)),
+            read_sane_island_rect(&window).map(|rect| (rect.x, rect.y, rect.width, rect.height)),
+            anchor_source,
+            panel_side,
+            before.map(|slot| (slot.x, slot.y)),
+            window
+                .current_monitor()
+                .ok()
+                .flatten()
+                .map(|monitor| monitor_fingerprint_of(&monitor))
+        );
+    }
+    // 不变量强制约束：不论哪条路径把位置算错，展开落定后都把狗槽拉回操作前的位置（±2px）。
+    enforce_slot_invariant(&window, expected_slot_before, "set_island_interaction");
     let glass = apply_glass_material(&window, state);
     ensure_island_on_screen(&window);
     persist_island_snapshot(&app);
@@ -1042,6 +1068,139 @@ fn reject_zero_position(window: &WebviewWindow, x: i32, y: i32, reason: &str) ->
         window.label()
     );
     true
+}
+
+
+/// 当前狗槽（收起态 = 窗口左上角；展开/浮层态 = 按 panelSide/panelVertical 反推）。
+fn dog_slot_now(window: &WebviewWindow) -> Option<WindowRect> {
+    let rect = read_sane_island_rect(window)?;
+    let state = read_window_state();
+    let scale = window.scale_factor().ok()?;
+    let slot_w = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_h = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
+    let (side, vertical) = if matches!(state.mode, IslandMode::Collapsed) {
+        ("right".to_string(), "below".to_string())
+    } else {
+        (
+            LAST_PANEL_SIDE
+                .lock()
+                .ok()
+                .and_then(|slot| *slot)
+                .unwrap_or("right")
+                .to_string(),
+            LAST_PANEL_VERTICAL
+                .lock()
+                .ok()
+                .and_then(|slot| *slot)
+                .unwrap_or("above")
+                .to_string(),
+        )
+    };
+    let slot = geometry_invariant::slot_from_window(
+        geometry_invariant::SlotRect::new(rect.x, rect.y, rect.width as i32, rect.height as i32),
+        &side,
+        &vertical,
+        slot_w,
+        slot_h,
+    );
+    Some(WindowRect {
+        x: slot.x,
+        y: slot.y,
+        width: slot_w as u32,
+        height: slot_h as u32,
+    })
+}
+
+/// 当前状态「应该」落在的狗槽：优先 custom_position，其次最近一次落定矩形。
+fn expected_slot_from_state(window: &WebviewWindow) -> Option<WindowRect> {
+    let state = read_window_state();
+    let scale = window.scale_factor().ok()?;
+    let slot_w = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_h = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
+    if let Some(position) = state.custom_position {
+        return Some(WindowRect {
+            x: position.x,
+            y: position.y,
+            width: slot_w as u32,
+            height: slot_h as u32,
+        });
+    }
+    LAST_SETTLED_ISLAND_RECT
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+}
+
+/// 统一不变量约束：操作后狗槽偏离 expected 超过 2px 就立刻平移纠正并留证。
+/// 返回最终是否满足不变量（true = 没有偏差或已纠正成功）。
+fn enforce_slot_invariant(window: &WebviewWindow, expected: Option<WindowRect>, op: &str) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let Some(after) = dog_slot_now(window) else {
+        return true;
+    };
+    let before_rect = geometry_invariant::SlotRect::new(
+        expected.x,
+        expected.y,
+        expected.width as i32,
+        expected.height as i32,
+    );
+    let after_rect = geometry_invariant::SlotRect::new(
+        after.x,
+        after.y,
+        after.width as i32,
+        after.height as i32,
+    );
+    let Some(violation) =
+        geometry_invariant::assert_slot_invariant(before_rect, after_rect, op, true)
+    else {
+        return true;
+    };
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        eprintln!(
+            "SLOT_INVARIANT_VIOLATION op={op} dx={} dy={} corrected=false reason=no_window_rect",
+            violation.dx, violation.dy
+        );
+        return false;
+    };
+    let current_window = geometry_invariant::SlotRect::new(
+        position.x,
+        position.y,
+        size.width as i32,
+        size.height as i32,
+    );
+    let target =
+        geometry_invariant::correction_target(current_window, before_rect, after_rect);
+    if !reject_zero_position(window, target.x, target.y, op) {
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(target.x, target.y)));
+    }
+    let recheck_ok = dog_slot_now(window)
+        .map(|current| {
+            geometry_invariant::within_tolerance(
+                before_rect,
+                geometry_invariant::SlotRect::new(
+                    current.x,
+                    current.y,
+                    current.width as i32,
+                    current.height as i32,
+                ),
+            )
+        })
+        .unwrap_or(true);
+    eprintln!(
+        "SLOT_INVARIANT_VIOLATION op={op} dx={} dy={} corrected={} before=({},{}) after=({},{}) target=({},{})",
+        violation.dx,
+        violation.dy,
+        recheck_ok,
+        before_rect.x,
+        before_rect.y,
+        after_rect.x,
+        after_rect.y,
+        target.x,
+        target.y
+    );
+    recheck_ok
 }
 
 fn dog_monitor_for_slot(
@@ -1607,6 +1766,7 @@ fn set_island_overlay(
     }
     let window = main_window(&app)?;
     let state = read_window_state();
+    let overlay_expected_slot = dog_slot_now(&window);
     // 必须和 apply_stage_geometry 用同一块显示器：多屏时 current_monitor() 可能是错的，
     // 误用会导致浮层锚点算错、关掉后小狗瞬移。
     let monitor = state
@@ -1628,7 +1788,7 @@ fn set_island_overlay(
     let mon_right = safe.right;
     let mon_bottom = safe.bottom;
 
-    match overlay.as_deref() {
+    let overlay_result: Result<(), String> = match overlay.as_deref() {
         None => {
             OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
             let snapshot = OVERLAY_SNAPSHOT.lock().ok().and_then(|mut slot| slot.take());
@@ -1788,6 +1948,12 @@ fn set_island_overlay(
             )
         }
     }
+    };
+    // 先放掉浮层请求锁再纠正：set_position 会同步触发窗口事件，持锁调用有死锁风险。
+    drop(_request_guard);
+    // 不变量强制约束：浮层开合后狗槽必须回到操作前的位置（±2px）。
+    enforce_slot_invariant(&window, overlay_expected_slot, "set_island_overlay");
+    overlay_result
 }
 
 // 只算「面板朝哪边长」，**不改窗口矩形**；但会把浮层锚点快照钉下来，
@@ -2382,6 +2548,16 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
     });
     let result = apply_stage_geometry(&window, state, false);
     if result.is_ok() {
+        enforce_slot_invariant(
+            &window,
+            Some(WindowRect {
+                x,
+                y,
+                width: slot_width as u32,
+                height: slot_height as u32,
+            }),
+            "lock_island_corner",
+        );
         // 让前端把新位置写进 localStorage，避免下次启动被旧拖拽位置覆盖。
         let _ = window.emit("island-position-changed", position);
     }
@@ -4430,6 +4606,7 @@ fn show_island(app: &AppHandle) -> Result<(), String> {
     // P0：show 可能被系统窗口状态竞争吞掉；显示后再校验一次可见性，
     // 不可见就在后台补几次 show()，避免「进程活着但永远没有狗」。
     ensure_island_visible_after_show(window.clone());
+    enforce_slot_invariant(&window, expected_slot_from_state(&window), "show_island");
     // 隐藏时一起收起的 Bongo / 陪伴狗 / 跟随小狗，显示时一并放回来。
     desktop_extras::restore_extra_pets(app);
     Ok(())

@@ -93,3 +93,11 @@ node scripts/geometry-invariant.mjs   # 跑 cargo test --lib geometry_invariant�
 本机 Rust 测试二进制若因 DLL 入口无法加载，脚本会提示改用应用内 `island_geometry_selftest` 取同一套 JSON。
 单测位置：`src-tauri/src/geometry_invariant.rs`（不变量通过/纠正/无法纠正三分支 + 8 场景 + 四方向反推回环）。
 » 日志格式：`SLOT_INVARIANT_VIOLATION op=<op> dx=<dx> dy=<dy> corrected=<bool> before=(x,y) after=(x,y)`。
+### 5.5 设置页入口（2026-11-20）
+
+设置页「诊断」区块 → 按钮「**几何自检**」：
+- 岛内设置页（`LayoutEditor`，多屏放置卡片下方）与独立设置窗口（`SettingsWindow`）都有；
+- 点击 `invoke("island_geometry_selftest")`，表格展示 8 场景 × 通过/失败 × dx,dy，失败项标红，并显示总通过数；
+- 「复制 JSON」一键复制结果；有失败项时提示「请把这段发给我」。
+- 组件：`src/GeometrySelfCheck.tsx`；i18n：`geometrySelfCheck`（zh-CN / en）。
+
