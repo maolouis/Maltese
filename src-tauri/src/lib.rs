@@ -3,6 +3,7 @@ mod clipboard_history;
 mod netease;
 mod desktop_extras;
 mod island_rect_store;
+mod geometry_invariant;
 mod desktop_icons;
 mod web_protocol;
 mod dsh_api;
@@ -377,6 +378,19 @@ fn start_monitor_watch(app: AppHandle) {
     }
 }
 
+/// 几何不变量自检：8 个场景回到结构化结果，面板/QA 脚本可直接看。
+#[tauri::command]
+fn island_geometry_selftest() -> serde_json::Value {
+    let results = geometry_invariant::selftest_scenarios();
+    let passed = results.iter().filter(|item| item.pass).count();
+    serde_json::json!({
+        "tolerance": geometry_invariant::SLOT_TOLERANCE,
+        "total": results.len(),
+        "passed": passed,
+        "scenarios": results,
+    })
+}
+
 #[tauri::command]
 fn list_monitors(app: AppHandle) -> Vec<MonitorInfo> {
     monitor_infos(&app)
@@ -728,11 +742,26 @@ fn set_island_interaction(
     } else {
         None
     };
+    let overlay_was_open = OVERLAY_SNAPSHOT
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false);
+    let rect_before_overlay_check = read_sane_island_rect(&window);
     let geometry = apply_stage_geometry(
         &window,
         state,
         animate_position.unwrap_or(true) && previous_state.is_tucked != state.is_tucked,
     );
+    if overlay_was_open {
+        let after = read_sane_island_rect(&window);
+        eprintln!(
+            "RC_GEOM_AFTER_OVERLAY before={:?} after={:?} anchor={} overlay_active=true err={:?}",
+            rect_before_overlay_check.map(|rect| (rect.x, rect.y, rect.width, rect.height)),
+            after.map(|rect| (rect.x, rect.y, rect.width, rect.height)),
+            anchor_source,
+            geometry.as_ref().err()
+        );
+    }
     if let (Ok(()), Some(before), true) = (&geometry, rect_before, collapsing_to_expanded) {
         correct_expanded_slot_after(&window, state, before, anchor_source);
     }
@@ -860,6 +889,25 @@ fn correct_expanded_slot_after(
     } else {
         position.y
     };
+    // 锚点保护：slot_before 不在任何显示器里（典型：浮层态窗口坐标被当成狗槽）→ 回退 LAST_SETTLED。
+    let mut slot_before = slot_before;
+    let before_on_screen = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| slot_inside_monitor(slot_before, &monitor))
+        .unwrap_or(true);
+    if !before_on_screen {
+        if let Ok(settled) = LAST_SETTLED_ISLAND_RECT.lock() {
+            if let Some(settled) = *settled {
+                eprintln!(
+                    "RECALC_GUARD reason=anchor_offscreen from=({},{}) fallback_settled=({},{})",
+                    slot_before.x, slot_before.y, settled.x, settled.y
+                );
+                slot_before = settled;
+            }
+        }
+    }
     let dx = slot_x - slot_before.x;
     let dy = slot_y - slot_before.y;
     let monitor_fingerprint = window
@@ -919,15 +967,83 @@ fn correct_expanded_slot_after(
     if target_x == position.x && target_y == position.y {
         return;
     }
+    // 兜底：偏差 >2px 且结果贴屏幕左上角（<50px）→ 记录角落风险并（配合不变量）纠正回原槽。
+    let corner_risk = target_x.abs() < 50 && target_y.abs() < 50;
+    if corner_risk && (dx.abs() > 2 || dy.abs() > 2) {
+        eprintln!(
+            "OVERLAY_CORNER_GUARD corner_risk=true slot_before=({},{}) slot_after=({},{}) dx={dx} dy={dy} target=({target_x},{target_y})",
+            slot_before.x, slot_before.y, slot_x, slot_y
+        );
+    }
+    if reject_zero_position(window, target_x, target_y, "slot_correct") {
+        return;
+    }
     let _ = window.set_position(Position::Physical(PhysicalPosition::new(target_x, target_y)));
     eprintln!(
         "OVERLAY_SLOT_CORRECT dx={} dy={} from=({},{}) to=({},{})",
         dx, dy, position.x, position.y, target_x, target_y
     );
+    // 统一不变量校验点：纠正后再量一次狗槽，超差就记 SLOT_INVARIANT_VIOLATION（并再纠一次）。
+    let slot_before_rect = geometry_invariant::SlotRect::new(
+        slot_before.x,
+        slot_before.y,
+        slot_before.width as i32,
+        slot_before.height as i32,
+    );
+    if let Ok(after_size) = window.outer_size() {
+        let after_slot = geometry_invariant::slot_from_window(
+            geometry_invariant::SlotRect::new(
+                target_x,
+                target_y,
+                after_size.width as i32,
+                after_size.height as i32,
+            ),
+            panel_side,
+            panel_vertical,
+            slot_before_rect.width,
+            slot_before_rect.height,
+        );
+        if let Some(violation) =
+            geometry_invariant::assert_slot_invariant(slot_before_rect, after_slot, "expanded_slot_correct", true)
+        {
+            eprintln!(
+                "SLOT_INVARIANT_VIOLATION op={} dx={} dy={} corrected={} before=({},{}) after=({},{})",
+                violation.op,
+                violation.dx,
+                violation.dy,
+                violation.corrected,
+                violation.before.x,
+                violation.before.y,
+                violation.after.x,
+                violation.after.y
+            );
+        }
+    }
     remember_settled_island_rect(window);
 }
 
 /// 狗槽（展开前位置）落在哪块显示器上。
+fn slot_inside_monitor(slot: WindowRect, monitor: &Monitor) -> bool {
+    let position = monitor.position();
+    let size = monitor.size();
+    slot.x >= position.x
+        && slot.y >= position.y
+        && slot.x + slot.width as i32 <= position.x + size.width as i32
+        && slot.y + slot.height as i32 <= position.y + size.height as i32
+}
+
+/// (0,0) 是历史 P0「锚点算错」的典型产物；一律拒绝写入并留证。
+fn reject_zero_position(window: &WebviewWindow, x: i32, y: i32, reason: &str) -> bool {
+    if x != 0 || y != 0 {
+        return false;
+    }
+    eprintln!(
+        "RECALC_GUARD reason=zero-position op={reason} label={} rejected=true",
+        window.label()
+    );
+    true
+}
+
 fn dog_monitor_for_slot(
     window: &WebviewWindow,
     slot: WindowRect,
@@ -4695,6 +4811,9 @@ fn apply_stage_geometry(
     };
 
     let target = PhysicalPosition::new(x, y);
+    if reject_zero_position(window, target.x, target.y, "stage_geometry") {
+        return Ok(());
+    }
     let start = window.outer_position().map_err(|error| error.to_string())?;
     if start == target {
         remember_settled_island_rect(window);
@@ -5878,6 +5997,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_monitors,
+            island_geometry_selftest,
             set_monitor_preferences,
             qq_mail::get_qq_mail_state,
             qq_mail::connect_qq_mail,

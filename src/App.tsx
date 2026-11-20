@@ -2061,9 +2061,16 @@ export function IslandShell({
                   // 睡觉在鼠标悬停面板，避免再弹一层菜单。
                   event.preventDefault();
                   event.stopPropagation();
-                  if (mouseInteractions) {
-                    onOpenPage("chat");
+                  if (!mouseInteractions) return;
+                  // 浮层（双击打开的气泡/悬停面板）已经开着时，右键**只切页签**：
+                  // 不调用任何几何命令。否则会「清掉 React 浮层但不关原生浮层」，
+                  // 导致 apply_stage_geometry 被 OVERLAY_SNAPSHOT 短路、窗口停在浮层尺寸，
+                  // 展开后的界面在小窗口里把小狗画到左上角（用户反馈的 P0）。
+                  if (overlayOpen) {
+                    onPageChange("chat");
+                    return;
                   }
+                  onOpenPage("chat");
                 }}
                 style={{
                   left: `${petHitBox.x * 100}%`,
@@ -6149,6 +6156,11 @@ function IslandApp({
   }, []);
 
   const openIslandPage = useCallback((nextPage: IslandPage) => {
+    // 浮层开着时只切页签，不触发几何（避免 OVERLAY_SNAPSHOT 与展开几何打架）。
+    if (petOverlayRef.current) {
+      setPage(nextPage);
+      return;
+    }
     clearPetOverlayForPage();
     if (mode !== "expanded") {
       // 窗口从收起尺寸放大时，WebView 会短暂保留旧画面，狗看起来在左上角

@@ -44,3 +44,52 @@
 | 设置里的「小狗屏幕 / Bongo 屏幕」下拉 UIA 选不中 | 不是被遮挡：WebView2 把 `<option>` 暴露成 `ListItem`，但**不支持 `SelectionItemPattern`**（`GetCurrentPattern` 报 Unsupported Pattern）；鼠标点击 + 方向键/Enter 正常。自动化脚本已改用点击+键盘兜底。 |
 | 右键展开的根因收敛 | `70c0620` 用「狗槽不变量 + 事后校正 + 跨屏 clamp」止血；正常场景 `OVERLAY_SLOT_CORRECT`/`OVERLAY_MONITOR_CLAMP` 都是 0 次触发，若线上仍出现，按 `RC_GEOM` 的 `anchor/monitor/panel_side/dx/dy` 定位分支。 |
 | 气泡窗口与主岛共用「小狗屏幕」偏好 | 已实现；但独立气泡窗口（不是主岛内浮层）只在视频摘要路径出现，未实机验证。 |
+
+## 5. 几何不变量自检（2026-11-20）
+
+### 5.1 不变量定义（唯一真理：狗槽屏幕坐标）
+
+- **收起态**：狗槽 = 窗口矩形左上角 `(x, y)` + 尺寸 `(slot_w, slot_h)`；
+- **展开 / 浮层态**：由 `panelSide / panelVertical` 反推狗槽：
+  - `left`：狗槽 x = 窗口 x + 窗口宽 - 槽宽；`right`：狗槽 x = 窗口 x；
+  - `above`：狗槽 y = 窗口 y + 窗口高 - 槽高；`below`：狗槽 y = 窗口 y；
+- **不变量**：同一逻辑状态下，任何操作（开合浮层、右键、Esc、切屏、缩边唤醒、设置变更、启动恢复）
+  前后狗槽偏差 **≤ 2px**。
+
+### 5.2 校验点与兜底（Rust）
+
+| 位置 | 行为 |
+| --- | --- |
+| `correct_expanded_slot_after` | 展开后按不变量校验；超差 → `OVERLAY_SLOT_CORRECT` 平移回原槽，再校验一次，超差记 `SLOT_INVARIANT_VIOLATION op=… dx=… dy=… corrected=…` |
+| 同上（锚点越界） | `slot_before` 不在任何显示器内 → `RECALC_GUARD reason=anchor_offscreen`，回退 `LAST_SETTLED_ISLAND_RECT` |
+| 同上（角落风险） | 目标贴屏幕左上角（距 (0,0) <50px）且偏差 >2px → `OVERLAY_CORNER_GUARD` |
+| `apply_stage_geometry` / 槽位纠正 | 目标 `(0,0)` 一律拒绝：`RECALC_GUARD reason=zero-position` |
+| `set_island_interaction` | 进展开流程时若浮层仍开：`RC_GEOM_AFTER_OVERLAY before=… after=… anchor=… overlay_active=true` |
+| `set_island_overlay` / `plan_island_overlay` / `show_island` / `lock_island_corner` / 拖拽收尾 / 启动恢复 | 由上述统一入口覆盖；启动恢复日志 `STARTUP_RESTORE …`（见 §13 于 `docs/pet-multi-monitor.md`） |
+
+本次同时修复（P0「双击浮层后右键 → 小狗到左上角」）：
+右键时若浮层已开，前端只切页签、不再调用 `onOpenPage` 的几何路径；`openIslandPage` 也加了同样的守卫。
+根因：`clearPetOverlayForPage()` 只清 React 浮层、不关原生 `OVERLAY_SNAPSHOT`，随后
+`apply_stage_geometry` 被 `OVERLAY_SNAPSHOT.is_some()` 短路、窗口停在浮层尺寸，展开后的界面把小狗画在左上角。
+
+### 5.3 自检命令（结构化 JSON）
+
+应用内调用：
+
+```ts
+await invoke("island_geometry_selftest");
+// { tolerance: 2, total: 8, passed: 8, scenarios: [{ op, before, after, dx, dy, pass }, …] }
+```
+
+8 个场景：`collapsed->rightclick`、`collapsed->doubleclick`、`overlay->rightclick`、`overlay->esc`、
+`tucked->wake`、`switch-primary`、`switch-secondary`、`startup-restore`。
+
+### 5.4 回归脚本
+
+```bash
+node scripts/geometry-invariant.mjs   # 跑 cargo test --lib geometry_invariant；失败退出码非 0
+```
+
+本机 Rust 测试二进制若因 DLL 入口无法加载，脚本会提示改用应用内 `island_geometry_selftest` 取同一套 JSON。
+单测位置：`src-tauri/src/geometry_invariant.rs`（不变量通过/纠正/无法纠正三分支 + 8 场景 + 四方向反推回环）。
+» 日志格式：`SLOT_INVARIANT_VIOLATION op=<op> dx=<dx> dy=<dy> corrected=<bool> before=(x,y) after=(x,y)`。
