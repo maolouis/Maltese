@@ -140,6 +140,35 @@ static NATIVE_GLASS_INITIALIZED: OnceLock<()> = OnceLock::new();
 static ISLAND_SHOWN: AtomicBool = AtomicBool::new(false);
 // 前端首帧就绪的时间点：排障时用来对照 show 是否发生在握手之后。
 static FRONTEND_READY_AT: OnceLock<Instant> = OnceLock::new();
+
+// 启动阶段每一步的时间戳：卡死时直接看最后一条 [startup] 停在哪。
+static STARTUP_START: OnceLock<Instant> = OnceLock::new();
+static STARTUP_WATCHDOG_FIRED: AtomicBool = AtomicBool::new(false);
+
+fn startup_start() -> Instant {
+    *STARTUP_START.get_or_init(Instant::now)
+}
+
+fn startup_mark(step: &str) {
+    eprintln!("[startup] step={step} +{}ms", startup_start().elapsed().as_millis());
+}
+
+/// 8s watchdog：前端首帧握手迟迟不来（冷启动卡死）时强制 show 一次，至少看到窗口。
+fn spawn_startup_watchdog(app: AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        if FRONTEND_READY_AT.get().is_some() || STARTUP_WATCHDOG_FIRED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        eprintln!("STARTUP_WATCHDOG no frontend ready in 8s，强制显示岛屿窗口（不阻塞后续）");
+        if let Ok(window) = main_window(&handle) {
+            let _ = window.show();
+        }
+        let _ = show_island(&handle);
+        eprintln!("[startup] step=watchdog_done +{}ms", startup_start().elapsed().as_millis());
+    });
+}
 // show 之后窗口仍然不可见时的补显次数与间隔（WebView2 刚握手 / 系统吞掉 show）。
 const ISLAND_VISIBILITY_ATTEMPTS: usize = 6;
 const ISLAND_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(150);
@@ -2880,6 +2909,7 @@ fn frontend_ready(app: AppHandle) -> Result<(), String> {
     let first_ready = FRONTEND_READY_AT.set(Instant::now()).is_ok();
     if first_ready {
         eprintln!("frontend reported first paint ready");
+        startup_mark("frontend_ready");
     }
     if ISLAND_SHOWN.load(Ordering::SeqCst) {
         return Ok(());
@@ -6248,6 +6278,8 @@ fn build_tray(app: &App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    STARTUP_START.get_or_init(Instant::now);
+    startup_mark("run:begin");
     let mut context = tauri::generate_context!();
     if let Some(identifier) = notification_diagnostics::verification_identifier() {
         context.config_mut().identifier = identifier;
@@ -6395,13 +6427,17 @@ pub fn run() {
             if let Err(error) = notification_diagnostics::start(app.handle()) {
                 eprintln!("failed to initialize notification diagnostics: {error}");
             }
+            startup_mark("setup:begin");
             if let Ok(window) = main_window(app.handle()) {
+                startup_mark("setup:island_window");
                 restore_island_rect_on_startup(app.handle());
                 if let Err(error) = apply_stage_geometry(&window, IslandWindowState::default(), false) {
                     eprintln!("failed to size and position island window: {error}");
                 }
                 start_cursor_passthrough_loop(window);
             }
+            startup_mark("setup:island_ready");
+            spawn_startup_watchdog(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
