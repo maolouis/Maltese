@@ -23,6 +23,8 @@ pub const SIMILARITY_MIN_CHARS: usize = 15;
 /// 小狗感悟长度：60–120 字（下限只做提示，不硬截断）。
 pub const MAX_DOG_TAKE_CHARS: usize = 120;
 pub const MIN_DOG_TAKE_CHARS: usize = 60;
+/// 选篇说明长度上限（只交代挑选，不列被丢篇目标题）。
+pub const MAX_PICK_NOTE_CHARS: usize = 80;
 /// 博主腔黑名单：dogTake 命中任一词就重写/降级。
 pub const DOG_TAKE_BLACKLIST: [&str; 12] = [
     "总之",
@@ -64,6 +66,9 @@ pub struct XhsDraft {
     /// 小狗第一人称感悟（60–120 字），独立于 cta。
     #[serde(default)]
     pub dog_take: String,
+    /// 小狗口吻交代「只挑了几篇」（≤80 字；全部使用时为空）。
+    #[serde(default)]
+    pub pick_note: String,
     /// 结尾互动一句。
     #[serde(default)]
     pub cta: String,
@@ -278,6 +283,7 @@ pub fn template_draft(items: &[ContentItem]) -> XhsDraft {
         sources: items.iter().take(9).map(source_of).collect(),
         hook: String::new(),
         dog_take: dog_take_template(items, 0),
+        pick_note: String::new(),
         cta: "你会想试试吗？评论区聊聊。".to_string(),
         used_notes: items.iter().take(9).map(note_id_of).collect(),
         similar: false,
@@ -299,6 +305,34 @@ pub fn dog_take_template(items: &[ContentItem], variant: usize) -> String {
         sentences.push("大家说的东西不太一样，我有点绕晕了，但还是想黏着你一起看。".to_string());
     }
     sentences[variant % sentences.len()].clone()
+}
+
+/// pickNote 模板：小狗口吻交代「只挑了几篇」，3 条按序轮换。
+pub fn pick_note_template(total: usize, variant: usize) -> String {
+    let sentences = [
+        format!("今天看了 {total} 篇，有几篇我看得最入神，就先挑出来跟你分享啦～"),
+        "有几篇我还没太看懂，先放一边啦，回头再让主人讲给我听～".to_string(),
+        "我挑了几篇自己最喜欢的，其他的等下次再一起看嘛～".to_string(),
+    ];
+    sentences[variant % sentences.len()].clone()
+}
+
+/// pickNote 只在「输入篇数 > 使用篇数」时出现；全部使用时清空。
+pub fn normalize_pick_note(
+    total: usize,
+    used: usize,
+    value: &str,
+    variant: usize,
+) -> String {
+    if used >= total {
+        return String::new();
+    }
+    let text = value.trim();
+    if text.is_empty() {
+        pick_note_template(total, variant)
+    } else {
+        text.chars().take(MAX_PICK_NOTE_CHARS).collect()
+    }
 }
 
 /// dogTake 风格校验：必须第一人称含「我」，且不含博主腔黑名单。
@@ -324,7 +358,7 @@ pub fn trim_dog_take(value: &str) -> String {
 pub fn build_prompt(items: &[ContentItem]) -> String {
     let multi = items.len() >= 2;
     let mut prompt = format!(
-        "{{\"title\":\"≤20字\",\"hook\":\"开头一句\",\"body\":\"≤1000字，含3-5个要点\",\"dogTake\":\"60-120字，小狗第一人称感悟\",\"cta\":\"结尾互动一句\",\"tags\":[\"#标签\"],\"usedNotes\":[\"noteId\"]}}\n\
+        "{{\"title\":\"≤20字\",\"hook\":\"开头一句\",\"body\":\"≤1000字，含3-5个要点\",\"dogTake\":\"60-120字，小狗第一人称感悟\",\"pickNote\":\"≤80字，小狗口吻说明只挑了哪几篇（不列具体标题）\",\"cta\":\"结尾互动一句\",\"tags\":[\"#标签\"],\"usedNotes\":[\"noteId\"]}}\n\
 你是小红书内容编辑，但你的身份是 Maltese 桌宠小狗（不是普通博主/编辑）。\n\
 人设：{} \n\
 帮主人把采集到的笔记改写成一篇原创图文文案。只输出一行 JSON，不要 Markdown/解释。\n\
@@ -332,13 +366,17 @@ pub fn build_prompt(items: &[ContentItem]) -> String {
 1. 必须改写而非摘抄：不得连续复制原文 15 个字以上；用自己的话重新组织信息。\n\
 2. 不编造原文没有的事实；不写“点击链接/私信我”等引流话术。\n\
 3. title 不超过 20 个汉字；body 不超过 1000 字，按要点分段，写 3–5 个要点；\n\
-4. dogTake 必须是小狗第一人称（要出现“我”），60–120 字：写具体小动作/小心思（想去看、想吃、想被摸头、看不太懂但觉得厉害），\n\
+4. 本次输入 {total_notes} 篇笔记，你可以只使用其中相关的 M 篇（M 可以少于 N），把用到的 noteId 填进 usedNotes；\n\
+   若 M < N，请用小狗口吻在 pickNote（≤80 字）里交代「只挑了几篇」：可以像“今天看了 7 篇，有两篇我看得最入神，就多看了几眼～”\n\
+   或“有几篇我没太看懂，先放一边啦，回头让主人讲给我听。”——**不要列出被丢下篇目的具体标题**，避免让作者不开心；若 M = N，pickNote 留空。\n\
+5. dogTake 必须是小狗第一人称（要出现“我”），60–120 字：写具体小动作/小心思（想去看、想吃、想被摸头、看不太懂但觉得厉害），\n\
    口语化、短句、偶尔叠词；**不允许**说教、总结金句、鸡汤、行业黑话或博主腔（如“总之/值得一试/核心在于/综上所述/干货/码住”）。\n\
-5. cta 也要小狗口吻的互动提问（例如“你们练球的时候都在想什么呀～”），不要“欢迎评论区留言”这种博主腔。\n\
-6. 正文顺序：hook（开头一句）→ body（3–5 个要点）→ dogTake（小狗感悟）→ cta（互动）；dogTake 与 cta 不要写进 body 里。\n\
-7. tags 3–8 个，带 # 前缀；usedNotes 填实际参考到的 noteId。\n\
-8. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
-        crate::local_chat::PERSONA_SUFFIX
+6. cta 也要小狗口吻的互动提问（例如“你们练球的时候都在想什么呀～”），不要“欢迎评论区留言”这种博主腔。\n\
+7. 正文顺序：hook（开头一句）→ body（3–5 个要点）→ dogTake（小狗感悟）→ cta（互动）；dogTake 与 cta 不要写进 body 里。\n\
+8. tags 3–8 个，带 # 前缀；usedNotes 填实际参考到的 noteId。\n\
+9. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
+        crate::local_chat::PERSONA_SUFFIX,
+        total_notes = items.len()
     );
     if multi {
         prompt.push_str(
@@ -451,6 +489,10 @@ pub fn parse_model_draft(raw: &str, items: &[ContentItem]) -> Result<XhsDraft, S
         sources: items.iter().take(9).map(source_of).collect(),
         hook: clamp_chars(&parse_string(&value, "hook"), 60),
         dog_take: trim_dog_take(&parse_string(&value, "dogTake")),
+        pick_note: parse_string(&value, "pickNote")
+            .chars()
+            .take(MAX_PICK_NOTE_CHARS)
+            .collect(),
         cta: clamp_chars(&parse_string(&value, "cta"), 60),
         used_notes,
         similar: false,
@@ -577,6 +619,14 @@ async fn compose(route: &ModelRoute, items: &[ContentItem]) -> Result<XhsDraft, 
         }
     }
 
+    // pickNote：只有「输入篇数 > 使用篇数」才需要；模型没写就按模板补一句。
+    draft.pick_note = normalize_pick_note(
+        items.len(),
+        draft.used_notes.len(),
+        &draft.pick_note,
+        draft.body.chars().count(),
+    );
+
     if let Some(snippet) = similarity_hit(&draft.body, items) {
         // 命中 ≥15 字：重写一次。
         let rewrite_prompt = format!(
@@ -668,6 +718,9 @@ fn readme(draft: &XhsDraft) -> String {
     if !draft.hook.is_empty() {
         text.push_str(&format!("## 开头\n{}\n\n", draft.hook));
     }
+    if !draft.pick_note.is_empty() {
+        text.push_str(&format!("## 挑了几篇\n{}\n\n", draft.pick_note));
+    }
     if !draft.dog_take.is_empty() {
         text.push_str(&format!("## 小狗的话\n{}\n\n", draft.dog_take));
     }
@@ -734,6 +787,12 @@ pub fn normalize_edited(draft: &mut XhsDraft) {
     draft.tags = sanitize_tags(&draft.tags);
     draft.hook = clamp_chars(&draft.hook, 60);
     draft.dog_take = trim_dog_take(&draft.dog_take);
+    draft.pick_note = draft
+        .pick_note
+        .trim()
+        .chars()
+        .take(MAX_PICK_NOTE_CHARS)
+        .collect();
     draft.cta = clamp_chars(&draft.cta, 60);
 }
 
@@ -956,6 +1015,44 @@ mod tests {
                 "#核心力量".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn pick_note_only_when_some_notes_are_used() {
+        // 全部使用：必须为空。
+        assert_eq!(normalize_pick_note(7, 7, "随便写点", 0), "");
+        // 部分使用且模型没写：模板兜底，带「篇」的小狗口吻。
+        let fallback = normalize_pick_note(7, 3, "", 0);
+        assert!(fallback.contains("篇"));
+        assert!(fallback.chars().count() <= MAX_PICK_NOTE_CHARS);
+        // 部分使用且模型写了：保留但 ≤80 字。
+        let long = "我".repeat(200);
+        let kept = normalize_pick_note(7, 2, &long, 0);
+        assert_eq!(kept.chars().count(), MAX_PICK_NOTE_CHARS);
+    }
+
+    #[test]
+    fn pick_note_templates_are_three_dog_voice_sentences() {
+        let a = pick_note_template(7, 0);
+        let b = pick_note_template(7, 1);
+        let c = pick_note_template(7, 2);
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        for sentence in [a, b, c] {
+            assert!(sentence.chars().count() <= MAX_PICK_NOTE_CHARS);
+            assert!(sentence.contains('我') || sentence.contains("篇"));
+        }
+    }
+
+    #[test]
+    fn parses_missing_pick_note_as_empty() {
+        let items = sample_items();
+        let draft = parse_model_draft(
+            r##"{"title":"海边","body":"要点一\n要点二","dogTake":"我也想去海边呀～","cta":"你去过海边吗～","tags":["#旅行"],"usedNotes":[]}"##,
+            &items,
+        )
+        .expect("draft");
+        assert_eq!(draft.pick_note, "");
     }
 
     #[test]

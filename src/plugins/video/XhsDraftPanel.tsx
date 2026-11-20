@@ -28,6 +28,7 @@ export type XhsDraft = {
   sources: XhsDraftSource[];
   hook?: string;
   dogTake?: string;
+  pickNote?: string;
   cta?: string;
   usedNotes?: string[];
   similar?: boolean;
@@ -42,6 +43,7 @@ export function XhsDraftPanel() {
   const [body, setBody] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [dogTakeText, setDogTakeText] = useState("");
+  const [pickNoteText, setPickNoteText] = useState("");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +56,7 @@ export function XhsDraftPanel() {
     setBody(next.body);
     setTagsText(next.tags.join(" "));
     setDogTakeText(next.dogTake || "");
+    setPickNoteText(next.pickNote || "");
     setSavedAt(null);
   };
 
@@ -77,7 +80,7 @@ export function XhsDraftPanel() {
       .split(/[\s,，、]+/)
       .map((tag) => tag.trim())
       .filter(Boolean);
-    return { ...draft, title, body, tags, dogTake: dogTakeText };
+    return { ...draft, title, body, tags, dogTake: dogTakeText, pickNote: pickNoteText };
   };
 
   const save = async () => {
@@ -98,7 +101,7 @@ export function XhsDraftPanel() {
 
   const copyAll = async () => {
     if (!draft) return;
-    const text = `${title}\n\n${body}\n\n${dogTakeText}\n\n${tagsText}`;
+    const text = `${title}\n\n${body}\n\n${pickNoteText}\n\n${dogTakeText}\n\n${tagsText}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied("all");
@@ -178,6 +181,20 @@ export function XhsDraftPanel() {
             className="xhs-draft__input"
             value={tagsText}
             onChange={(event) => setTagsText(event.currentTarget.value)}
+          />
+
+          {pickNoteText && (
+            <p className="xhs-draft__pick-note">🐶 {pickNoteText}</p>
+          )}
+          <label className="xhs-draft__label" htmlFor="xhs-draft-pick-note">
+            挑了几篇（小狗口吻，≤80 字；全部使用时留空）
+          </label>
+          <input
+            id="xhs-draft-pick-note"
+            className="xhs-draft__input xhs-draft__input--pick"
+            value={pickNoteText}
+            maxLength={120}
+            onChange={(event) => setPickNoteText(event.currentTarget.value)}
           />
 
           <label className="xhs-draft__label" htmlFor="xhs-draft-dog-take">
