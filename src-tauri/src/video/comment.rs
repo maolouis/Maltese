@@ -287,117 +287,117 @@ pub async fn generate_quality_comment(
 }
 
 /// 小红书评论脚本：占位点击 → 等编辑器激活 → 写入 → 发送；每步返回 step 日志。
-const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {{
+const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
   var text = __TEXT__;
-  var sleep = function (ms) {{ return new Promise(function (resolve) {{ setTimeout(resolve, ms); }}); }};
+  var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
   var steps = [];
-  function logStep(step, ok, sel, reason) {{
+  function logStep(step, ok, sel, reason) {
     var doc = '';
-    try {{
+    try {
       var box = document.querySelector('.comments-container, .comment-list, #comment');
       doc = String((box && (box.outerHTML || box.textContent)) || '').replace(/\s+/g, ' ').slice(0, 300);
-    }} catch (e) {{}}
-    steps.push({{ step: step, ok: ok, sel: sel || '', reason: reason || '', docHtml: doc }});
-  }}
-  function visible(el) {{
+    } catch (e) {}
+    steps.push({ step: step, ok: ok, sel: sel || '', reason: reason || '', docHtml: doc });
+  }
+  function visible(el) {
     if (!el) return false;
-    try {{
+    try {
       var box = el.getBoundingClientRect();
       if (box.width < 10 || box.height < 10) return false;
       var style = window.getComputedStyle(el);
       return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0.05;
-    }} catch (e) {{ return false; }}
-  }}
+    } catch (e) { return false; }
+  }
   var roots = [];
-  function deepAll(selector) {{
+  function deepAll(selector) {
     var list = [];
-    (function walk(root) {{
+    (function walk(root) {
       if (!root || roots.indexOf(root) >= 0) return;
       roots.push(root);
-      try {{
+      try {
         var found = root.querySelectorAll ? root.querySelectorAll(selector) : [];
         for (var i = 0; i < found.length; i += 1) list.push(found[i]);
         var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
         for (var j = 0; j < all.length; j += 1) if (all[j].shadowRoot) walk(all[j].shadowRoot);
-      }} catch (e) {{}}
-    }})(document);
+      } catch (e) {}
+    })(document);
     return list;
-  }}
-  function pointerSequence(el) {{
-    try {{
+  }
+  function pointerSequence(el) {
+    try {
       var box = el.getBoundingClientRect();
       var x = box.left + box.width / 2;
       var y = box.top + box.height / 2;
       var events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-      for (var i = 0; i < events.length; i += 1) {{
+      for (var i = 0; i < events.length; i += 1) {
         var kind = events[i];
         var Ctor = kind.indexOf('pointer') === 0 ? PointerEvent : MouseEvent;
-        el.dispatchEvent(new Ctor(kind, {{ bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }}));
-      }}
-      return {{ x: x, y: y }};
-    }} catch (e) {{ return null; }}
-  }}
-  function findPlaceholder() {{
+        el.dispatchEvent(new Ctor(kind, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+      }
+      return { x: x, y: y };
+    } catch (e) { return null; }
+  }
+  function findPlaceholder() {
     var container = document.querySelector('.comments-container, .comment-list, #comment');
     var nodes = deepAll('div, span, textarea, input, [class*="input"], [class*="placeholder"]');
-    for (var i = 0; i < nodes.length; i += 1) {{
+    for (var i = 0; i < nodes.length; i += 1) {
       var node = nodes[i];
       if (!visible(node)) continue;
       if (container && !container.contains(node)) continue;
       var value = (node.getAttribute('placeholder') || '') + ' ' + (node.textContent || '').trim();
       if (/说点什么|留下你的评论|写评论|评论一下/.test(value)) return node;
       if (node.tagName === 'TEXTAREA' || node.getAttribute('contenteditable') === 'true') return node;
-    }}
+    }
     return null;
-  }}
-  function findEditor() {{
+  }
+  function findEditor() {
     var nodes = deepAll('div[contenteditable="true"], [contenteditable="plaintext-only"], textarea, [class*="comment-input"]');
-    for (var i = 0; i < nodes.length; i += 1) {{
+    for (var i = 0; i < nodes.length; i += 1) {
       var node = nodes[i];
       if (node.tagName === 'TEXTAREA' && node.disabled) continue;
       if (!visible(node)) continue;
       return node;
-    }}
+    }
     return null;
-  }}
+  }
 
   var placeholder = findPlaceholder();
   var point = null;
-  if (!placeholder) {{
+  if (!placeholder) {
     logStep('click-placeholder', false, '', 'no-placeholder');
-    return JSON.stringify({{ ok: false, reason: 'no-editor', message: '没找到小红书评论入口', detail: {{ steps: steps }} }});
-  }}
+    return JSON.stringify({ ok: false, reason: 'no-editor', message: '没找到小红书评论入口', detail: { steps: steps } });
+  }
   point = pointerSequence(placeholder);
   logStep('click-placeholder', true, placeholder.className || placeholder.tagName, '');
   await sleep(300);
 
   var editor = null;
-  for (var wait = 0; wait < 15; wait += 1) {{
+  for (var wait = 0; wait < 15; wait += 1) {
     editor = findEditor();
     if (editor) break;
     await sleep(200);
-  }}
-  if (!editor) {{
+  }
+  if (!editor) {
     logStep('wait-editor', false, (placeholder.className || ''), 'no-editor');
-    return JSON.stringify({{ ok: false, reason: 'no-editor', message: '点了评论入口但编辑器没激活', detail: {{ steps: steps, placeholderPoint: point }} }});
-  }}
+    return JSON.stringify({ ok: false, reason: 'no-editor', message: '点了评论入口但编辑器没激活', detail: { steps: steps, placeholderPoint: point } });
+  }
   logStep('wait-editor', true, editor.className || editor.tagName, '');
 
   editor.focus();
-  if (editor.tagName === 'TEXTAREA') {{
+  if (editor.tagName === 'TEXTAREA') {
     var proto = Object.getPrototypeOf(editor);
     var descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
     if (descriptor && descriptor.set) descriptor.set.call(editor, text);
     else editor.value = text;
-  }} else {{
-    try {{ document.execCommand('selectAll', false, null); }} catch (e) {{}}
-    try {{ document.execCommand('insertText', false, text); }} catch (e) {{}}
-  }}
-  try {{
-    editor.dispatchEvent(new InputEvent('beforeinput', {{ bubbles: true, cancelable: true, inputType: 'insertText', data: text }}));
-    editor.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: text }}));
-    editor.dispatchEvent(new CompositionEvent('compositionend', {{ bubbles: true, data: text }}));
-  }} catch (e) {{ editor.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+  } else {
+    try { document.execCommand('selectAll', false, null); } catch (e) {}
+    try { document.execCommand('insertText', false, text); } catch (e) {}
+  }
+  try {
+    editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+    editor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
+  } catch (e) { editor.dispatchEvent(new Event('input', { bubbles: true })); }
   await sleep(350);
   var written = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
   logStep('write', written.length > 0, editor.className || editor.tagName, written.length > 0 ? '' : 'empty');
@@ -405,30 +405,30 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {{
   var words = ['发送', '评论'];
   var buttons = deepAll('button, [role=button], .submit, [class*="send"]');
   var button = null;
-  for (var b = 0; b < buttons.length; b += 1) {{
+  for (var b = 0; b < buttons.length; b += 1) {
     var candidate = buttons[b];
     if (!visible(candidate)) continue;
     var className = String(candidate.className || '');
     var label = (candidate.textContent || '').trim();
     var byClass = /\.submit|send/i.test(className);
-    var byLabel = label.length > 0 && label.length <= 8 && words.some(function (w) {{ return label.indexOf(w) >= 0; }});
+    var byLabel = label.length > 0 && label.length <= 8 && words.some(function (w) { return label.indexOf(w) >= 0; });
     if (!byClass && !byLabel) continue;
     if (candidate.disabled) continue;
     button = candidate;
     break;
-  }}
-  if (!button) {{
+  }
+  if (!button) {
     logStep('submit', false, '', 'no-button');
-    return JSON.stringify({{ ok: false, reason: 'no-button', message: '没找到可用的发送按钮', detail: {{ steps: steps }} }});
-  }}
+    return JSON.stringify({ ok: false, reason: 'no-button', message: '没找到可用的发送按钮', detail: { steps: steps } });
+  }
   await sleep(400);
   button.click();
   logStep('submit', true, button.className || button.tagName, '');
   await sleep(900);
   var after = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
   logStep('verify', after.length === 0, 'editor-cleared', after.length === 0 ? '' : 'still-editing');
-  return JSON.stringify({{ ok: true, reason: 'sent', message: '评论已提交', detail: {{ steps: steps }} }});
-}})()"#;
+  return JSON.stringify({ ok: true, reason: 'sent', message: '评论已提交', detail: { steps: steps } });
+})()"#;
 
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
 /// 评论区 DOM 脚本模板：
