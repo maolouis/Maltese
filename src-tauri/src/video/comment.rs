@@ -310,6 +310,7 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
   }
   var roots = [];
   function deepAll(selector) {
+    roots = []; // 每次重新收集 shadow root，避免上一次调用把 root 全部标记后返回空。
     var list = [];
     (function walk(root) {
       if (!root || roots.indexOf(root) >= 0) return;
@@ -322,6 +323,17 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
       } catch (e) {}
     })(document);
     return list;
+  }
+  function outerContainer(node) {
+    var target = node;
+    for (var i = 0; i < 3; i += 1) {
+      var parent = target.parentElement;
+      if (!parent) break;
+      var cls = String(parent.className || '');
+      if (/input-box|editor|comment-input|input-area|reply-box/i.test(cls)) target = parent;
+      else break;
+    }
+    return target;
   }
   function pointerSequence(el) {
     try {
@@ -351,6 +363,28 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
       if (node.tagName === 'TEXTAREA' || /说点什么|留下你的评论|写评论|评论一下|发布评论/.test(ph + ' ' + (node.textContent || '').trim() + ' ' + cls)) {
         return node;
       }
+    }
+    // 先尝试点开页面上的「评论」入口（部分版式需要先点评论图标/按钮）。
+    var triggers = deepAll('button, [role=button], div, span');
+    for (var ti = 0; ti < triggers.length; ti += 1) {
+      var trigger = triggers[ti];
+      if (!visible(trigger)) continue;
+      var tText = (trigger.textContent || '').trim();
+      var tCls = String(trigger.className || '');
+      if ((tText === '评论' || /comment/i.test(tCls)) && tText.length <= 6) {
+        try { pointerSequence(trigger); } catch (e) {}
+        break;
+      }
+    }
+    // 再尝试同源 iframe 内的输入条。
+    var frames = deepAll('iframe');
+    for (var fi = 0; fi < frames.length; fi += 1) {
+      try {
+        var doc = frames[fi].contentDocument;
+        if (!doc) continue;
+        var inner = doc.querySelector('textarea, [contenteditable="true"], .input-box');
+        if (inner) return inner;
+      } catch (e) {}
     }
     // 其次：滚到评论区，在 .comments-container 内找。
     var container = document.querySelector('.comments-container, .comment-list, #comment');
@@ -387,8 +421,9 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
     logStep('click-placeholder', false, '', 'no-placeholder');
     return JSON.stringify({ ok: false, reason: 'no-editor', message: '没找到小红书评论入口', detail: { steps: steps } });
   }
-  point = pointerSequence(placeholder);
-  logStep('click-placeholder', true, placeholder.className || placeholder.tagName, '');
+  var clickTarget = outerContainer(placeholder);
+  point = pointerSequence(clickTarget);
+  logStep('click-placeholder', true, clickTarget.className || clickTarget.tagName, '');
   await sleep(300);
 
   var editor = null;
@@ -422,8 +457,8 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
   var written = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
   logStep('write', written.length > 0, editor.className || editor.tagName, written.length > 0 ? '' : 'empty');
 
-  var words = ['发送', '评论'];
-  var buttons = deepAll('button, [role=button], .submit, [class*="send"]');
+  var words = ['发送', '评论', '发布'];
+  var buttons = deepAll('button, [role=button], .submit, [class*="send"], [class*="publish"], .publish');
   var button = null;
   for (var b = 0; b < buttons.length; b += 1) {
     var candidate = buttons[b];
@@ -438,8 +473,21 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
     break;
   }
   if (!button) {
-    logStep('submit', false, '', 'no-button');
-    return JSON.stringify({ ok: false, reason: 'no-button', message: '没找到可用的发送按钮', detail: { steps: steps } });
+    // 兜底：编辑器上按 Enter / Ctrl+Enter（小红书常见快捷发送）。
+    try {
+      editor.focus();
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey: true, bubbles: true, cancelable: true }));
+    } catch (e) {}
+    await sleep(500);
+    var candidates = [];
+    var allButtons = deepAll('button, [role=button], [class*="send"], [class*="publish"], .submit');
+    for (var ci = 0; ci < allButtons.length && candidates.length < 6; ci += 1) {
+      if (!visible(allButtons[ci])) continue;
+      candidates.push(String(allButtons[ci].className || allButtons[ci].tagName) + ':' + (allButtons[ci].textContent || '').trim().slice(0, 6));
+    }
+    logStep('submit', false, candidates.join('|'), 'no-button');
+    return JSON.stringify({ ok: false, reason: 'no-button', message: '没找到可用的发送按钮 candidates=' + candidates.join('|'), detail: { steps: steps } });
   }
   await sleep(400);
   button.click();
