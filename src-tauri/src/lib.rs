@@ -4,6 +4,7 @@ mod netease;
 mod desktop_extras;
 mod island_rect_store;
 mod geometry_invariant;
+mod geometry_authority;
 mod desktop_icons;
 mod web_protocol;
 mod dsh_api;
@@ -802,6 +803,11 @@ fn set_island_interaction(
     if let Some(config) = desktop_extras::last_config() {
         let _ = desktop_extras::sync_extras_now(&app, &config);
     }
+    geometry_authority::record(
+        "set_island_interaction",
+        overlay_rect_before.map(|rect| geometry_authority::rect(rect.x, rect.y, rect.width, rect.height)),
+        read_sane_island_rect(&window).map(|rect| geometry_authority::rect(rect.x, rect.y, rect.width, rect.height)),
+    );
     if collapsing_to_expanded {
         let before = dog_slot_now(&window);
         let panel_side = LAST_PANEL_SIDE
@@ -1111,6 +1117,29 @@ struct PetSlotMeasure {
 }
 
 static PET_SLOT_MEASURE: std::sync::Mutex<Option<PetSlotMeasure>> = std::sync::Mutex::new(None);
+/// 按布局态分别保存实测偏移：collapsed 的样本绝不能用于 overlay/expanded 落位。
+static PET_SLOT_MEASURES: std::sync::Mutex<std::option::Option<std::collections::HashMap<String, PetSlotMeasure>>> =
+    std::sync::Mutex::new(None);
+/// 本次几何操作是否已经用实测 offset 预纠正过（防止 offset 被减两次）。
+static OFFSET_ALREADY_APPLIED: AtomicBool = AtomicBool::new(false);
+
+/// 当前真实布局态：overlay 打开时 state.mode 仍是 collapsed，必须靠 OVERLAY_SNAPSHOT 判定。
+fn current_layout_mode() -> &'static str {
+    if OVERLAY_SNAPSHOT.lock().map(|slot| slot.is_some()).unwrap_or(false) {
+        return "overlay";
+    }
+    match read_window_state().mode {
+        IslandMode::Expanded => "expanded",
+        IslandMode::Collapsed => "collapsed",
+    }
+}
+
+fn same_mode_measure(layout_mode: &str) -> Option<PetSlotMeasure> {
+    PET_SLOT_MEASURES
+        .lock()
+        .ok()
+        .and_then(|map| map.as_ref().and_then(|entries| entries.get(layout_mode).cloned()))
+}
 
 /// 前端在浮层/展开后上报狗元素相对窗口的实测偏移（CSS px）。
 /// Rust 侧狗槽真值一律用「窗口原点 + 实测偏移」，不再用 panelSide 公式反推。
@@ -1143,8 +1172,14 @@ fn report_pet_slot_offset(
         let dy = expected.map(|slot| slot_y - slot.y).unwrap_or(0);
         let mut corrected = false;
         let mut target = (position.x, position.y);
-        // 实测纠正：DOM 是唯一真相。狗在窗口里的实测偏移让狗槽偏离 settled 时，直接把窗口平移回去。
-        if mode != "collapsed" && (dx.abs() > 2 || dy.abs() > 2) {
+        let layout_mode = current_layout_mode();
+        let same_mode = layout_mode == mode && mode != "collapsed";
+        let offset_source = if same_mode { "same-mode" } else if mode == "collapsed" { "none" } else { "stale" };
+        // 启动 3s 窗口内只记录不纠正（否则会用 (0,0) 类偏移把窗口从副屏拉回主屏）。
+        let startup_window = startup_restore_active();
+        let already_applied = OFFSET_ALREADY_APPLIED.swap(false, Ordering::SeqCst);
+        // 实测纠正：只允许「当前布局态 == 本次测量态」且不在启动窗口期内。
+        if same_mode && !startup_window && !already_applied && (dx.abs() > 2 || dy.abs() > 2) {
             target = (position.x - dx, position.y - dy);
             if !reject_zero_position(&window, target.0, target.1, "measured_slot") {
                 let _ = window.set_position(Position::Physical(PhysicalPosition::new(target.0, target.1)));
@@ -1161,17 +1196,25 @@ fn report_pet_slot_offset(
             target.0,
             target.1
         );
+        eprintln!(
+            "GEOM_DECISION op=report_pet_slot_offset mode={mode} offsetSource={offset_source} offsetApplied={} expected={:?} final=({},{}) corrected={corrected} startupWindow={startup_window}",
+            if corrected { "once" } else if already_applied { "once" } else { "none" },
+            expected.map(|slot| (slot.x, slot.y)),
+            target.0,
+            target.1
+        );
     }
     Ok(())
 }
 
 /// 用实测偏移算狗槽（仅展开/浮层态；没测量过就返回 None，由调用方回退公式）。
 fn measured_dog_slot(window: &WebviewWindow) -> Option<WindowRect> {
-    let measure = PET_SLOT_MEASURE.lock().ok().and_then(|slot| slot.clone())?;
-    // 以**实测布局**为准：overlay 时 React state.mode 仍可能是 collapsed。
-    if measure.mode == "collapsed" {
+    let layout_mode = current_layout_mode();
+    if layout_mode == "collapsed" {
         return None;
     }
+    // 只用与当前布局态一致的样本；没有就回退公式（绝不拿 collapsed 的 (0,0) 当 overlay 偏移）。
+    let measure = same_mode_measure(layout_mode)?;
     let state = read_window_state();
     let scale = window.scale_factor().ok()?;
     let position = window.outer_position().ok()?;
@@ -1542,8 +1585,21 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
     STARTUP_RESTORE_UNTIL_MS.store(now_unix_millis() + 3000, Ordering::SeqCst);
     eprintln!(
         "STARTUP_RESTORE source=file rect=({x},{y},{},{}) monitor={} scale={scale} mode={} ok={}",
-        snapshot.width, snapshot.height,
-        monitor_fingerprint_of(&monitor), snapshot.mode, exact
+        snapshot.width,
+        snapshot.height,
+        monitor_fingerprint_of(&monitor),
+        snapshot.mode,
+        exact
+    );
+    enforce_slot_invariant(
+        &window,
+        Some(WindowRect {
+            x,
+            y,
+            width: snapshot.width,
+            height: snapshot.height,
+        }),
+        "startup_restore",
     );
 }
 
@@ -1884,6 +1940,7 @@ fn set_island_overlay(
     let window = main_window(&app)?;
     let state = read_window_state();
     let overlay_expected_slot = dog_slot_now(&window);
+    let overlay_geom_epoch = geometry_authority::begin("set_island_overlay");
     // 必须和 apply_stage_geometry 用同一块显示器：多屏时 current_monitor() 可能是错的，
     // 误用会导致浮层锚点算错、关掉后小狗瞬移。
     let monitor = state
@@ -2061,7 +2118,10 @@ fn set_island_overlay(
             let mut move_y = clamped_y;
             if let Some(expected) = expected_slot_from_state(&window) {
                 // 优先用前端实测的狗偏移：直接把窗口放到「expected - offset」，不靠 panelSide 公式。
-                let measured = PET_SLOT_MEASURE.lock().ok().and_then(|slot| slot.clone());
+                // 只认与本次落位相同的布局态样本（overlay / expanded），collapsed 样本不参与。
+                let target_layout_mode = if overlay.is_some() { "overlay" } else { "expanded" };
+                let measured = same_mode_measure(target_layout_mode);
+                OFFSET_ALREADY_APPLIED.store(false, Ordering::SeqCst);
                 if let Some(measure) = measured.clone() {
                     let offset_x = (measure.off_x * scale).round() as i32;
                     let offset_y = (measure.off_y * scale).round() as i32;
@@ -2070,6 +2130,11 @@ fn set_island_overlay(
                     if (wanted_x - clamped_x).abs() > 2 || (wanted_y - clamped_y).abs() > 2 {
                         move_x = wanted_x;
                         move_y = wanted_y;
+                        OFFSET_ALREADY_APPLIED.store(true, Ordering::SeqCst);
+                        eprintln!(
+                            "GEOM_DECISION op=set_island_overlay mode={target_layout_mode} offsetSource=same-mode offsetApplied=once planned=({clamped_x},{clamped_y}) final=({move_x},{move_y}) offset=({}, {})",
+                            measure.off_x, measure.off_y
+                        );
                         if overlay.as_deref() == Some("hover") {
                             eprintln!(
                                 "DOUBLECLICK_GEOM phase=move pre_corrected=true source=measured planned=({clamped_x},{clamped_y}) move=({move_x},{move_y}) offset=({}, {})",
@@ -2140,6 +2205,12 @@ fn set_island_overlay(
     }
     // 不变量强制约束：浮层开合后狗槽必须回到操作前的位置（±2px）。
     enforce_slot_invariant(&window, overlay_expected_slot, overlay_op);
+    geometry_authority::commit(
+        "set_island_overlay",
+        overlay_geom_epoch,
+        None,
+        geometry_authority::window_rect(&window),
+    );
     overlay_result
 }
 
@@ -2249,7 +2320,36 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         width: (base_w * scale).round() as u32,
         height: (base_h * scale).round() as u32,
     };
-    enforce_slot_invariant(&window, Some(plan_expected), "plan_island_overlay");
+    let plan_epoch = geometry_authority::begin("plan_island_overlay");
+    geometry_authority::commit(
+        "plan_island_overlay",
+        plan_epoch,
+        None,
+        geometry_authority::window_rect(&window),
+    );
+    // 规划期**只计算不落位**：这里只断言/记录，绝不 set_position。
+    if let Some(actual) = dog_slot_now(&window) {
+        let expected_rect = geometry_invariant::SlotRect::new(
+            plan_expected.x,
+            plan_expected.y,
+            plan_expected.width as i32,
+            plan_expected.height as i32,
+        );
+        let actual_rect = geometry_invariant::SlotRect::new(
+            actual.x,
+            actual.y,
+            actual.width as i32,
+            actual.height as i32,
+        );
+        if let Some(violation) =
+            geometry_invariant::assert_slot_invariant(expected_rect, actual_rect, "plan_island_overlay", true)
+        {
+            eprintln!(
+                "GEOM_PLAN_NO_MOVE op=plan_island_overlay dx={} dy={} before=({},{}) after=({},{})",
+                violation.dx, violation.dy, expected_rect.x, expected_rect.y, actual_rect.x, actual_rect.y
+            );
+        }
+    }
     if overlay == "hover" {
         let slot = dog_slot_now(&window);
         eprintln!(
@@ -2819,6 +2919,7 @@ fn lock_island_corner(app: AppHandle, corner: String) -> Result<(), String> {
             }),
             "lock_island_corner",
         );
+        geometry_authority::record("lock_island_corner", None, geometry_authority::window_rect(&window));
         // 让前端把新位置写进 localStorage，避免下次启动被旧拖拽位置覆盖。
         let _ = window.emit("island-position-changed", position);
     }
@@ -4867,6 +4968,7 @@ fn show_island(app: &AppHandle) -> Result<(), String> {
     }
     // P0：show 可能被系统窗口状态竞争吞掉；显示后再校验一次可见性，
     // 不可见就在后台补几次 show()，避免「进程活着但永远没有狗」。
+    geometry_authority::record("show_island", None, geometry_authority::window_rect(&window));
     ensure_island_visible_after_show(window.clone());
     enforce_slot_invariant(&window, expected_slot_from_state(&window), "show_island");
     // 隐藏时一起收起的 Bongo / 陪伴狗 / 跟随小狗，显示时一并放回来。
