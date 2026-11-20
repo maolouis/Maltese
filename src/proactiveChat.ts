@@ -52,7 +52,7 @@ export type ProactiveAngle =
   | "self"
   | "comfort";
 
-import { personaSuffix } from "./petComfort";
+import { personaSuffix } from "./petComfort.ts";
 
 const ANGLES: Array<{ id: ProactiveAngle; hint: string }> = [
   { id: "care", hint: "心疼主人累不累、身体舒不舒服" },
