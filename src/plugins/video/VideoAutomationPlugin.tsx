@@ -18,6 +18,13 @@ import { VideoTasteCard } from "./VideoTasteCard";
 import { XhsDraftPanel } from "./XhsDraftPanel";
 import { accountStatusLabel } from "./videoPanelLogic";
 import {
+  addWatchEntries,
+  loadMemory,
+  saveMemory,
+  watchEntriesFromSession,
+  watchMemoryEnabled,
+} from "../../petMemory";
+import {
   browserStatusText,
   describeVideoError,
   phaseText,
@@ -132,6 +139,48 @@ export function VideoAutomationPanel({ onNotice }: Props) {
       await video.stop();
       await video.loadBrowserStatus();
       onNotice("小狗已停止观看，专用浏览器已关闭");
+      // 观看记忆：只记强兴趣/看较久/进 digest 的条目，写进 petMemory.watch[]。
+      try {
+        const sessionId = video.snapshot?.sessionId;
+        if (sessionId && isTauri()) {
+          const detail = await invoke<{
+            items?: Array<{
+              itemKey?: string;
+              title?: string;
+              author?: string | null;
+              canonicalUrl?: string | null;
+              watchedSeconds?: number;
+              completionPercent?: number | null;
+              verdict?: { level?: string | null } | null;
+              tags?: string[];
+            }>;
+            digest?: { items?: Array<{ itemKey?: string; title?: string; whyLine?: string | null }>; reflection?: string | null } | null;
+          }>("video_get_session", { sessionId });
+          const { entries, skippedUrls, strongCount } = watchEntriesFromSession(detail);
+          const enabled = watchMemoryEnabled();
+          for (const url of skippedUrls) {
+            console.info("[WATCH_MEMORY_SKIP]", { reason: "weak", url });
+          }
+          const memory = addWatchEntries(loadMemory(), entries, Date.now(), enabled);
+          saveMemory(memory);
+          const report = {
+            at: Date.now(),
+            enabled,
+            added: enabled ? entries.length : 0,
+            skipped: skippedUrls.length,
+            strong: strongCount,
+            sessionId,
+          };
+          try {
+            window.localStorage.setItem("maltese-watch-debug", JSON.stringify(report));
+          } catch {
+            // 忽略
+          }
+          console.info("[WATCH_MEMORY_ADD]", report);
+        }
+      } catch (reason) {
+        console.info("[WATCH_MEMORY_SKIP]", { reason: "session_read_failed", error: String(reason) });
+      }
     } catch (reason) {
       setLocalError(describeVideoError(reason, "停止失败。"));
     }

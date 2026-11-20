@@ -290,6 +290,96 @@ function dayKey(at: number): string {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 }
 
+/** 视频会话详情（video_get_session 的子集），用于挑选值得记住的条目。 */
+export type WatchSessionLike = {
+  items?: Array<{
+    itemKey?: string;
+    title?: string;
+    author?: string | null;
+    canonicalUrl?: string | null;
+    watchedSeconds?: number;
+    completionPercent?: number | null;
+    verdict?: { level?: string | null } | null;
+    tags?: string[];
+  }>;
+  digest?: {
+    items?: Array<{ itemKey?: string; title?: string; whyLine?: string | null }>;
+    reflection?: string | null;
+  } | null;
+};
+
+/**
+ * 从视频会话里挑出「强兴趣 / 看较久 / 进 digest」的条目；
+ * 弱条目返回在 skippedUrls 里，供调用方写 WATCH_MEMORY_SKIP reason=weak。
+ */
+export function watchEntriesFromSession(
+  session: WatchSessionLike,
+  watchedAt = Date.now(),
+): {
+  entries: Array<{
+    url: string;
+    title: string;
+    author: string;
+    tags: string[];
+    take: string;
+    watchedSeconds: number;
+    watchedAt: number;
+    strong: boolean;
+    completionPercent: number;
+    inDigest: boolean;
+  }>;
+  skippedUrls: string[];
+  strongCount: number;
+  digestCount: number;
+} {
+  const digest = session.digest ?? null;
+  const digestKeys = new Set<string>();
+  const digestTake = new Map<string, string>();
+  for (const item of digest?.items ?? []) {
+    if (item.itemKey) digestKeys.add(item.itemKey);
+    if (item.title) digestKeys.add(item.title);
+    const take = (item.whyLine ?? "").trim().slice(0, 40);
+    if (item.itemKey) digestTake.set(item.itemKey, take);
+    if (item.title) digestTake.set(item.title, take);
+  }
+  const sessionTake = (digest?.reflection ?? "").trim().slice(0, 40);
+
+  const entries: ReturnType<typeof watchEntriesFromSession>["entries"] = [];
+  const skippedUrls: string[] = [];
+  let strongCount = 0;
+  let digestCount = 0;
+  for (const item of session.items ?? []) {
+    const url = (item.canonicalUrl ?? "").trim();
+    const title = (item.title ?? "").trim();
+    if (!url || !title) continue;
+    const strong = item.verdict?.level === "strong";
+    const inDigest = digestKeys.has(item.itemKey ?? "") || digestKeys.has(title);
+    const watchedSeconds = Math.max(0, Math.round(item.watchedSeconds ?? 0));
+    const completionPercent = Math.max(0, Math.round(item.completionPercent ?? 0));
+    const eligible = watchEntryEligible({ strong, completionPercent, watchedSeconds, inDigest });
+    if (!eligible.allowed) {
+      skippedUrls.push(url);
+      continue;
+    }
+    if (strong) strongCount += 1;
+    if (inDigest) digestCount += 1;
+    const take = (digestTake.get(item.itemKey ?? "") || digestTake.get(title) || sessionTake || "").slice(0, 40);
+    entries.push({
+      url,
+      title,
+      author: (item.author ?? "").trim(),
+      tags: item.tags ?? [],
+      take,
+      watchedSeconds,
+      watchedAt,
+      strong,
+      completionPercent,
+      inDigest,
+    });
+  }
+  return { entries, skippedUrls, strongCount, digestCount };
+}
+
 /** 写入观看记忆：门槛过滤 → 每天最多 20 条（按时长降序）→ 同 URL 去重 → 200 条 LRU。 */
 export function addWatchEntries(
   memory: PetMemory,
