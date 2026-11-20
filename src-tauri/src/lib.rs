@@ -1071,8 +1071,96 @@ fn reject_zero_position(window: &WebviewWindow, x: i32, y: i32, reason: &str) ->
 }
 
 
-/// 当前狗槽（收起态 = 窗口左上角；展开/浮层态 = 按 panelSide/panelVertical 反推）。
+/// 前端实测的狗元素在窗口内的偏移（CSS 像素）。
+#[derive(Clone, Debug)]
+struct PetSlotMeasure {
+    mode: String,
+    off_x: f64,
+    off_y: f64,
+    width: f64,
+    height: f64,
+}
+
+static PET_SLOT_MEASURE: std::sync::Mutex<Option<PetSlotMeasure>> = std::sync::Mutex::new(None);
+
+/// 前端在浮层/展开后上报狗元素相对窗口的实测偏移（CSS px）。
+/// Rust 侧狗槽真值一律用「窗口原点 + 实测偏移」，不再用 panelSide 公式反推。
+#[tauri::command]
+fn report_pet_slot_offset(
+    app: AppHandle,
+    mode: String,
+    off_x: f64,
+    off_y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let window = main_window(&app)?;
+    let measure = PetSlotMeasure {
+        mode: mode.clone(),
+        off_x,
+        off_y,
+        width,
+        height,
+    };
+    if let Ok(mut slot) = PET_SLOT_MEASURE.lock() {
+        *slot = Some(measure);
+    }
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) {
+        let slot_x = position.x + (off_x * scale).round() as i32;
+        let slot_y = position.y + (off_y * scale).round() as i32;
+        let expected = expected_slot_from_state(&window);
+        let dx = expected.map(|slot| slot_x - slot.x).unwrap_or(0);
+        let dy = expected.map(|slot| slot_y - slot.y).unwrap_or(0);
+        let mut corrected = false;
+        let mut target = (position.x, position.y);
+        // 实测纠正：DOM 是唯一真相。狗在窗口里的实测偏移让狗槽偏离 settled 时，直接把窗口平移回去。
+        if mode != "collapsed" && (dx.abs() > 2 || dy.abs() > 2) {
+            target = (position.x - dx, position.y - dy);
+            if !reject_zero_position(&window, target.0, target.1, "measured_slot") {
+                let _ = window.set_position(Position::Physical(PhysicalPosition::new(target.0, target.1)));
+                corrected = true;
+            }
+        }
+        eprintln!(
+            "OVERLAY_DOG_MEASURE mode={mode} window=({},{},{},{}) offset=({off_x:.1},{off_y:.1}) slot=({slot_x},{slot_y}) expected={:?} dx={dx} dy={dy} corrected={corrected} target=({},{})",
+            position.x,
+            position.y,
+            size.width,
+            size.height,
+            expected.map(|slot| (slot.x, slot.y)),
+            target.0,
+            target.1
+        );
+    }
+    Ok(())
+}
+
+/// 用实测偏移算狗槽（仅展开/浮层态；没测量过就返回 None，由调用方回退公式）。
+fn measured_dog_slot(window: &WebviewWindow) -> Option<WindowRect> {
+    let measure = PET_SLOT_MEASURE.lock().ok().and_then(|slot| slot.clone())?;
+    // 以**实测布局**为准：overlay 时 React state.mode 仍可能是 collapsed。
+    if measure.mode == "collapsed" {
+        return None;
+    }
+    let state = read_window_state();
+    let scale = window.scale_factor().ok()?;
+    let position = window.outer_position().ok()?;
+    let slot_w = (slot_width_css(state.collapsed_scale) * scale).round() as i32;
+    let slot_h = (slot_height_css(state.collapsed_scale) * scale).round() as i32;
+    Some(WindowRect {
+        x: position.x + (measure.off_x * scale).round() as i32,
+        y: position.y + (measure.off_y * scale).round() as i32,
+        width: slot_w as u32,
+        height: slot_h as u32,
+    })
+}
+
+/// 当前狗槽（收起态 = 窗口左上角；展开/浮层态 = 窗口原点 + 前端实测偏移，缺测量才回退公式）。
 fn dog_slot_now(window: &WebviewWindow) -> Option<WindowRect> {
+    if let Some(measured) = measured_dog_slot(window) {
+        return Some(measured);
+    }
     let rect = read_sane_island_rect(window)?;
     let state = read_window_state();
     let scale = window.scale_factor().ok()?;
@@ -1943,6 +2031,24 @@ fn set_island_overlay(
             let mut move_x = clamped_x;
             let mut move_y = clamped_y;
             if let Some(expected) = expected_slot_from_state(&window) {
+                // 优先用前端实测的狗偏移：直接把窗口放到「expected - offset」，不靠 panelSide 公式。
+                let measured = PET_SLOT_MEASURE.lock().ok().and_then(|slot| slot.clone());
+                if let Some(measure) = measured.clone() {
+                    let offset_x = (measure.off_x * scale).round() as i32;
+                    let offset_y = (measure.off_y * scale).round() as i32;
+                    let wanted_x = expected.x - offset_x;
+                    let wanted_y = expected.y - offset_y;
+                    if (wanted_x - clamped_x).abs() > 2 || (wanted_y - clamped_y).abs() > 2 {
+                        move_x = wanted_x;
+                        move_y = wanted_y;
+                        if overlay.as_deref() == Some("hover") {
+                            eprintln!(
+                                "DOUBLECLICK_GEOM phase=move pre_corrected=true source=measured planned=({clamped_x},{clamped_y}) move=({move_x},{move_y}) offset=({}, {})",
+                                measure.off_x, measure.off_y
+                            );
+                        }
+                    }
+                }
                 let planned_slot = geometry_invariant::slot_from_window(
                     geometry_invariant::SlotRect::new(
                         clamped_x,
@@ -6281,6 +6387,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_monitors,
             island_geometry_selftest,
+            report_pet_slot_offset,
             set_monitor_preferences,
             qq_mail::get_qq_mail_state,
             qq_mail::connect_qq_mail,

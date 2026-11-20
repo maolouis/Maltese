@@ -1464,6 +1464,58 @@ export function IslandShell({
 }: IslandShellProps) {
   const t = useTranslation();
   const glassFrameRef = useRef<number | null>(null);
+  // 浮层/展开态下，狗在窗口内的真实偏移（CSS 像素）：CSS 布局说了算，Rust 侧不再用 panelSide 公式假设。
+  useEffect(() => {
+    if (!isTauri()) return;
+    const report = () => {
+      const element = document.querySelector<HTMLElement>(".maltese-pet");
+      if (!element) return;
+      const rect = element.getBoundingClientRect();
+      const islandClass = document.querySelector(".island")?.className ?? "";
+      const layoutMode = islandClass.includes("island--overlay-open")
+        ? "overlay"
+        : islandClass.includes("island--expanded")
+          ? "expanded"
+          : "collapsed";
+      void invoke("report_pet_slot_offset", {
+        mode: layoutMode,
+        offX: rect.left,
+        offY: rect.top,
+        width: rect.width,
+        height: rect.height,
+      }).catch(() => undefined);
+    };
+    const timers = [60, 400, 1200].map((delay) => window.setTimeout(report, delay));
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [mode, overlayOpen, page]);
+  // 浮层/展开态下，狗在窗口内的真实偏移（CSS 像素）：CSS 布局说了算，Rust 侧不再用 panelSide 公式假设。
+  useEffect(() => {
+    if (!isTauri()) return;
+    const report = () => {
+      const element = document.querySelector<HTMLElement>(".maltese-pet");
+      if (!element) return;
+      const rect = element.getBoundingClientRect();
+      const islandClass = document.querySelector(".island")?.className ?? "";
+      const layoutMode = islandClass.includes("island--overlay-open")
+        ? "overlay"
+        : islandClass.includes("island--expanded")
+          ? "expanded"
+          : "collapsed";
+      void invoke("report_pet_slot_offset", {
+        mode: layoutMode,
+        offX: rect.left,
+        offY: rect.top,
+        width: rect.width,
+        height: rect.height,
+      }).catch(() => undefined);
+    };
+    const timers = [60, 400, 1200].map((delay) => window.setTimeout(report, delay));
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [mode, overlayOpen, page]);
   // 右键小狗 →「固定当前标签到桌面」：把当前页交给 pinned 窗口。
   useEffect(() => {
     let unlisten: (() => void) | null = null;
