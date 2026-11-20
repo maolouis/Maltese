@@ -33,7 +33,7 @@ const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CH
 
 const STORAGE_KEY = "focusd-island-settings";
 
-type FpsMode = "smooth" | "balanced" | "normal" | "saver";
+type AnimFrequency = "high" | "medium" | "low";
 type Corner = "" | "tl" | "tr" | "bl" | "br";
 type FullscreenAvoid = "tuck" | "hide" | "off";
 
@@ -51,7 +51,7 @@ type PetSettings = {
   collapsedScale: number;
   expandedScale: number;
   chatPanelHeight: number;
-  fpsMode: FpsMode;
+  animFrequency: AnimFrequency;
   clickSquash: boolean;
   petFlipY: boolean;
   bubbleOn: boolean;
@@ -106,7 +106,7 @@ const DEFAULTS: PetSettings = {
   collapsedScale: 0.89,
   expandedScale: 0.91,
   chatPanelHeight: 520,
-  fpsMode: "balanced",
+  animFrequency: "medium",
   clickSquash: true,
   petFlipY: false,
   bubbleOn: true,
@@ -419,10 +419,10 @@ export default function SettingsWindow() {
         <Slider label="收起大小" value={settings.collapsedScale} min={0.5} max={1.8} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
         <Slider label="聊天框高度" value={settings.chatPanelHeight} min={360} max={900} step={10} suffix="px" onChange={(value) => update("chatPanelHeight", value)} />
         <Segments
-          label="动画流畅度"
-          value={settings.fpsMode}
-          items={[["smooth", "流畅"], ["balanced", "均衡"], ["normal", "普通"], ["saver", "省电"]]}
-          onChange={(value) => update("fpsMode", value)}
+          label="动画切换频率"
+          value={settings.animFrequency}
+          items={[["high", "高频"], ["medium", "中频"], ["low", "低频"]]}
+          onChange={(value) => update("animFrequency", value)}
         />
         <Switch label="点击时 Q 弹" checked={settings.clickSquash} onChange={(value) => update("clickSquash", value)} />
       </section>

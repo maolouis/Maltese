@@ -385,7 +385,7 @@ type IslandSettings = {
   petLinkage: boolean;
   /** 消息只提醒、不显示文字；这个开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
   messagePreview: boolean;
-  fpsMode: PetFpsMode;
+  animFrequency: AnimFrequency;
   bubbleOn: boolean;
   bubbleDurationMs: number;
   clickSquash: boolean;
@@ -420,7 +420,24 @@ type IslandSettings = {
   tuckedVisibleHeight: number;
 };
 
-type PetFpsMode = "smooth" | "balanced" | "normal" | "saver";
+type AnimFrequency = "high" | "medium" | "low";
+
+/** 旧版「动画流畅度」fpsMode → 新版「动画切换频率」；旧值一次性迁移。 */
+function normalizeAnimFrequency(settings: { animFrequency?: string; fpsMode?: string } | null | undefined): AnimFrequency {
+  const next = settings?.animFrequency;
+  if (next === "high" || next === "medium" || next === "low") return next;
+  switch (settings?.fpsMode) {
+    case "smooth":
+      return "high";
+    case "balanced":
+      return "medium";
+    case "normal":
+    case "saver":
+      return "low";
+    default:
+      return "medium";
+  }
+}
 type PetLockCorner = "" | "tl" | "tr" | "bl" | "br";
 
 type FullscreenAvoidMode = "tuck" | "hide" | "off";
@@ -692,7 +709,7 @@ const DEFAULT_SETTINGS: IslandSettings = {
   fullscreenHideBongo: true,
   petLinkage: true,
   messagePreview: false,
-  fpsMode: "balanced",
+  animFrequency: "medium",
   bubbleOn: true,
   bubbleDurationMs: 6000,
   clickSquash: true,
@@ -985,9 +1002,7 @@ function normalizeSettings(
     petLinkage: settings?.petLinkage !== false,
     // 消息预览默认关：只有显式打开才 true（旧版 read-content 键已在启动时清掉）。
     messagePreview: settings?.messagePreview === true,
-    fpsMode: settings?.fpsMode === "smooth" || settings?.fpsMode === "normal" || settings?.fpsMode === "saver"
-      ? settings.fpsMode
-      : DEFAULT_SETTINGS.fpsMode,
+    animFrequency: normalizeAnimFrequency(settings),
     bubbleOn: settings?.bubbleOn !== false,
     bubbleDurationMs: typeof settings?.bubbleDurationMs === "number" && Number.isFinite(settings.bubbleDurationMs)
       ? clamp(Math.round(settings.bubbleDurationMs), 1500, 20000)
@@ -2784,20 +2799,19 @@ function LayoutEditor({
           <span>小狗气泡与动画</span>
         </div>
         <div className="appearance-mode-control">
-          <span>动画流畅度</span>
-          <div className="appearance-mode-control__segments" role="group" aria-label="动画流畅度">
+          <span>动画切换频率</span>
+          <div className="appearance-mode-control__segments" role="group" aria-label="动画切换频率">
             {([
-              ["smooth", "流畅"],
-              ["balanced", "均衡"],
-              ["normal", "普通"],
-              ["saver", "省电"],
-            ] as const).map(([fpsMode, label]) => (
+              ["high", "高频"],
+              ["medium", "中频"],
+              ["low", "低频"],
+            ] as const).map(([animFrequency, label]) => (
               <button
-                key={fpsMode}
-                className={settings.fpsMode === fpsMode ? "appearance-mode-control--active" : ""}
+                key={animFrequency}
+                className={settings.animFrequency === animFrequency ? "appearance-mode-control--active" : ""}
                 type="button"
-                aria-pressed={settings.fpsMode === fpsMode}
-                onClick={() => onSettingsChange({ ...settings, fpsMode })}
+                aria-pressed={settings.animFrequency === animFrequency}
+                onClick={() => onSettingsChange({ ...settings, animFrequency })}
               >
                 {label}
               </button>
