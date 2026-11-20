@@ -333,6 +333,27 @@ pub(crate) fn begin(
     Ok(task)
 }
 
+/// 日志降噪：纯心跳（stage / progress.current / detail 都没变）不写盘，
+/// 但内存里的 updated_at 仍会更新，stalled 判定不受影响。
+fn should_log_advance(previous: &TaskProgress, next: &TaskProgress) -> bool {
+    if previous.stage != next.stage {
+        return true;
+    }
+    let previous_current = previous.progress.as_ref().map(|progress| progress.current);
+    let next_current = next.progress.as_ref().map(|progress| progress.current);
+    if previous_current != next_current {
+        return true;
+    }
+    previous.detail != next.detail
+}
+
+/// 视频进度口径：按「每条 15s」估算总条数（30 分钟 ≈ 120 条），
+/// 避免出现 total = current 导致进度条永远 100%。
+fn estimated_video_total(max_minutes: u64) -> u32 {
+    let estimate = max_minutes.saturating_mul(60 / 15);
+    u32::try_from(estimate).unwrap_or(u32::MAX).max(1)
+}
+
 pub(crate) fn advance(
     log_dir: &Path,
     id: &str,
@@ -348,13 +369,14 @@ pub(crate) fn advance(
     let mut guard = store_lock();
     let store = ensure_store(&mut guard);
     sweep_stalled_with(store, log_dir, now);
-    let task = mutate_task(store, id, |task, revision| -> Result<TaskProgress, String> {
+    let updated = mutate_task(store, id, |task, revision| -> Result<(TaskProgress, bool), String> {
         if is_terminal(&task.stage) {
             return Err(format!("任务 {id} 已结束（{}）", task.stage));
         }
         if !valid_transition(&task.stage, stage) {
             return Err(format!("非法阶段流转：{} → {}", task.stage, stage));
         }
+        let previous = task.clone();
         *revision += 1;
         task.revision = *revision;
         task.stage = stage.to_string();
@@ -368,11 +390,15 @@ pub(crate) fn advance(
         if let Some(detail) = detail {
             task.detail = Some(detail.chars().take(240).collect());
         }
-        Ok(task.clone())
+        let loggable = should_log_advance(&previous, task);
+        Ok((task.clone(), loggable))
     })
     .ok_or_else(|| format!("找不到任务 {id}"))??;
     drop(guard);
-    log_transition(log_dir, &task, "advance");
+    let (task, loggable) = updated;
+    if loggable {
+        log_transition(log_dir, &task, "advance");
+    }
     Ok(task)
 }
 
@@ -391,7 +417,8 @@ pub(crate) fn end(
     let mut guard = store_lock();
     let store = ensure_store(&mut guard);
     sweep_stalled_with(store, log_dir, now);
-    let task = mutate_task(store, id, |task, revision| {
+    let updated = mutate_task(store, id, |task, revision| -> (TaskProgress, bool) {
+        let previous = task.clone();
         if !is_terminal(&task.stage) {
             *revision += 1;
             task.revision = *revision;
@@ -404,11 +431,14 @@ pub(crate) fn end(
                 task.detail = Some(detail.chars().take(240).collect());
             }
         }
-        task.clone()
+        (task.clone(), previous.stage != task.stage)
     })
     .ok_or_else(|| format!("找不到任务 {id}"))?;
     drop(guard);
-    log_transition(log_dir, &task, "end");
+    let (task, changed) = updated;
+    if changed {
+        log_transition(log_dir, &task, "end");
+    }
     Ok(task)
 }
 
@@ -473,13 +503,15 @@ fn sync_video(
             Phase::AwaitingLogin => "waiting_confirm",
             _ => "executing",
         };
+        let total = estimated_video_total(video.max_minutes);
         let progress = Some(TaskProgressCount {
             current: video.item_count,
-            total: (video.steps as u32).max(video.item_count).max(1),
+            total,
         });
         let detail = format!(
-            "已采集 {} 条 · {} 分钟上限{}",
+            "已采集 {} 条 / 预计约 {} 条 · {} 分钟上限{}",
             video.item_count,
+            total,
             video.max_minutes,
             if video.pending_count > 0 {
                 format!(" · 待投递 {}", video.pending_count)
@@ -525,17 +557,20 @@ fn sync_video(
             if is_terminal(&task.stage) || !valid_transition(&task.stage, stage) {
                 return None;
             }
+            let previous = task.clone();
             *revision += 1;
             task.revision = *revision;
             task.stage = stage.to_string();
             task.updated_at = now;
             task.progress = progress.clone();
             task.detail = Some(detail.clone());
-            Some(task.clone())
+            Some((task.clone(), should_log_advance(&previous, task)))
         })
         .flatten();
-        if let Some(task) = updated {
-            log_transition(log_dir, &task, "advance");
+        if let Some((task, loggable)) = updated {
+            if loggable {
+                log_transition(log_dir, &task, "advance");
+            }
         }
         return;
     }
@@ -571,7 +606,7 @@ fn sync_video(
         task.detail = Some(detail);
         task.progress = Some(TaskProgressCount {
             current: video.item_count,
-            total: (video.steps as u32).max(video.item_count).max(1),
+            total: estimated_video_total(video.max_minutes),
         });
         task.clone()
     });
@@ -850,7 +885,11 @@ mod tests {
         let running = snapshot_inner(&dir, 20, Some(&video));
         let task = running.tasks.iter().find(|task| task.kind == "video").expect("video task");
         assert_eq!(task.stage, "executing");
-        assert_eq!(task.progress.as_ref().unwrap().current, 7);
+        let progress = task.progress.as_ref().unwrap();
+        assert_eq!(progress.current, 7);
+        // 30 分钟 × 每条 15s ≈ 120 条；不能再用 steps/current 导致 100%。
+        assert_eq!(progress.total, 120);
+        assert!(progress.current < progress.total);
 
         video.running = false;
         video.phase = Phase::Stopped;
@@ -858,6 +897,123 @@ mod tests {
         let task = stopped.tasks.iter().find(|task| task.kind == "video").expect("video task");
         assert_eq!(task.stage, "done");
         assert!(task.detail.as_deref().unwrap_or_default().contains("7"));
+        assert_eq!(task.progress.as_ref().unwrap().total, 120);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 心跳（每秒一次快照、数据不变）不应写盘；但内存 updated_at 仍更新，
+    /// 回拨后 stalled 仍能触发并写一行 stalled。
+    #[test]
+    fn heartbeat_does_not_write_but_still_stalls() {
+        let _lock = fresh();
+        let dir = test_dir("heartbeat");
+        let mut video = crate::video::session::VideoSnapshot::default();
+        video.session_id = "heartbeat-session".into();
+        video.running = true;
+        video.phase = Phase::Collecting;
+        video.item_count = 13;
+        video.steps = 13;
+        video.max_minutes = 30;
+        snapshot_inner(&dir, 20, Some(&video));
+        let (date, _) = agent_hub::local_parts();
+        let log = task_log_path(&dir, &date);
+        let lines = || {
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let after_begin = lines();
+        for _ in 0..5 {
+            snapshot_inner(&dir, 20, Some(&video));
+        }
+        assert_eq!(lines(), after_begin, "纯心跳不应写盘");
+
+        video.item_count = 14;
+        snapshot_inner(&dir, 20, Some(&video));
+        let after_progress = lines();
+        assert!(after_progress > after_begin, "采集条数变化应写一行");
+
+        // 让 stalled 更容易触发：expected 1s + updated_at 回拨；视频已停止，避免新建任务。
+        {
+            let mut guard = store_lock();
+            let store = ensure_store(&mut guard);
+            let task = store
+                .tasks
+                .iter_mut()
+                .find(|task| task.kind == "video" && !is_terminal(&task.stage))
+                .expect("active video task");
+            task.expected_secs = 1;
+            task.updated_at = now_ms().saturating_sub(3_000);
+        }
+        video.running = false;
+        video.phase = Phase::Stopped;
+        let stalled_snapshot = snapshot_inner(&dir, 20, Some(&video));
+        let task = stalled_snapshot
+            .tasks
+            .iter()
+            .find(|task| task.kind == "video")
+            .expect("video task");
+        assert_eq!(task.stage, "stalled");
+        assert!(lines() > after_progress, "stalled 应补一行日志");
+        let content = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(content.lines().last().unwrap_or_default().contains("\"stalled\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 实机 60s：每秒一次视频快照心跳，只打印/验证落盘行数。
+    /// `cargo test --lib task_progress::tests::real_video_heartbeat_60s -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_video_heartbeat_60s() {
+        let _lock = fresh();
+        let dir = test_dir("video-60s");
+        let mut video = crate::video::session::VideoSnapshot::default();
+        video.session_id = "real-60s-video".into();
+        video.running = true;
+        video.phase = Phase::Collecting;
+        video.item_count = 0;
+        video.steps = 0;
+        video.max_minutes = 30;
+        let (date, _) = agent_hub::local_parts();
+        let log = task_log_path(&dir, &date);
+        let lines = || {
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let started = std::time::Instant::now();
+        for second in 1..=60u64 {
+            if second == 20 || second == 40 {
+                video.item_count += 5;
+            }
+            let snapshot = snapshot_inner(&dir, 20, Some(&video));
+            let task = snapshot.tasks.iter().find(|task| task.kind == "video").expect("video task");
+            println!(
+                "t={:>2}s lines={} current={} total={} stage={}",
+                second,
+                lines(),
+                task.progress.as_ref().map(|p| p.current).unwrap_or(0),
+                task.progress.as_ref().map(|p| p.total).unwrap_or(0),
+                task.stage
+            );
+            if second < 60 {
+                std::thread::sleep(std::time::Duration::from_millis(1_000));
+            }
+        }
+        video.running = false;
+        video.phase = Phase::Stopped;
+        snapshot_inner(&dir, 20, Some(&video));
+        println!(
+            "elapsed={}ms final_lines={} log={}",
+            started.elapsed().as_millis(),
+            lines(),
+            log.display()
+        );
+        println!("--- tasks jsonl ---\n{}", std::fs::read_to_string(&log).unwrap_or_default());
+        // 旧实现：60 次心跳 + 2 次条数变化 + 结束 = 60+3 行左右；修后应明显更少。
+        assert!(lines() <= 8, "60s 心跳后日志应 ≤8 行，实际 {} 行", lines());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

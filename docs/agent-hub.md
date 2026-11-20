@@ -396,7 +396,7 @@ cargo test --lib agent_hub::tests::real_pipeline_codex_then_claude -- --ignored 
 
 | 来源 | 上报方式 |
 | --- | --- |
-| 视频 | `task_list_snapshot` 内部读 `video_get_snapshot`：running → video 任务 executing（digesting→delivering、awaitingLogin→waiting_confirm），progress=`itemCount/steps`；停止/结束 → done（有采集）或 cancelled；blocked → failed |
+| 视频 | `task_list_snapshot` 内部读 `video_get_snapshot`：running → video 任务 executing（digesting→delivering、awaitingLogin→waiting_confirm），progress=`itemCount / 预计条数`（预计条数 = `maxMinutes×4`，按每条 15s）；停止/结束 → done（有采集）或 cancelled；blocked → failed |
 | Agent 单跑 | `agent_run` 在 spawn 前 `begin(agent,"运行 <name>")` → executing，结束后按结果 done/failed/cancelled，detail 带时长/首行 |
 | Agent 流水线 | `agent_pipeline` 开始时建任务，每步 `advance(progress i/n, detail "第 i 步 · agent")`，结束 done/failed（`agent-pipeline-step` 事件照旧推给前端折叠面板） |
 | 技能快任务 | 前端 `runSkill` 包装：todo→todo、web_search→search、pet_settings/open_app/open_url/media_control/music_play→settings；begin→executing→done/failed，失败不影响技能本身 |
@@ -421,8 +421,46 @@ taskRowChanged`；`AgentConsole` 每 **1s** 拉 `task_list_snapshot`，只把 di
 
 - Rust：`stage_transitions_are_validated`（合法/非法流转）、`timeout_marks_task_stalled`、
   `jsonl_log_rotates_by_day`、`snapshot_is_sorted_and_limited`、`video_snapshot_drives_video_task`、
+  `heartbeat_does_not_write_but_still_stalls`、`real_video_heartbeat_60s`（忽略测试，实机 60s）、
   `infer_parser_rejects_low_confidence_and_bad_kind`。
 - Node：`tests/task-progress-view.test.mjs`（diff 只返回变化行、进度百分比、耗时格式、推断 30s 节流）。
 - 实机：`cargo test --lib agent_hub::tests::real_three_tasks -- --ignored --nocapture` 跑
   「视频开始/停止（快照映射）+ 加待办 + claude 真跑一次」，打印控制台任务列表与 tasks jsonl。
   本 DSH 会话无法启动 GUI（%APPDATA% 无写权限，os error 5），UI 上的列表/1s 刷新需人工点验。
+
+### 14.5 日志降噪与视频进度口径（2026-11-20）
+
+**1）advance 写盘前 diff（心跳不落盘）**
+
+- `advance()` 与视频 `sync_video` 在写 jsonl 前比较「写前快照」：只有
+  **stage 变化**、**progress.current 变化**、**detail 变化**时才写一行；纯心跳（同一秒快照、条数不变）
+  **不写盘**。内存里的 `updatedAt` 每个心跳仍会更新，`stalled` 判定不受影响。
+- `task_end` 也只在 stage 真正变化时写 `end`，重复 end 不刷日志。
+- 单测：`heartbeat_does_not_write_but_still_stalls`（5 次心跳行数不变 → 条数+1 写一行 →
+  回拨 updatedAt 后 stalled 仍触发并补一行）。
+
+**2）视频进度条口径**
+
+- 之前 `total = max(steps, itemCount)`，采到第 13 条时 `total=13/current=13` → 进度条永远 100%。
+- 现在 `total = maxMinutes × 60 / 15`（每条按 15s 估算）：30 分钟 ≈ **120 条**；实际条数超过估计时
+  UI 百分比按 100% 截断，但 detail 里仍显示真实条数。
+- detail 文案：`已采集 12 条 / 预计约 120 条 · 30 分钟上限`（有待投递时追加「待投递 N」）。
+- 单测：`video_snapshot_drives_video_task` 断言 `current=7,total=120`，不再是 100%。
+
+**3）实机 60s 证据**
+
+`cargo test --lib task_progress::tests::real_video_heartbeat_60s -- --ignored --nocapture`
+（每秒一次视频快照心跳，第 20/40 秒各 +5 条，第 60 秒停止）：
+
+| 秒 | 落盘行数 | current/total |
+| --- | --- | --- |
+| t=1 | 2（begin + 首次 advance） | 0/120 |
+| t=2..19 | 2（心跳不写） | 0/120 |
+| t=20 | 3（条数 +5） | 5/120 |
+| t=21..39 | 3 | 5/120 |
+| t=40 | 4（条数 +10） | 10/120 |
+| t=41..60 | 4 | 10/120 |
+| 停止后 | 5（end/done） | 10/120 |
+
+旧实现同场景约 **62 行**（60 次心跳每行 advance），修复后 **5 行**；jsonl 只保留
+begin / 0→5 / 5→10 / 结束四条阶段变化。
