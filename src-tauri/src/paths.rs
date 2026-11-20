@@ -14,6 +14,9 @@ use std::{
     sync::OnceLock,
 };
 
+/// 本进程内最近一次迁移的来源目录（用于启动日志）。
+static LAST_MIGRATED_FROM: OnceLock<PathBuf> = OnceLock::new();
+
 pub const APP_DIR_NAME: &str = "com.maolouis.maltese";
 pub const DATA_DIR_NAME: &str = "MalteseData";
 pub const BOOTSTRAP_FILE: &str = "data-dir.txt";
@@ -74,6 +77,41 @@ fn current_exe() -> PathBuf {
 
 fn read_bootstrap() -> Option<String> {
     fs::read_to_string(bootstrap_path()).ok()
+}
+
+/// 启动日志：GUI 版没有控制台，同时追加到 `%APPDATA%\com.maolouis.maltese\paths.log`。
+fn startup_log(message: &str) {
+    eprintln!("{message}");
+    let path = legacy_root().join("paths.log");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(file, "{message}");
+    }
+}
+
+/// 启动最早阶段调用：创建数据根 + 写 data-dir.txt + 一次性迁移，并记 DATA_ROOT_READY。
+pub fn ensure_data_root() -> PathBuf {
+    let migrated = migrate_if_needed();
+    let root = data_root();
+    let _ = fs::create_dir_all(&root);
+    if read_bootstrap().is_none() {
+        let _ = write_bootstrap(&root);
+    }
+    let from = migrated
+        .as_ref()
+        .and_then(|_| LAST_MIGRATED_FROM.get().cloned());
+    match from {
+        Some(source) => startup_log(&format!(
+            "DATA_ROOT_READY root={} migrated_from={}",
+            root.display(),
+            source.display()
+        )),
+        None => startup_log(&format!("DATA_ROOT_READY root={}", root.display())),
+    }
+    root
 }
 
 /// 业务数据根（进程内缓存）。创建失败时回退旧目录并打印警告。
@@ -203,19 +241,26 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
     if std::env::var("MALTESE_DATA_DIR").is_ok() {
         return None;
     }
-    if read_bootstrap().is_some() {
-        return None;
-    }
     let new_root = default_root(&current_exe(), &legacy_root());
     if dir_has_entries(&new_root) {
         let _ = write_bootstrap(&new_root);
         return Some(new_root);
     }
-    // 候选旧位置：上一版策略的 `<盘符>:\MalteseData`，以及更早的 %APPDATA% 目录。
+    // 候选旧位置：data-dir.txt 指向的旧根、上一版 <盘符>:\MalteseData、更早的 %APPDATA% 目录。
+    // 旧版遗留的 data-dir.txt 不能成为「不迁移」的理由，否则永远钉在旧位置。
+    let bootstrap_source = read_bootstrap()
+        .map(|value| PathBuf::from(value.trim().to_string()))
+        .filter(|value| !value.as_os_str().is_empty());
     let old_default = previous_default_root(&current_exe());
     let legacy = legacy_root();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(source) = bootstrap_source {
+        candidates.push(source);
+    }
+    candidates.push(old_default);
+    candidates.push(legacy.clone());
     let mut source: Option<PathBuf> = None;
-    for candidate in [old_default, legacy.clone()] {
+    for candidate in candidates {
         if candidate != new_root && dir_has_entries(&candidate) {
             source = Some(candidate);
             break;
@@ -227,11 +272,11 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
         return Some(new_root);
     };
     if fs::create_dir_all(&new_root).is_err() || !writable(&new_root) {
-        eprintln!(
-            "[paths] MIGRATION_FAILED step=create reason=readonly root={} source={}",
+        startup_log(&format!(
+            "MIGRATION_FAILED step=create reason=readonly root={} source={}",
             new_root.display(),
             source.display()
-        );
+        ));
         return None;
     }
     let copied = copy_tree(&source, &new_root).and_then(|_| tree_stats(&new_root));
@@ -242,7 +287,7 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
             if expected != (files, bytes) {
                 let _ = fs::remove_dir_all(&new_root);
                 eprintln!(
-                    "[paths] MIGRATION_FAILED step=verify source={} expected={:?} actual={:?}",
+                    "MIGRATION_FAILED step=verify source={} expected={:?} actual={:?}",
                     source.display(),
                     expected,
                     (files, bytes)
@@ -251,13 +296,14 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
             }
             if write_bootstrap(&new_root).is_err() {
                 let _ = fs::remove_dir_all(&new_root);
-                eprintln!("[paths] MIGRATION_FAILED step=bootstrap");
+                eprintln!("MIGRATION_FAILED step=bootstrap");
                 return None;
             }
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|value| value.as_secs())
                 .unwrap_or(0);
+            let _ = LAST_MIGRATED_FROM.set(source.clone());
             let backup = source.with_file_name(format!("{APP_DIR_NAME}.migrated-{stamp}"));
             let _ = fs::rename(&source, &backup);
             let _ = fs::create_dir_all(&legacy);
@@ -271,7 +317,7 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
         }
         _ => {
             let _ = fs::remove_dir_all(&new_root);
-            eprintln!("[paths] MIGRATION_FAILED step=copy source={}", source.display());
+            eprintln!("MIGRATION_FAILED step=copy source={}", source.display());
             None
         }
     }

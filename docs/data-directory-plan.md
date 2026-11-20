@@ -174,3 +174,9 @@ esolve_root（环境变量 > data-dir.txt > 默认策略）、data_root()（Once
 - 只读安装（如 Program Files）不可写 → 回退 %LOCALAPPDATA%\com.maolouis.maltese\data，日志
   DATA_ROOT_FALLBACK reason=readonly；
 - 单测：默认解析（exe 目录/data）、只读回退、迁移复制校验与回滚、data-dir.txt 优先级、上一版默认路径。
+
+- **启动即执行**：`paths::ensure_data_root()` 在 `run()` 第一行调用（Tauri Builder 之前），
+  创建根目录 + 写 `data-dir.txt` + 一次迁移；GUI 版无控制台，启动日志追加到
+  `%APPDATA%\com.maolouis.maltese\paths.log`（`DATA_ROOT_READY root=… migrated_from=…`）。
+- **旧 bootstrap 处理**：旧版遗留的 `data-dir.txt` 指向旧根时，它被视为**迁移来源**而不是
+  「不迁移」的理由；迁移完成后重写指向新根。

@@ -55,3 +55,9 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 `
 4. 根本解决办法是购买代码签名证书（OV/EV），长期能显著降低拦截率；**自签名证书无效**，
    Windows 不信任，SmartScreen 照样拦。
 5. 可选渠道：提交 winget（`winget-pkgs`）或维护 Scoop bucket，包管理器下载同样不带标记。
+
+- [ ] **JS/Rust Tauri 版本一致性**：
+pm ls @tauri-apps/api @tauri-apps/plugin-opener @tauri-apps/plugin-updater
+      与 cargo tree -p maltese-assistant | grep tauri（或 Cargo.lock）对齐；package.json 的
+      @tauri-apps/* 必须用精确版本（2.11.1 / 2.5.4 / 2.12.0），禁止 ^2——2.0.4 曾因
+      ^2 重新解析到 2.12.5/2.7.3 与 Rust 2.11.5/2.5.4 不匹配导致 	auri build 失败。

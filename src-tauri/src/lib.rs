@@ -6393,6 +6393,8 @@ fn build_tray(app: &App) -> tauri::Result<()> {
 pub fn run() {
     STARTUP_START.get_or_init(Instant::now);
     startup_mark("run:begin");
+    // 最早阶段：确定数据根（创建 + 一次性迁移），后续所有路径都走 paths::data_root()。
+    let _ = paths::ensure_data_root();
     let mut context = tauri::generate_context!();
     if let Some(identifier) = notification_diagnostics::verification_identifier() {
         context.config_mut().identifier = identifier;
@@ -6402,7 +6404,6 @@ pub fn run() {
     // profile / 托盘 / 全局快捷键；只留一个 show-request 文件让首实例把狗叫出来。
     // 锁随文件句柄释放，进程退出（含崩溃 / 任务管理器结束）时自动回收，没有 stale lock。
     let identifier = context.config().identifier.clone();
-    paths::migrate_if_needed();
     let mut instance_data_dir = Some(paths::data_root());
     if let Some(data_dir) = instance_data_dir.as_deref() {
         match instance_lock::acquire(data_dir, &identifier) {
