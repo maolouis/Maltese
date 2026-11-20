@@ -444,3 +444,17 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
 - **聊天**：persona 已约束「状态低落时可以轻轻表达想被安慰」，不写死台词；mood 正常时不主动提。
 - **UI**：状态卡 mood < 40 时显示「小狗今天有点低落，可能需要陪陪它」。
 - 单测：	ests/pet-comfort.test.mjs（低 mood、每日/间隔/恢复冷却、人设关键词、存储与空态）。
+
+### 观看记忆（只记强兴趣/看较久的视频）
+
+- 数据来源：视频会话 `items[]`（title/author/tags/canonicalUrl）+ `digest.dogTake`；
+- **写入门槛**（任一满足）：条目 `verdict.level === "strong"`、完成度 ≥60%、观看 ≥60 秒、或进入当日 digest；
+  不满足一律跳过（`WATCH_MEMORY_SKIP reason=weak`）；
+- **上限**：每天 ≤20 条（按时长降序）、全量 ≤200 条；同 URL 只保留最新一次；
+- **衰减/淘汰**：>90 天权重压到 0.2，>180 天淘汰；
+- **存储字段**：title / author / tags(≤3) / take(≤40 字) / watchedSeconds / canonicalUrl hash / watchedAt，
+  不存正文、图片 URL、评论；
+- **注入**：与当前用户消息做关键词匹配（英文按词、中文 2-gram），命中 top-3 才注入，
+  格式「前几天看过《X》，我当时的想法是：…」；watch 部分 ≤30 token、总量预算不变；
+- **隐私**：设置页可关闭「把看过的视频写进记忆」（默认开），「清空记忆」同时清 `watch[]`；
+- 单测：`tests/pet-watch-memory.test.mjs`（门槛、每日 20 条、LRU/衰减、关键词 top-3、预算、开关、清空）。

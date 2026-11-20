@@ -236,7 +236,7 @@ export function PetChat() {
           message,
           sessionId,
           character,
-          memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+          memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth(), Date.now(), message),
           source: options?.source ?? "chat",
           sticker: false,
         });
@@ -431,7 +431,7 @@ export function PetChat() {
           const payload = {
             requestId,
             baseUrl: chatConfig.baseUrl,
-            memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth()),
+            memoryContext: buildMemoryContext(loadMemory(), loadMemoryDepth(), Date.now(), message),
             source: "chat",
             model: chatConfig.model,
             apiKey: chatConfig.apiKey.trim() || null,

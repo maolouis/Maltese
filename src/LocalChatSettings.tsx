@@ -15,6 +15,8 @@ import {
   loadMemory,
   loadMemoryDepth,
   saveMemoryDepth,
+  setWatchMemoryEnabled,
+  watchMemoryEnabled,
   type MemoryDepth,
 } from "./petMemory";
 import "./LocalChatSettings.css";
@@ -35,6 +37,7 @@ export function LocalChatSettings({
   const [testStatus, setTestStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [memoryDepth, setMemoryDepth] = useState<MemoryDepth>(loadMemoryDepth);
   const [memoryCleared, setMemoryCleared] = useState(false);
+  const [watchMemory, setWatchMemory] = useState(() => watchMemoryEnabled());
   const [dataDirectory, setDataDirectory] = useState<{ root: string; legacyRoot: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -340,6 +343,18 @@ export function LocalChatSettings({
                 {memoryCleared ? "已清空" : "清空记忆"}
               </button>
             </div>
+            <label className="local-chat-settings__check">
+              <input
+                type="checkbox"
+                checked={watchMemory}
+                onChange={(event) => {
+                  const next = event.currentTarget.checked;
+                  setWatchMemory(next);
+                  setWatchMemoryEnabled(next);
+                }}
+              />
+              把看过的视频写进记忆（只记强兴趣/看较久的）
+            </label>
             <p className="local-chat-settings__hint">
               普通：最多注入约 70 token（事实 5 条 + 最近摘要）；深入：约 300 token。清空只删摘要与事实，不删聊天记录。
             </p>

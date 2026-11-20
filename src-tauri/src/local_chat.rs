@@ -17,7 +17,7 @@ fn sticker_instruction() -> &'static str {
 }
 
 
-pub(crate) const PERSONA_SUFFIX: &str = "人设：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；说话口语化、短句、偶尔叠词，不用术语不说教。状态低落时可以轻轻表达想被安慰，但不装可怜骗互动、不道德绑架。";
+pub(crate) const PERSONA_SUFFIX: &str = "人设：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；说话口语化、短句、偶尔叠词，不用术语不说教。状态低落时可以轻轻表达想被安慰，但不装可怜骗互动、不道德绑架。可以自然提起看过的视频，但不要编造没看过的内容；不确定就说记不清了。";
 
 fn persona(character: &str) -> &'static str {
     match character {
@@ -352,7 +352,15 @@ pub(crate) async fn generate_video_comment(
     max_tokens: u32,
     temperature: f32,
     top_p: f32,
+    thinking: bool,
+    reasoning_budget: u32,
 ) -> Result<String, String> {
+    // 深度思考会吃掉 token 预算：正文预算 = 思考预算 + 256，避免正文为空。
+    let effective_max = if thinking {
+        max_tokens.max(reasoning_budget.saturating_add(256))
+    } else {
+        max_tokens
+    };
     local_chat(
         base_url,
         model,
@@ -365,12 +373,12 @@ pub(crate) async fn generate_video_comment(
         None,
         Some("video-comment".to_string()),
         Some(LocalChatGenerationSettings {
-            max_tokens: Some(max_tokens.clamp(64, 256)),
+            max_tokens: Some(effective_max.clamp(64, 2048)),
             temperature: Some(temperature.clamp(0.0, 1.2)),
             top_p: Some(top_p.clamp(0.1, 1.0)),
-            enable_thinking: Some(false),
-            reasoning_effort: Some("none".to_string()),
-            reasoning_budget_tokens: Some(0),
+            enable_thinking: Some(thinking),
+            reasoning_effort: Some(if thinking { "medium" } else { "none" }.to_string()),
+            reasoning_budget_tokens: Some(if thinking { reasoning_budget } else { 0 }),
         }),
     )
     .await

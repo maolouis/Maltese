@@ -24,11 +24,34 @@ export type DaySummary = {
   text: string;
 };
 
+export type WatchEntry = {
+  kind: "watch";
+  key: string;
+  title: string;
+  author: string;
+  tags: string[];
+  take: string;
+  watchedSeconds: number;
+  watchedAt: number;
+  weight: number;
+};
+
 export type PetMemory = {
   facts: MemoryFact[];
   summaries: DaySummary[];
+  /** 看过的视频（长期记忆子集），上限 200 条。 */
+  watch?: WatchEntry[];
   updatedAt: number;
 };
+
+export const WATCH_MAX = 200;
+export const WATCH_DECAY_DAYS = 90;
+export const WATCH_TTL_DAYS = 180;
+export const WATCH_ENABLED_KEY = "maltese-memory-watch-enabled";
+export const WATCH_TOKEN_BUDGET = 30;
+export const WATCH_DAILY_MAX = 20;
+export const WATCH_MIN_SECONDS = 60;
+export const WATCH_MIN_COMPLETION = 60;
 
 /** 最近对话轮次（一问一答算两轮，这里按消息条数近似）。 */
 export const RECENT_TURNS = 10;
@@ -64,7 +87,7 @@ export function memoryBudget(depth: MemoryDepth): number {
 }
 
 export function emptyMemory(now = Date.now()): PetMemory {
-  return { facts: [], summaries: [], updatedAt: now };
+  return { facts: [], summaries: [], watch: [], updatedAt: now };
 }
 
 export function loadMemory(storage: Storage | null = safeStorage()): PetMemory {
@@ -87,7 +110,21 @@ export function loadMemory(storage: Storage | null = safeStorage()): PetMemory {
     const summaries = Array.isArray(parsed.summaries)
       ? parsed.summaries.filter((item): item is DaySummary => Boolean(item) && typeof item.date === "string" && typeof item.text === "string")
       : [];
-    return { facts, summaries, updatedAt: Number.isFinite(parsed.updatedAt) ? Number(parsed.updatedAt) : 0 };
+    const watch = Array.isArray((parsed as { watch?: unknown }).watch)
+      ? ((parsed as { watch?: unknown }).watch as WatchEntry[]).filter(
+          (item): item is WatchEntry =>
+            Boolean(item) &&
+            item.kind === "watch" &&
+            typeof item.key === "string" &&
+            typeof item.title === "string",
+        )
+      : [];
+    return {
+      facts,
+      summaries,
+      watch,
+      updatedAt: Number.isFinite(parsed.updatedAt) ? Number(parsed.updatedAt) : 0,
+    };
   } catch {
     return fallback;
   }
@@ -191,6 +228,147 @@ export function pruneSummaries(summaries: DaySummary[], now = Date.now()): DaySu
     .slice(-SUMMARY_KEEP_DAYS);
 }
 
+/** 不把视频写入记忆的开关（默认开=写入）。 */
+export function watchMemoryEnabled(storage: Storage | null = safeStorage()): boolean {
+  if (!storage) return true;
+  try {
+    return storage.getItem(WATCH_ENABLED_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function setWatchMemoryEnabled(enabled: boolean, storage: Storage | null = safeStorage()): void {
+  if (!storage) return;
+  try {
+    storage.setItem(WATCH_ENABLED_KEY, enabled ? "on" : "off");
+  } catch {
+    // 忽略
+  }
+}
+
+/** 稳定短 hash（FNV-1a），用于同 URL 去重。 */
+export function watchKey(url: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < url.length; index += 1) {
+    hash ^= url.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `w${hash.toString(16)}`;
+}
+
+/** 时间衰减 + 淘汰：>90 天权重压到 0.2，>180 天丢弃。 */
+export function decayWatch(watch: WatchEntry[], now = Date.now()): WatchEntry[] {
+  return watch
+    .filter((entry) => now - entry.watchedAt <= WATCH_TTL_DAYS * 86_400_000)
+    .map((entry) => {
+      const ageDays = (now - entry.watchedAt) / 86_400_000;
+      const base = Number.isFinite(entry.weight) ? entry.weight : 1;
+      const weight = ageDays > WATCH_DECAY_DAYS ? Math.min(base, 0.2) : base;
+      return { ...entry, watchedSeconds: Number.isFinite(entry.watchedSeconds) ? entry.watchedSeconds : 0, weight };
+    })
+    .sort((a, b) => b.watchedAt - a.watchedAt)
+    .slice(0, WATCH_MAX);
+}
+
+/** 写入观看记忆的门槛：强兴趣 / 看了 ≥60s / 进入当日 digest 推荐。 */
+export function watchEntryEligible(entry: {
+  strong?: boolean;
+  completionPercent?: number;
+  watchedSeconds?: number;
+  inDigest?: boolean;
+}): { allowed: boolean; reason: string } {
+  if (entry.strong) return { allowed: true, reason: "strong" };
+  if ((entry.completionPercent ?? 0) >= WATCH_MIN_COMPLETION) return { allowed: true, reason: "completed" };
+  if ((entry.watchedSeconds ?? 0) >= WATCH_MIN_SECONDS) return { allowed: true, reason: "watched" };
+  if (entry.inDigest) return { allowed: true, reason: "digest" };
+  return { allowed: false, reason: "weak" };
+}
+
+function dayKey(at: number): string {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+/** 写入观看记忆：门槛过滤 → 每天最多 20 条（按时长降序）→ 同 URL 去重 → 200 条 LRU。 */
+export function addWatchEntries(
+  memory: PetMemory,
+  entries: Array<{
+    url: string;
+    title: string;
+    author?: string;
+    tags?: string[];
+    take?: string;
+    watchedAt?: number;
+    watchedSeconds?: number;
+    strong?: boolean;
+    completionPercent?: number;
+    inDigest?: boolean;
+  }>,
+  now = Date.now(),
+  enabled = true,
+): PetMemory {
+  if (!enabled) return memory;
+  const map = new Map<string, WatchEntry>();
+  for (const entry of memory.watch ?? []) map.set(entry.key, entry);
+  const perDay = new Map<string, number>();
+  const accepted = entries
+    .filter((entry) => watchEntryEligible(entry).allowed)
+    .map((entry) => ({ ...entry, watchedAt: entry.watchedAt ?? now }))
+    .sort((a, b) => (b.watchedSeconds ?? 0) - (a.watchedSeconds ?? 0));
+  for (const entry of accepted) {
+    const url = (entry.url ?? "").trim();
+    const title = (entry.title ?? "").trim().slice(0, 60);
+    if (!url || !title) continue;
+    const day = dayKey(entry.watchedAt);
+    const count = perDay.get(day) ?? 0;
+    if (count >= WATCH_DAILY_MAX) continue;
+    perDay.set(day, count + 1);
+    const key = watchKey(url);
+    map.set(key, {
+      kind: "watch",
+      key,
+      title,
+      author: (entry.author ?? "").trim().slice(0, 40),
+      tags: (entry.tags ?? []).map((tag) => tag.trim()).filter(Boolean).slice(0, 3),
+      take: (entry.take ?? "").trim().slice(0, 40),
+      watchedSeconds: Math.max(0, Math.round(entry.watchedSeconds ?? 0)),
+      watchedAt: entry.watchedAt,
+      weight: 1,
+    });
+  }
+  const watch = decayWatch([...map.values()].sort((a, b) => b.watchedAt - a.watchedAt).slice(0, WATCH_MAX), now);
+  return { ...memory, watch, updatedAt: now };
+}
+
+/** 关键词匹配（英文按词、中文按 2-gram），命中按分数取 top3。 */
+export function matchWatch(watch: WatchEntry[] | undefined, query: string, topN = 3): WatchEntry[] {
+  const text = (query ?? "").trim().toLowerCase();
+  if (!text || !watch || watch.length === 0) return [];
+  const terms = new Set<string>();
+  for (const word of text.split(/[^a-z0-9\u4e00-\u9fff]+/).filter(Boolean)) {
+    terms.add(word);
+  }
+  for (const run of text.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+    for (let index = 0; index + 2 <= run.length; index += 1) {
+      terms.add(run.slice(index, index + 2));
+    }
+  }
+  const scored = watch
+    .map((entry) => {
+      const haystack = (entry.title + " " + entry.tags.join(" ")).toLowerCase();
+      let score = 0;
+      for (const term of terms) {
+        if (term.length >= 2 && haystack.includes(term)) score += term.length;
+      }
+      return { entry, score: score * (0.5 + entry.weight) };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN);
+  return scored.map((item) => item.entry);
+}
+
 /**
  * 记忆注入文本（走 Rust system/prompt）：
  * 事实 top5（≤80 字）→ 最近一天摘要（≤60 字）；总预算按 depth（normal 70 token / deep 300）。
@@ -200,6 +378,7 @@ export function buildMemoryContext(
   memory: PetMemory,
   depth: MemoryDepth = "normal",
   now = Date.now(),
+  query = "",
 ): string | null {
   if (depth === "off") return null;
   const budgetChars = Math.floor(memoryBudget(depth) * 1.6);
@@ -211,9 +390,18 @@ export function buildMemoryContext(
     .slice(0, FACT_CHARS_BUDGET);
   const summaries = pruneSummaries(memory.summaries, now);
   const summary = (summaries.length > 0 ? summaries[summaries.length - 1].text : "").slice(0, SUMMARY_CHARS_BUDGET);
+  const watched = matchWatch(memory.watch, query, 2)
+    .map((entry) =>
+      entry.take
+        ? `前几天看过《${entry.title}》，我当时的想法是：${entry.take}`
+        : `前几天看过《${entry.title}》`,
+    )
+    .join("；")
+    .slice(0, Math.floor(WATCH_TOKEN_BUDGET * 1.6));
   const parts: string[] = [];
   if (facts) parts.push(`事实：${facts}`);
   if (summary) parts.push(`最近：${summary}`);
+  if (watched) parts.push(`看过：${watched}`);
   if (parts.length === 0) return null;
   return parts.join("\n").slice(0, budgetChars);
 }
