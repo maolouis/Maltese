@@ -23,6 +23,17 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 `
    （安装包、`.sig`、`latest.json`、便携 exe、zip、校验和）。
 7. **更新链路**：`https://github.com/maolouis/Maltese/releases/latest/download/latest.json`
    返回新版本号，且安装包 URL 指向本次发布。
+8. **环境自检**（2026-11-20 依赖事故后新增，见
+   [dev-environment-rules.md](dev-environment-rules.md)）：发版前实测并记录
+
+   ```powershell
+   node -v                                         # 期望 v26.x
+   pnpm -v                                         # 期望 12.x；缺失说明 shim 丢了，按规则第 6 节恢复
+   Test-Path E:\Maltese\node_modules\typescript    # 必须 True
+   Test-Path E:\Maltese\pnpm-lock.yaml             # 必须 True
+   ```
+
+   任一项不符就**停止发版**：先报告，不要用「删 `node_modules` 重装」或 npm 回退来自行修复。
 
 ## 关于误报与 SmartScreen
 

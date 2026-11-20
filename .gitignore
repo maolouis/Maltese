@@ -42,3 +42,6 @@ src-tauri/tauri.release.conf.json
 
 .arts/
 maltese-verify.exe
+
+# npm fallback artifacts (repo pins pnpm-lock.yaml; see docs/dev-environment-rules.md)
+package-lock.json

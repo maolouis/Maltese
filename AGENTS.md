@@ -93,6 +93,30 @@ node scripts/build-windows.mjs   # 一键打包（优先 pnpm，兜底 npm）
   `powershell -File scripts/verify-release-artifacts.ps1 <产物...>`；它会检查签名状态、调用 Defender 扫描、输出 SHA-256，
   检出威胁或扫描失败时退出码为 1，不能跳过。
 
+## 环境与依赖保护
+
+> 2026-11-20 发生过 pnpm + `node_modules` 一起消失导致构建/发版中断的事故
+> （复盘：[docs/incidents/2026-11-20-deps-vanish.md](docs/incidents/2026-11-20-deps-vanish.md)）。
+> 完整规则见 [docs/dev-environment-rules.md](docs/dev-environment-rules.md)，以下是必须遵守的硬约束：
+
+- **禁止删除依赖与全局包**：任何脚本或 agent 都**不得**删除 `node_modules`、`pnpm-lock.yaml`、
+  `%APPDATA%\npm`、`%LOCALAPPDATA%\pnpm`（以及 `%LOCALAPPDATA%\node\corepack`、`E:\.pnpm-store`）。
+  确需重建时必须由**用户在会话里明确批准**，并在报告里引用批准原文；未批准一律不动。
+- **构建/发版脚本只清理本项目产物**：允许 `dist/`、`release/`、`dist-plugins/`、
+  `src-tauri/target/release/bundle/`、`.tmp-*`；**禁止**清理依赖、锁文件与全局包。
+  `scripts/build-windows.mjs` 现有「回退 npm 前 `rmSync(node_modules)`」分支属于违规实现，
+  后续必须改成报错退出（改动单独提交、用户确认）。
+- **清理要可见**：任何清理必须先打印**绝对路径 + 文件数/体积**并要求确认，日志落到
+  `.tmp-build/`；禁止新增 `clean:all` / `reset` / `nuke` 这类"万能清空"命令。
+- **发版前环境自检**：`node -v`、`pnpm -v`、`node_modules\typescript` 存在性三项必查
+  （已加入 [docs/release-checklist.md](docs/release-checklist.md)）。
+- **依赖缺失先报告**：发现 pnpm 不在、`node_modules` 为空或缺 `typescript` 时，先把
+  `node -v` / `pnpm -v` / `where pnpm` / `Test-Path node_modules\typescript` 的实测结果报告 lead，
+  **安装可以（`pnpm install` / `npm install`），删除不行**；换 Node、换包管理器、npm↔pnpm 换布局
+  必须先要用户批准。
+- **junction 注意**：`E:\Maltese-clean\node_modules` 是指向 `E:\Maltese\node_modules` 的 junction，
+  对它递归删除会穿透到主仓；只能删 junction 本身，不得递归删任何 `node_modules`。
+
 ## 风格约定
 
 - 沿用项目现有命名与组件结构，品牌色为浅绿 / 浅橙色。
