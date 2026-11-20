@@ -49,7 +49,10 @@ export type ProactiveAngle =
   | "empathy"
   | "detail"
   | "recall"
-  | "self";
+  | "self"
+  | "comfort";
+
+import { personaSuffix } from "./petComfort";
 
 const ANGLES: Array<{ id: ProactiveAngle; hint: string }> = [
   { id: "care", hint: "心疼主人累不累、身体舒不舒服" },
@@ -60,6 +63,7 @@ const ANGLES: Array<{ id: ProactiveAngle; hint: string }> = [
   { id: "detail", hint: "抓住一个具体细节（时长、标题、歌名）说" },
   { id: "recall", hint: "提起刚才他做过的事" },
   { id: "self", hint: "说说小狗自己在干什么" },
+  { id: "comfort", hint: "状态不好，想被安慰：可以说低落了、想被抱抱、想让人陪一会儿" },
 ];
 
 type HistoryEntry = { text: string; at: number; kind?: string; angle?: ProactiveAngle };
@@ -286,6 +290,7 @@ export function buildPrompt(
   const lines = [
     "你是住在主人电脑桌面上的线条小狗，现在主动找主人搭话。",
     ...storyGuidance(context.character ?? "xiaobai"),
+    personaSuffix(),
     "已知信息：",
     ...facts.map((fact) => `- ${fact}`),
     "",
@@ -394,6 +399,11 @@ const FALLBACKS: FallbackRule[] = [
 
 /** 每个角度一组备用句，让「关掉模型」时也不总是那几句。 */
 const ANGLE_LINES: Record<ProactiveAngle, string[]> = {
+  comfort: [
+    "今天有点没精神…可以陪我说说话吗",
+    "我好像有点低落，抱一下好不好",
+    "就想靠着你待一会儿",
+  ],
   care: [
     "你坐得有点久了，我趴你手边打个滚提醒你一下",
     "肩膀是不是又耸起来了？我拿脑袋顶顶你",

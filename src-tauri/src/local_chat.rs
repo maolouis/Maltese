@@ -16,6 +16,9 @@ fn sticker_instruction() -> &'static str {
     "如果你想说点什么但文字不够，可以在回复末尾单独一行输出一个表情标记，格式必须是 <sticker:表情>：\\n例如：<sticker:happy>\\n表情只能取以下之一：happy、celebrate、love、pet、play、sleeping、eating、chin、peek、cry、angry、relax。最多一个，不确定就不要输出。标记行不要加标点，也不要解释。"
 }
 
+
+const PERSONA_SUFFIX: &str = "人设：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；说话口语化、短句、偶尔叠词，不用术语不说教。状态低落时可以轻轻表达想被安慰，但不装可怜骗互动、不道德绑架。";
+
 fn persona(character: &str) -> &'static str {
     match character {
         "xiaojimao" => "你是 Maltese 桌宠小鸡毛：一只金黄色的小金毛，活泼、贪吃、爱撒娇，像小太阳一样会黏着主人。\
@@ -116,9 +119,9 @@ fn build_messages(
     memory: Option<&str>,
 ) -> Vec<Value> {
     let mut system = if sticker {
-        format!("{}\n\n{}", persona(character), sticker_instruction())
+        format!("{}\n\n{}\n\n{}", persona(character), sticker_instruction(), PERSONA_SUFFIX)
     } else {
-        persona(character).to_string()
+        format!("{}\n\n{}", persona(character), PERSONA_SUFFIX)
     };
     if let Some(memory) = memory.filter(|value| !value.trim().is_empty()) {
         system.push_str("\n\n【关于主人的记忆】");

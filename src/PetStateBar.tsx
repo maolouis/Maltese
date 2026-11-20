@@ -87,6 +87,11 @@ export function PetStateBar({
       {!collapsed && (
         <span className="pet-state__hint">回复会参考它的状态</span>
       )}
+      {!collapsed && vitals && vitals.mood < 40 && (
+        <span className="pet-state__hint" aria-live="polite">
+          小狗今天有点低落，可能需要陪陪它
+        </span>
+      )}
       {busy && (
         <span className="pet-state__busy" aria-live="polite">
           {busyStateText(busy, waitSeconds, thinkingOn)}

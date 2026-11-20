@@ -432,3 +432,15 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
 - usage-YYYY-MM-DD.jsonl 记录本地 local 后端调用（dsh 同链路但属于 DSH 会话）；
 - durationMs = 从发出 HTTP 请求到收到完整响应（非流式）/ 到流结束（流式）的真实耗时，不再写 0；
 - 外部平台（Codex/Claude Code/豆包）不在此统计范围，见 docs/research-external-token-usage.md。
+
+### 人设与「求安慰」规则（2026-11-20）
+
+- **人设**：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；口语化、短句、偶尔叠词，不用术语不说教；不装可怜骗互动、不道德绑架。已写入 local_chat 的全部 persona（PERSONA_SUFFIX）与 proactiveChat 的提示词。
+- **求安慰触发**（src/petComfort.ts + App.tsx 主动消息 tick）：mood < 40（或 ond < 40）且要发主动消息时，角度切到 comfort；
+  - 每天 ≤2 次、与上一次间隔 ≥3 小时；
+  - mood 恢复到 ≥60 后 24 小时内不再求安慰（	rackMoodRecovery）；
+  - 用户正在工作（前台 code/document/meeting + 系统空闲 <60s）时跳过；
+  - 状态存 localStorage[maltese-comfort-state]。
+- **聊天**：persona 已约束「状态低落时可以轻轻表达想被安慰」，不写死台词；mood 正常时不主动提。
+- **UI**：状态卡 mood < 40 时显示「小狗今天有点低落，可能需要陪陪它」。
+- 单测：	ests/pet-comfort.test.mjs（低 mood、每日/间隔/恢复冷却、人设关键词、存储与空态）。

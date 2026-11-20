@@ -141,6 +141,8 @@ import {
   type ProactiveAngle,
   type ProactiveContext,
 } from "./proactiveChat";
+import { loadVitalsSummary } from "./petContext";
+import { canSeekComfort, loadComfortState, recordComfort, saveComfortState, trackMoodRecovery } from "./petComfort";
 import { CustomSoundControl } from "./CustomSoundControl";
 import { usePetHitBox } from "./petHitBox";
 import {
@@ -5612,7 +5614,28 @@ function IslandApp({
       // 把最近说过的话带进提示词，并要求换角度；模型不听话时再重试。
       const avoid = recentProactiveLines();
       // 每次挑一个最近最少用过的角度，避免老在「心疼你」这一套里打转。
-      const angle: ProactiveAngle = pickProactiveAngle();
+      // 状态不好（mood<40 或 bond 低）时优先切到 comfort 角度：每日 ≤2、间隔 ≥3h、恢复后 24h 冷却。
+      let forcedAngle: ProactiveAngle | null = null;
+      try {
+        const vitals = loadVitalsSummary();
+        const mood = vitals?.mood ?? 70;
+        const bond = vitals?.bond ?? 50;
+        const comfortState = trackMoodRecovery(loadComfortState(), mood, Date.now());
+        const permission = canSeekComfort(comfortState, Date.now(), mood, {
+          bond,
+          kind,
+          idleSeconds,
+        });
+        if (permission.allowed) {
+          saveComfortState(recordComfort(comfortState, Date.now()));
+          forcedAngle = "comfort";
+        } else {
+          saveComfortState(comfortState);
+        }
+      } catch {
+        // 忽略：记忆读取失败按普通角度
+      }
+      const angle: ProactiveAngle = forcedAngle ?? pickProactiveAngle();
       // 流式生成：一有开头就把气泡弹出来，边生成边更新正文。
       // 之前是等整句生成完才弹，本机大模型要好几秒，看起来就是「回话后很久才冒出气泡」。
       const onFirstTextRef = { fired: false };
