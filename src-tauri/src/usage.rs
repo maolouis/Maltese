@@ -18,11 +18,12 @@ pub fn now_seconds() -> u64 {
         .map(|value| value.as_secs())
         .unwrap_or(0)
 }
-pub const SOURCES: [&str; 6] = [
+pub const SOURCES: [&str; 7] = [
     "chat",
     "proactive",
     "decision",
     "video-comment",
+    "xhs-draft",
     "agent",
     "memory",
 ];

@@ -416,18 +416,54 @@ pub async fn xhs_generate_draft(
             xhs_draft::template_draft(&items)
         }
     };
+    if draft.similar {
+        engine.log_diagnostic(
+            "warn",
+            "XHS_DRAFT_SIMILARITY",
+            format!(
+                "similar=true notes={} len={} action=truncate",
+                items.len(),
+                draft.body.chars().count()
+            ),
+        );
+    }
     let dir = xhs_draft::write_draft(&app, &mut draft)
         .map_err(|message| VideoError::new("XHS_DRAFT_WRITE_FAILED", message))?;
     engine.log_diagnostic(
         "info",
         "XHS_DRAFT_BUILT",
         format!(
-            "generator={} title_chars={} body_chars={} tags={} sources={} dir={}",
+            "generator={} similar={} len={} notes={} dir={}",
             draft.generator,
+            draft.similar,
+            draft.body.chars().count(),
+            draft.used_notes.len(),
+            dir
+        ),
+    );
+    Ok(draft)
+}
+
+/// 保存用户编辑后的草稿（标题/正文/tags 可改，仍按平台上限裁剪）。
+#[tauri::command]
+pub fn xhs_save_draft(
+    app: AppHandle,
+    draft: xhs_draft::XhsDraft,
+) -> VideoResult<xhs_draft::XhsDraft> {
+    let _guard = command_guard(&app, "xhs_save_draft");
+    let engine = session::engine(&app);
+    let mut draft = draft;
+    xhs_draft::normalize_edited(&mut draft);
+    let dir = xhs_draft::persist_edited(&app, &mut draft)
+        .map_err(|message| VideoError::new("XHS_DRAFT_WRITE_FAILED", message))?;
+    engine.log_diagnostic(
+        "info",
+        "XHS_DRAFT_SAVED",
+        format!(
+            "title_chars={} body_chars={} tags={} dir={}",
             draft.title.chars().count(),
             draft.body.chars().count(),
             draft.tags.len(),
-            draft.sources.len(),
             dir
         ),
     );

@@ -96,3 +96,45 @@ node --test tests/video-*.mjs
 
 实机采集需先人工扫码登录专用 profile，然后用平台「小红书」启动一轮采集；
 日志里应看到 `CANDIDATES n=…`、逐条 `ROUND`、`ITEM_COLLECTED url=…/explore/… title=…`。
+## 四、模型自动编辑图文（2026-11-20 升级）
+
+### 输入与输出
+
+- 输入：当前会话（或指定会话）的 1–N 篇采集结果，字段含
+  `title / author / description(body) / tags / note_type / duration / like_count / canonical_url(noteId)`；
+- 输出严格 JSON：`{title(≤20 字), body(≤1000 字，3–5 个要点), tags(≤8，# 开头), hook(开头一句), cta(结尾互动一句), usedNotes:[noteId…]}`；
+- 模型来源：本地模型服务走 `local_chat`，usage 来源标 **`xhs-draft`**（已加入 `usage::SOURCES`）；
+  DSH 后端走 `dsh_chat`；
+- 多篇（≥2）提示词要求「主题归纳 + 我的看法」，不逐篇罗列；`usedNotes` 与 `draft.json.sources`
+  都保留笔记 id/标题/作者/URL 便于溯源。
+
+### 原创性约束
+
+- 提示词硬性要求：**改写而非摘抄，不得连续复制原文 15 个字以上**；不编造、不引流、不提图片；
+- 生成后做**最长公共子串**检查（比较时压缩空白，正文 1000 字内 O(n*m) 可接受）：
+  - 命中 ≥15 字 → 带「重复片段」提示**重写一次**；
+  - 重写后仍命中 → 截断该段（替换为“……”，`similar=true`）并记
+    `XHS_DRAFT_SIMILARITY`；
+- 不下载、不引用原图；配图仍由平台「文生图」生成。
+
+### 可编辑预览与保存
+
+- 面板草稿生成后，标题/正文/标签为**可编辑输入框**（标题/正文实时字数、标签空格分隔）；
+- 三个按钮：**保存草稿**（`xhs_save_draft` 写回 `draft.json` + `readme.md`）、
+  **复制全部**、**打开投稿页**；另保留「打开草稿文件夹」；
+- 保存前统一裁剪：标题 ≤20、正文 ≤1000、tags ≤8、hook/cta ≤60。
+
+### 日志
+
+```
+XHS_DRAFT_BUILT generator=model|template similar=<bool> len=<n> notes=<n> dir=<path>
+XHS_DRAFT_FALLBACK reason=… generator=template
+XHS_DRAFT_SIMILARITY similar=true notes=<n> len=<n> action=truncate
+XHS_DRAFT_SAVED title_chars=… body_chars=… tags=… dir=…
+```
+
+### 易碎点
+
+- 模型可能输出非法 JSON（已重试 1 次后降级模板）；也可能在重写后仍与原文相似（已截断并标记）；
+- 本地模型服务未启动时直接降级模板（日志有 reason）；
+- 配图仍必须由人用平台「文生图」生成，本模块不处理图片。

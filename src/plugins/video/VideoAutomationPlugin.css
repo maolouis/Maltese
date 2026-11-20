@@ -1444,3 +1444,51 @@
   background: rgba(255, 170, 140, 0.2);
   color: #ffd9c9;
 }
+
+/* 小红书草稿：可编辑预览 */
+.xhs-draft__input,
+.xhs-draft__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(63, 122, 95, 0.35);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #1f3b2e;
+  background: #ffffff;
+}
+
+.xhs-draft__textarea {
+  resize: vertical;
+  min-height: 140px;
+}
+
+.xhs-draft__input:focus,
+.xhs-draft__textarea:focus {
+  outline: 2px solid rgba(63, 122, 95, 0.45);
+  outline-offset: 1px;
+}
+
+.xhs-draft__hook {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #2b4a3b;
+  background: rgba(63, 122, 95, 0.08);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.island__expanded .xhs-draft__input,
+.island__expanded .xhs-draft__textarea {
+  background: rgba(22, 32, 27, 0.92);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.island__expanded .xhs-draft__hook {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.88);
+}
