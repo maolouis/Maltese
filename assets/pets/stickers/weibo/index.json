@@ -2,7 +2,7 @@
  "collection": "线条小狗 Maltese 官方微博表情包",
  "account": "https://weibo.com/u/7776232700",
  "collect_date": "2026-11-16",
- "note": "按动作分目录：weibo/<action>/<pack>-<n>.gif；240x240 透明底 GIF。原图与脚本在 work/weibo-stickers/，未纳入版本库。",
+ "note": "按动作分目录：weibo/<action>/<pack>-<n>.gif；240x240 透明底 GIF。2026-11-19 从微博原图（source_image）重新下载重做 9 张白底贴纸，换用封闭轮廓 + 边界内收的抠底，狗身白色不再丢失。原图与脚本在 work/weibo-stickers/，未纳入版本库。",
  "count": 296,
  "packs": 36,
  "items": [
@@ -131,13 +131,14 @@
    "height": 240,
    "frames": 15,
    "duration_ms": 4320,
-   "bytes": 148046,
-   "sha256": "9a2c290d096f2b7cae8d25fa5b20e966a300821110a1c2f6dd11f604e7f03089",
+   "bytes": 163478,
+   "sha256": "37918c94cbd0691f3c820dc0eef634526b6bc54824e380034115699e4307b467",
    "source_image": "https://wx4.sinaimg.cn/mw2000/008ughm4gy1h72aqu52x5g306o06o41z.gif",
    "emotion": "惊讶",
    "action": "scared",
    "action_dir": "scared",
-   "action_label": "受惊/害怕"
+   "action_label": "受惊/害怕",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p2-teaser",
@@ -530,13 +531,14 @@
    "height": 240,
    "frames": 16,
    "duration_ms": 2600,
-   "bytes": 58940,
-   "sha256": "29926d168095c69b2c9b028ab2c3bdba80d19d71224a80fc699cb8b952fa986d",
+   "bytes": 64588,
+   "sha256": "1c61da00e219b5f8feadd9716925265dd286d0be4f00a14925ef3957a5b9cc64",
    "source_image": "https://wx4.sinaimg.cn/mw2000/008ughm4gy1hwh3umod47g306o06o0t7.gif",
    "emotion": "进食",
    "action": "eat",
    "action_dir": "eat",
-   "action_label": "吃东西"
+   "action_label": "吃东西",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p16",
@@ -625,13 +627,14 @@
    "height": 240,
    "frames": 10,
    "duration_ms": 1000,
-   "bytes": 174241,
-   "sha256": "4d040d20ecfd4b15bdd7cc4e1734936abf5a4297e2671499a6c770b2fdbf39bb",
+   "bytes": 184754,
+   "sha256": "8db57c9c6e95b110be2d28d1e576c2053804317f4266fef19e8440363c0d22d7",
    "source_image": "https://wx2.sinaimg.cn/mw2000/008ughm4gy1hwh3ulc8g3g306o06oq76.gif",
    "emotion": "开心",
    "action": "happy",
    "action_dir": "happy",
-   "action_label": "开心/欢呼"
+   "action_label": "开心/欢呼",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p16",
@@ -948,13 +951,14 @@
    "height": 240,
    "frames": 20,
    "duration_ms": 2000,
-   "bytes": 238449,
-   "sha256": "cab44b846aafa826511b7a5f376632c0aa39481014c4944d9a742c401cb8a6ad",
+   "bytes": 279137,
+   "sha256": "b6a2a6354e65479e9559e730310087ee595a6b519b8f8071132f1ee5165f23f1",
    "source_image": "https://wx2.sinaimg.cn/mw2000/008ughm4ly1icnuuj16j3g306o06ojx6.gif",
    "emotion": "开心",
    "action": "happy",
    "action_dir": "happy",
-   "action_label": "开心/欢呼"
+   "action_label": "开心/欢呼",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p28",
@@ -2126,13 +2130,14 @@
    "height": 240,
    "frames": 12,
    "duration_ms": 1200,
-   "bytes": 117013,
-   "sha256": "a475aea6575df5af2d0c57702ea434d32fd15023d4cd5042b7c1ece287c07588",
+   "bytes": 128017,
+   "sha256": "42413848a3391c43e2850ea649b4bd47a19b84079e554ea850846ff88223807a",
    "source_image": "https://wx1.sinaimg.cn/mw2000/008ughm4gy1i5pqa7lne5g306o06o76v.gif",
    "emotion": "困倦",
    "action": "sleep",
    "action_dir": "sleep",
-   "action_label": "睡觉"
+   "action_label": "睡觉",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p21",
@@ -2599,15 +2604,16 @@
    "file": "happy/sp-xinchun-1.gif",
    "width": 240,
    "height": 240,
-   "frames": 12,
+   "frames": 13,
    "duration_ms": 1960,
-   "bytes": 95376,
-   "sha256": "80b0c6d837589313b0d77abf388ba2e01d44174e8c16e02f9886f4f91909caab",
+   "bytes": 115440,
+   "sha256": "dc4630a18458ed8bb08f91b3d55aa1c1d005ca896ecb3a3ef39a32b4d2e07e51",
    "source_image": "https://wx1.sinaimg.cn/mw2000/008ughm4gy1hxuvj229odg306o06o76m.gif",
    "emotion": "中性",
    "action": "happy",
    "action_dir": "happy",
-   "action_label": "开心/欢呼"
+   "action_label": "开心/欢呼",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "sp-xinchun",
@@ -3703,13 +3709,14 @@
    "height": 240,
    "frames": 16,
    "duration_ms": 2700,
-   "bytes": 49830,
-   "sha256": "95fe9881db650c742b622dc12297ef0d3c1eda1c012723199002e40284817d6f",
+   "bytes": 55717,
+   "sha256": "de49921716f3dc5d49eb37ca1d39b6736e7b9b9e771b31e6fa07451c0284c4ae",
    "source_image": "https://wx4.sinaimg.cn/mw2000/008ughm4ly1hvi93tr6z9g306o06o74s.gif",
    "emotion": "惊讶",
    "action": "nervous",
    "action_dir": "nervous",
-   "action_label": "紧张/尴尬"
+   "action_label": "紧张/尴尬",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p15",
@@ -3836,13 +3843,14 @@
    "height": 240,
    "frames": 10,
    "duration_ms": 1000,
-   "bytes": 114415,
-   "sha256": "791483b84b4a99a47687511411d40a86bcc07683eb2e5f74c8adc77cf72281df",
+   "bytes": 123991,
+   "sha256": "75df1f99b0029392a8ff53d333135bb309dbfc35a616dfbcbfc398e73d89357c",
    "source_image": "https://wx3.sinaimg.cn/mw2000/008ughm4ly1hvi93tsydfg306o06oq5k.gif",
    "emotion": "开心",
    "action": "happy",
    "action_dir": "happy",
-   "action_label": "开心/欢呼"
+   "action_label": "开心/欢呼",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p33",
@@ -4615,13 +4623,14 @@
    "height": 240,
    "frames": 10,
    "duration_ms": 1000,
-   "bytes": 113032,
-   "sha256": "6834591f2f1243b50702973a8f19392783ef9ebfbe48adf47fca79e8fe2a1a52",
+   "bytes": 115287,
+   "sha256": "b90f47e88f41b75f06fac3dcdb0aa255a3cec160f950295976efdf799df05acb",
    "source_image": "https://wx2.sinaimg.cn/mw2000/008ughm4ly1hjq2buh94og306o06oq4c.gif",
    "emotion": "亲昵",
    "action": "pet",
    "action_dir": "pet",
-   "action_label": "贴贴/被摸"
+   "action_label": "贴贴/被摸",
+   "refetched_at": "2026-11-19"
   },
   {
    "pack": "p11",

@@ -1,7 +1,7 @@
 // 素材库清单一致性：物理文件 ↔ 生成清单 ↔ 设置页库存。
 // 目的：防止「磁盘上有图、设置里看不到」或「清单里有路径、磁盘上没有」再次发生。
 // 2026-11-17 去重后：磁盘上已没有与 chars 内容重复的副本（383 个已删），
-// 所以「物理 = 清单」是硬约束：1172 → 789。
+// 所以「物理 = 清单」是硬约束：1172 → 789（2026-11-19 从微博重下贴纸后恢复到 789）。
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,8 +10,15 @@ import crypto from "node:crypto";
 import test from "node:test";
 
 const root = path.resolve("assets/pets");
-const manifestPath = path.resolve("src/petCharacterAssets.generated.ts");
-const manifestText = fs.readFileSync(manifestPath, "utf8");
+const manifestDir = path.resolve("src");
+const manifestPath = path.join(manifestDir, "petCharacterAssets.generated.ts");
+const manifestPartPaths = ["xiaobai", "xiaojimao", "shared", "stickers", "legacy"]
+  .map((group) => `petCharacterAssets.generated.${group}.ts`)
+  .filter((name) => fs.existsSync(path.join(manifestDir, name)));
+const manifestParts = new Map(
+  manifestPartPaths.map((file) => [file.match(/generated\.([^.]+)\.ts$/)[1], fs.readFileSync(path.join(manifestDir, file), "utf8")]),
+);
+const manifestText = [fs.readFileSync(manifestPath, "utf8"), ...manifestParts.values()].join("\n");
 
 const manifestPaths = [...manifestText.matchAll(/"(\/assets\/pets\/[^"]+)"/g)]
   .map((match) => decodeURIComponent(match[1].slice("/assets/pets/".length)));
@@ -55,7 +62,7 @@ test("清单覆盖 chars 全量 + stickers 唯一 9 张 + legacy 唯一 1 张", 
   const charsPhysical = physical.filter((file) => file.startsWith("chars/"));
   assert.equal(charsPhysical.length, 779);
   for (const file of charsPhysical) assert.ok(manifestSet.has(file), `chars 素材漏收：${file}`);
-  // 微博表情包：删除 287 张重复后只剩 9 张唯一内容
+  // 微博表情包：删除 287 张重复后只剩 9 张唯一内容；2026-11-19 从微博重下重抠后又回到 9 张
   const stickerPhysical = physical.filter((file) => file.startsWith("stickers/"));
   assert.equal(stickerPhysical.length, 9);
   for (const file of stickerPhysical) assert.ok(manifestSet.has(file), `stickers 漏收：${file}`);
@@ -68,26 +75,21 @@ test("清单条数 = 789 = 物理 789（1172 - 383 个重复副本）", () => {
   assert.equal(manifestPaths.length, 789);
   assert.equal(physical.length, 789);
   // 分组顺序固定：xiaobai / xiaojimao / shared / stickers / legacy
-  const groups = [...manifestText.matchAll(/^  "([a-z]+)": \{/gm)].map((match) => match[1]);
+  const groups = manifestPartPaths.map((file) => file.match(/generated\.([^.]+)\.ts$/)[1]);
   assert.deepEqual(groups, ["xiaobai", "xiaojimao", "shared", "stickers", "legacy"]);
   // 动作名按字典序，避免每次生成顺序抖动
-  const xiaobaiBlock = manifestText.slice(manifestText.indexOf('"xiaobai"'), manifestText.indexOf('"xiaojimao"'));
-  const actions = [...xiaobaiBlock.matchAll(/^    "([a-z]+)": \[/gm)].map((match) => match[1]);
+  const xiaobaiBlock = manifestParts.get("xiaobai");
+  const actions = [...xiaobaiBlock.matchAll(/^  "([a-z]+)": \[/gm)].map((match) => match[1]);
   assert.deepEqual(actions, [...actions].sort());
 });
 
 test("设置页库存口径：分组计数与总数一致（直接按清单结构核对）", () => {
-  const groups = {};
-  let currentGroup = null;
-  for (const line of manifestText.split("\n")) {
-    const groupMatch = /^  "([a-z]+)": \{/.exec(line);
-    if (groupMatch) {
-      currentGroup = groupMatch[1];
-      groups[currentGroup] = (groups[currentGroup] ?? 0);
-      continue;
-    }
-    if (/^      "\/assets\/pets\//.test(line) && currentGroup) groups[currentGroup] += 1;
-  }
+  const groups = Object.fromEntries(
+    [...manifestParts.entries()].map(([group, text]) => [
+      group,
+      [...text.matchAll(/"\/assets\/pets\//g)].length,
+    ]),
+  );
   assert.deepEqual(groups, {
     xiaobai: 394,
     xiaojimao: 233,

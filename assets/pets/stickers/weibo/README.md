@@ -89,6 +89,8 @@ assets/pets/stickers/weibo/
 
 按 sha256 复查：本目录 296 张里 **287 张与 `assets/pets/chars/` 中的文件内容完全相同**（早前归位时已并入三个角色池），
 经用户确认已从磁盘删除；**只保留 9 张唯一内容**（`eat/1`、`happy/4`、`nervous/1`、`pet/1`、`scared/1`、`sleep/1`）。
+2026-11-19 这 9 张按 `index.json` 里的 `source_image`（微博原图直链）重新下载、重做透明底回填，
+`pet/p11-7.gif` 重做后与 `chars/shared/pet/p11-7.gif` 不再字节相同，因此仍作为独立贴纸保留，本目录维持 **9 张**。
 删除清单（路径 + sha256 + 对应保留路径）见仓库根 `work/asset-dedupe-plan.txt`（`work/` 不进版本库）。
 
 `index.json`、`by-action.md`、`by-emotion.md`、`preview.png` 仍记录采集时的完整 296 张（含已删文件路径），用于追溯来源与版权说明。
