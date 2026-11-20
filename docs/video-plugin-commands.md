@@ -95,3 +95,15 @@ WORST_UI_MS=13
 - 失败日志带 DOM 诊断（`section= editable= textarea= html=`，html 是评论区外层 300 字符片段）；
 - 气泡：成功 `{kind:"posted"}`；失败 `{kind:"failed", text:"没找到评论区/输入框，这条先没评（原因：…）"}`；
   展开态面板状态区绿色/橙色高亮 5 秒；同类失败原因 60s 内只提示一次（不刷屏）。
+
+## 自动评论：发送诊断与 API 兜底（2026-11-20）
+
+- 合成 `click()`、CDP 可信 `mousePressed/mouseReleased`、`Ctrl+Enter` 在 B 站都可能不触发提交；
+- 现在发送失败后会记诊断：`COMMENT_SUBMIT_DEBUG diag={activeInEditor,buttonHtml,hitElement,captcha,pointerSent,apiCode,apiMessage,listVerified,replyCount}`；
+- 登录态下用页面内 `fetch('https://api.bilibili.com/x/v2/reply/add', {credentials:'include'})`
+  做**诊断+兜底**（oid 取自 `__INITIAL_STATE__.videoData.aid`，csrf 取 `bili_jct` cookie），
+  日志 `COMMENT_API_FALLBACK via=api-fallback code=… message=… listVerified=…`；
+- 常见返回码：`-101` 未登录、`-111` csrf 失效、`-107` 账号未转正、`12002` 评论频率、`412` 风控；
+- API `code=0` 且回读列表命中才 `verified=true`，否则 `COMMENT_POSTED verified=false reason=api-<code>`
+  并弹失败气泡（如实告知，不谎报成功）；
+- 风险：API 兜底只在「用户已登录 + 主动开自动评论」时使用，避免绕过页面风控；如平台判定账号异常应立即停止。

@@ -3243,6 +3243,55 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                     }
                 }
             }
+            // 诊断：记录按钮/命中元素/验证码/API 兜底结果；API code=0 且列表回读命中则算发送成功。
+            let diag = report
+                .detail
+                .get("diag")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if !diag.is_null() {
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "info".to_string(),
+                    code: "COMMENT_SUBMIT_DEBUG".to_string(),
+                    message: format!(
+                        "url={} diag={}",
+                        facts.canonical_url.clone().unwrap_or_default(),
+                        diag
+                    ),
+                });
+                if let Some(code) = diag.get("apiCode").and_then(|value| value.as_i64()) {
+                    engine.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: Some(engine.snapshot().session_id.clone()),
+                        channel: Some(ChannelType::Cdp),
+                        level: if code == 0 { "info" } else { "warn" }.to_string(),
+                        code: "COMMENT_API_FALLBACK".to_string(),
+                        message: format!(
+                            "via=api-fallback code={} message={} listVerified={}",
+                            code,
+                            diag
+                                .get("apiMessage")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(""),
+                            diag
+                                .get("listVerified")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false)
+                        ),
+                    });
+                    if code == 0
+                        && diag
+                            .get("listVerified")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                    {
+                        verified = true;
+                    }
+                }
+            }
             engine.store.log(DiagnosticEntry {
                 at: now_seconds(),
                 session_id: Some(engine.snapshot().session_id.clone()),
@@ -3260,6 +3309,20 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                     "COMMENT_NOT_SUBMITTED",
                     "评论没发出去：点了发送但没生效，可能被审核或按钮禁用。",
                 );
+                let api_code = diag.get("apiCode").and_then(|value| value.as_i64());
+                let fail_reason = match api_code {
+                    Some(code) => format!("api-{code}"),
+                    None => "not-submitted".to_string(),
+                };
+                let fail_hint = match api_code {
+                    Some(-101) => "接口返回 -101：未登录",
+                    Some(-111) => "接口返回 -111：csrf 失效（重新登录试试）",
+                    Some(-107) => "接口返回 -107：账号未转正，需先在 B 站答题/转正才能评论",
+                    Some(12002) => "接口返回 12002：评论太频繁",
+                    Some(412) => "接口返回 412：触发风控",
+                    Some(_) => "接口返回错误，评论没发出去",
+                    None => "点了发送但没生效，可能被审核或按钮禁用",
+                };
                 engine.store.log(DiagnosticEntry {
                     at: now_seconds(),
                     session_id: Some(engine.snapshot().session_id.clone()),
@@ -3267,8 +3330,9 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                     level: "warn".to_string(),
                     code: "COMMENT_POSTED".to_string(),
                     message: format!(
-                        "url={} verified=false reason=not-submitted text={} {}",
+                        "url={} verified=false reason={} text={} {}",
                         facts.canonical_url.clone().unwrap_or_default(),
+                        fail_reason,
                         comment,
                         submit_line
                     ),
@@ -3279,10 +3343,7 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                     state.last_comment_verified = false;
                     state.last_comment_at = now_seconds();
                 }
-                let bubble_text = format!(
-                    "评论没发出去（点了发送但没生效，可能被审核或按钮禁用）：《{}》",
-                    facts.title
-                );
+                let bubble_text = format!("评论没发出去（{fail_hint}）：《{}》", facts.title);
                 engine.store.log(DiagnosticEntry {
                     at: now_seconds(),
                     session_id: Some(engine.snapshot().session_id.clone()),

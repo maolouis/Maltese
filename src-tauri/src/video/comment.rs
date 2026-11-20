@@ -291,9 +291,21 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
     } catch (e) {}
   }
   await sleep(300);
-  // 5) 提交：先试 Ctrl+Enter（B 站评论快捷键），再逐个点候选按钮，每次确认编辑器是否清空。
+  // 5) 提交：快捷键 → 按钮（含完整指针序列）→ 诊断 → 登录态 API 兜底。
   var attempts = [];
   var lastDisabled = false;
+  var diag = {
+    buttonHtml: "",
+    hitElement: "",
+    captcha: false,
+    activeInEditor: false,
+    pointerSent: false,
+    apiCode: null,
+    apiMessage: "",
+    apiError: "",
+    listVerified: false,
+    replyCount: 0,
+  };
   var editorTextNow = function () {
     var editors = deepAll('textarea, [contenteditable="true"], [contenteditable="plaintext-only"]').filter(visible);
     if (!editors.length) return "";
@@ -326,14 +338,82 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
       ranked.push({ node: candidate, score: score, name: className || candidate.tagName, label: label });
     }
     ranked.sort(function (a, b) { return b.score - a.score; });
-    for (var r = 0; r < ranked.length; r += 1) {
-      var entry = ranked[r];
-      lastDisabled = Boolean(entry.node.disabled) || entry.node.getAttribute("aria-disabled") === "true";
-      if (lastDisabled) continue;
-      try { entry.node.click(); } catch (e) {}
-      attempts.push("click:" + String(entry.name).slice(0, 40) + "[" + entry.label.slice(0, 8) + "]");
+    var button = ranked.length ? ranked[0].node : null;
+    if (button) {
+      lastDisabled = Boolean(button.disabled) || button.getAttribute("aria-disabled") === "true";
+      diag.buttonHtml = String(button.outerHTML || "").slice(0, 200);
+      try {
+        var rect = button.getBoundingClientRect();
+        var hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        diag.hitElement = hit ? (hit.tagName + "." + String(hit.className || "").slice(0, 80)) : "none";
+      } catch (e) {}
+      try {
+        diag.captcha = Boolean(document.querySelector('.bili-captcha, [class*="captcha"], .geetest_panel'));
+      } catch (e) {}
+      try {
+        var active = document.activeElement;
+        diag.activeInEditor = Boolean(active) && (active === input || (input.contains && input.contains(active)));
+      } catch (e) {}
+      try { button.scrollIntoView({ block: "center" }); } catch (e) {}
+      await sleep(100);
+      try {
+        var center = button.getBoundingClientRect();
+        var point = { x: center.left + center.width / 2, y: center.top + center.height / 2 };
+        var events = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"];
+        for (var e = 0; e < events.length; e += 1) {
+          var kind = events[e];
+          var ctor = kind.indexOf("pointer") === 0 ? PointerEvent : MouseEvent;
+          button.dispatchEvent(new ctor(kind, { bubbles: true, cancelable: true, clientX: point.x, clientY: point.y, button: 0 }));
+          await sleep(60);
+        }
+        diag.pointerSent = true;
+      } catch (e) {}
+      attempts.push("pointer-sequence:" + String(ranked[0].name).slice(0, 40));
       await sleep(800);
-      if (editorTextNow() === "") break;
+    }
+  }
+  // 仍未清空编辑器：登录态下用页面内 fetch 调 /x/v2/reply/add（诊断 + 兜底）。
+  if (editorTextNow() !== "") {
+    try {
+      var csrfMatch = document.cookie.match(/(?:^|;\s*)bili_jct=([^;]+)/);
+      var csrf = csrfMatch ? csrfMatch[1] : "";
+      var state = window.__INITIAL_STATE__ || {};
+      var aid = (state.videoData && state.videoData.aid) || state.aid || 0;
+      var oid = String(aid || "");
+      if (csrf && oid) {
+        var form = new URLSearchParams();
+        form.set("oid", oid);
+        form.set("type", "1");
+        form.set("message", text);
+        form.set("csrf", csrf);
+        form.set("plat", "1");
+        var response = await fetch("https://api.bilibili.com/x/v2/reply/add", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+        });
+        var data = await response.json();
+        diag.apiCode = data.code;
+        diag.apiMessage = data.message || "";
+        if (data.code === 0) {
+          await sleep(1200);
+          try {
+            var listUrl = "https://api.bilibili.com/x/v2/reply?oid=" + encodeURIComponent(oid) + "&type=1&pn=1&ps=20&sort=2";
+            var listData = await (await fetch(listUrl, { credentials: "include" })).json();
+            var replies = (listData.data && listData.data.replies) || [];
+            diag.replyCount = replies.length;
+            diag.listVerified = replies.some(function (item) {
+              var message = String((item.content && item.content.message) || "");
+              return message.indexOf(text.slice(0, 12)) >= 0;
+            });
+          } catch (e) {}
+        }
+      } else {
+        diag.apiError = "missing-csrf-or-oid";
+      }
+    } catch (e) {
+      diag.apiError = String(e).slice(0, 100);
     }
   }
   return JSON.stringify({
@@ -344,6 +424,7 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
       clicked: attempts.join("+"),
       disabled: lastDisabled,
       editorCleared: editorTextNow() === "",
+      diag: diag,
     },
   });
 })()"#;
