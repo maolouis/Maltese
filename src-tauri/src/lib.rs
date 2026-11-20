@@ -1951,8 +1951,27 @@ fn set_island_overlay(
     };
     // 先放掉浮层请求锁再纠正：set_position 会同步触发窗口事件，持锁调用有死锁风险。
     drop(_request_guard);
+    // 双击打开的是 hover 浮层：单独用 doubleclick 记日志/违规，和右键同等待遇。
+    let overlay_op = if overlay.as_deref() == Some("hover") {
+        "doubleclick"
+    } else {
+        "set_island_overlay"
+    };
+    if overlay_op == "doubleclick" {
+        let before = overlay_expected_slot;
+        let after = dog_slot_now(&window);
+        eprintln!(
+            "DOUBLECLICK_GEOM before={:?} after={:?} panelSide={:?} panelVertical={:?} dx={} dy={}",
+            before.map(|slot| (slot.x, slot.y, slot.width, slot.height)),
+            after.map(|slot| (slot.x, slot.y, slot.width, slot.height)),
+            LAST_PANEL_SIDE.lock().ok().and_then(|slot| *slot),
+            LAST_PANEL_VERTICAL.lock().ok().and_then(|slot| *slot),
+            after.map(|slot| before.map(|b| slot.x - b.x).unwrap_or(0)).unwrap_or(0),
+            after.map(|slot| before.map(|b| slot.y - b.y).unwrap_or(0)).unwrap_or(0)
+        );
+    }
     // 不变量强制约束：浮层开合后狗槽必须回到操作前的位置（±2px）。
-    enforce_slot_invariant(&window, overlay_expected_slot, "set_island_overlay");
+    enforce_slot_invariant(&window, overlay_expected_slot, overlay_op);
     overlay_result
 }
 
@@ -2018,6 +2037,23 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         "overlay plan ({overlay}): side={side} vertical={vertical} anchor=({}, {}) base={base_w:.1}x{base_h:.1}",
         snapshot.anchor_x, snapshot.anchor_y
     );
+    // 真实路径注入：规划阶段就校验一次狗槽不变量（此时窗口还没动，超差说明锚点已算错）。
+    let plan_expected = WindowRect {
+        x: snapshot.anchor_x,
+        y: snapshot.anchor_y,
+        width: (base_w * scale).round() as u32,
+        height: (base_h * scale).round() as u32,
+    };
+    enforce_slot_invariant(&window, Some(plan_expected), "plan_island_overlay");
+    if overlay == "hover" {
+        let slot = dog_slot_now(&window);
+        eprintln!(
+            "DOUBLECLICK_GEOM phase=plan anchor=({}, {}) slot={:?} side={side} vertical={vertical}",
+            snapshot.anchor_x,
+            snapshot.anchor_y,
+            slot.map(|current| (current.x, current.y))
+        );
+    }
     Ok(json!({ "side": side, "vertical": vertical }))
 }
 
