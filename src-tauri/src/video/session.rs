@@ -2508,6 +2508,122 @@ impl SessionEngine {
         profile
     }
 
+
+/// 评论提交校验探针：穿透 Shadow DOM 读编辑器内容、列表数量、首条评论与正文。
+const COMMENT_SUBMIT_PROBE_JS: &str = r#"
+(function () {
+  var out = { editorText: '', replyCount: 0, firstReply: '', bodyText: '' };
+  var roots = [];
+  function deepAll(selector) {
+    var list = [];
+    (function walk(root) {
+      if (!root || roots.indexOf(root) >= 0) return;
+      roots.push(root);
+      try {
+        var found = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+        for (var i = 0; i < found.length; i += 1) list.push(found[i]);
+        var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (var j = 0; j < all.length; j += 1) if (all[j].shadowRoot) walk(all[j].shadowRoot);
+      } catch (e) {}
+    })(document);
+    return list;
+  }
+  function visible(el) {
+    try {
+      var box = el.getBoundingClientRect();
+      return box.width > 10 && box.height > 10;
+    } catch (e) { return false; }
+  }
+  var editors = deepAll('textarea, [contenteditable="true"], [contenteditable="plaintext-only"]').filter(visible);
+  if (editors.length > 0) {
+    var editor = editors[editors.length - 1];
+    out.editorText = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
+  }
+  var items = deepAll('[class*="reply-item"], [class*="comment-item"], [class*="replyItem"], li[class*="reply"]');
+  out.replyCount = items.length;
+  if (items.length > 0) {
+    out.firstReply = (items[0].innerText || items[0].textContent || '').trim().slice(0, 240);
+  }
+  var text = '';
+  (function walk(root) {
+    if (!root) return;
+    try { text += (root.innerText || root.textContent || '') + '\n'; } catch (e) {}
+    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (var i = 0; i < all.length; i += 1) if (all[i].shadowRoot) walk(all[i].shadowRoot);
+  })(document);
+  out.bodyText = text.slice(0, 30000);
+  return out;
+})()
+"#;
+
+    /// 找「发布/发送」按钮中心点，供 CDP 可信点击。
+    async fn comment_submit_point(cdp: &mut CdpSession) -> Option<(f64, f64)> {
+        let script = r#"
+(function () {
+  var roots = [];
+  function deepAll(selector) {
+    var list = [];
+    (function walk(root) {
+      if (!root || roots.indexOf(root) >= 0) return;
+      roots.push(root);
+      try {
+        var found = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+        for (var i = 0; i < found.length; i += 1) list.push(found[i]);
+        var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (var j = 0; j < all.length; j += 1) if (all[j].shadowRoot) walk(all[j].shadowRoot);
+      } catch (e) {}
+    })(document);
+    return list;
+  }
+  var words = ['发布', '发送', '评论'];
+  var best = null;
+  var bestScore = -1;
+  var buttons = deepAll('button, [role=button], .reply-send');
+  for (var i = 0; i < buttons.length; i += 1) {
+    var node = buttons[i];
+    var box = node.getBoundingClientRect();
+    if (box.width < 20 || box.height < 12) continue;
+    var className = String(node.className || '');
+    if (/bpx-player|sending-area|danmaku|player-|search/i.test(className)) continue;
+    var label = (node.textContent || '').trim();
+    var labelMatches = words.some(function (word) { return label.indexOf(word) >= 0 && label.length <= 8; });
+    var sendClass = /reply-send/i.test(className);
+    if (!labelMatches && !sendClass) continue;
+    var score = (labelMatches ? 2 : 0) + (sendClass ? 3 : 0);
+    if (score > bestScore) { bestScore = score; best = node; }
+  }
+  if (!best) return null;
+  var rect = best.getBoundingClientRect();
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+})()
+"#;
+        let value = cdp
+            .evaluate(script, std::time::Duration::from_secs(5))
+            .await
+            .ok()?;
+        let x = value.get("x").and_then(|item| item.as_f64())?;
+        let y = value.get("y").and_then(|item| item.as_f64())?;
+        Some((x, y))
+    }
+
+    /// 编辑器里是否还留着这条评论（还在草稿态）。
+    async fn comment_editor_holds(cdp: &mut CdpSession, comment: &str) -> bool {
+        let probe = cdp
+            .evaluate(Self::COMMENT_SUBMIT_PROBE_JS, std::time::Duration::from_secs(5))
+            .await
+            .ok();
+        probe
+            .as_ref()
+            .map(|value| {
+                let text = value
+                    .get("editorText")
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("");
+                comment_in_text(text, comment)
+            })
+            .unwrap_or(false)
+    }
+
     /// 评论失败提示：气泡 + 面板提示都发；同类原因 60s 内只提示一次（不刷屏）。
     fn comment_failure_notice(&self, app: &AppHandle, url: &str, reason: &str, message: &str) {
         let now = now_seconds();
@@ -2994,6 +3110,23 @@ impl SessionEngine {
                 return;
             }
 
+            // 提交前记录评论列表数量与编辑器内容（用于发送后差异化校验）。
+            let probe_before = if port != 0 {
+                match CdpSession::connect(port, platform).await {
+                    Ok(mut cdp) => cdp
+                        .evaluate(Self::COMMENT_SUBMIT_PROBE_JS, std::time::Duration::from_secs(6))
+                        .await
+                        .ok(),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+            let pre_reply_count = probe_before
+                .as_ref()
+                .and_then(|value| value.get("replyCount").and_then(|item| item.as_u64()))
+                .unwrap_or(0) as i64;
+
             let report = match engine.post_comment(&comment).await {
                 Ok(report) if report.ok => report,
                 Ok(report) => {
@@ -3022,23 +3155,42 @@ impl SessionEngine {
             };
 
             // 回读验证：B 站评论区在 Shadow DOM 里，document.body.innerText 看不到，
-            // 必须递归 shadowRoot 收集文本；同时把评论区滚进视口，等评论渲染。
-            let deep_text_script = r#"
-(function () {
-  var out = '';
-  var walk = function (root) {
-    if (!root) return;
-    try { out += (root.innerText || root.textContent || '') + '\n'; } catch (e) {}
-    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
-    for (var i = 0; i < all.length; i += 1) {
-      if (all[i].shadowRoot) walk(all[i].shadowRoot);
-    }
-  };
-  walk(document);
-  return out.slice(0, 30000);
-})()
-"#;
+            // 合成 click 在 B 站可能不触发提交：编辑器还留着评论时，用 CDP 可信点击 / Ctrl+Enter。
+            let mut trusted = String::new();
+            if port != 0 {
+                if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
+                    if Self::comment_editor_holds(&mut cdp, &comment).await {
+                        if let Some((x, y)) = Self::comment_submit_point(&mut cdp).await {
+                            let _ = cdp.click_at(x, y).await;
+                            trusted = "trusted-click".to_string();
+                            tokio::time::sleep(Duration::from_millis(900)).await;
+                        }
+                        if Self::comment_editor_holds(&mut cdp, &comment).await {
+                            let _ = cdp.press_ctrl_enter().await;
+                            trusted = format!("{trusted}+trusted-ctrl-enter");
+                            tokio::time::sleep(Duration::from_millis(900)).await;
+                        }
+                    }
+                }
+            }
+
+            // 发送后校验（三重）：① 编辑器清空 ② 评论列表新增/首条含内容 ③ 回读 ≠ 输入框原文。
+            // 旧 bug：回读匹配到了输入框里的草稿文字，误报 verified=true。
             let mut verified = false;
+            let mut submit_line = format!(
+                "clicked={} disabled={} trusted={}",
+                report
+                    .detail
+                    .get("clicked")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+                report
+                    .detail
+                    .get("disabled")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+                trusted
+            );
             if port != 0 {
                 if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
                     let _ = cdp
@@ -3047,42 +3199,137 @@ impl SessionEngine {
                             std::time::Duration::from_secs(3),
                         )
                         .await;
-                    for _ in 0..4 {
-                        tokio::time::sleep(Duration::from_millis(2000)).await;
-                        if let Ok(text) = cdp.evaluate_text(deep_text_script).await {
-                            if comment_in_text(&text, &comment) {
-                                verified = true;
-                                break;
-                            }
-                        }
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    if let Ok(after) = cdp
+                        .evaluate(Self::COMMENT_SUBMIT_PROBE_JS, std::time::Duration::from_secs(6))
+                        .await
+                    {
+                        let editor_text = after
+                            .get("editorText")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        let reply_count = after
+                            .get("replyCount")
+                            .and_then(|value| value.as_u64())
+                            .unwrap_or(0) as i64;
+                        let first_reply = after
+                            .get("firstReply")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("");
+                        let editor_cleared = editor_text.is_empty();
+                        let list_delta = reply_count - pre_reply_count;
+                        let list_hit = list_delta > 0 || comment_in_text(first_reply, &comment);
+                        // 输入框里还是原文 → 说明仍在草稿态，不能算发送成功。
+                        let still_editing = comment_in_text(&editor_text, &comment);
+                        verified = editor_cleared && list_hit && !still_editing;
+                        submit_line = format!(
+                            "clicked={} disabled={} trusted={} editorCleared={} listDelta={}",
+                            report
+                                .detail
+                                .get("clicked")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(""),
+                            report
+                                .detail
+                                .get("disabled")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false),
+                            trusted,
+                            editor_cleared,
+                            list_delta
+                        );
                     }
                 }
             }
-            if !verified {
-                engine.set_runtime_error("COMMENT_UNVERIFIED", "评论可能没发出去：没在评论区回读到这条内容。");
-            }
-            let message = if verified { "评论已提交并回读验证" } else { "评论已尝试提交，但回读未验证" };
             engine.store.log(DiagnosticEntry {
                 at: now_seconds(),
                 session_id: Some(engine.snapshot().session_id.clone()),
                 channel: Some(ChannelType::Cdp),
-                level: if verified { "info" } else { "warn" }.to_string(),
-                code: if verified { "COMMENT_POSTED" } else { "COMMENT_UNVERIFIED" }.to_string(),
-                message: format!("url={} verified={} text={}", facts.canonical_url.clone().unwrap_or_default(), verified, comment),
+                level: "info".to_string(),
+                code: "COMMENT_SUBMIT".to_string(),
+                message: format!(
+                    "url={} {}",
+                    facts.canonical_url.clone().unwrap_or_default(),
+                    submit_line
+                ),
+            });
+            if !verified {
+                engine.set_runtime_error(
+                    "COMMENT_NOT_SUBMITTED",
+                    "评论没发出去：点了发送但没生效，可能被审核或按钮禁用。",
+                );
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "warn".to_string(),
+                    code: "COMMENT_POSTED".to_string(),
+                    message: format!(
+                        "url={} verified=false reason=not-submitted text={} {}",
+                        facts.canonical_url.clone().unwrap_or_default(),
+                        comment,
+                        submit_line
+                    ),
+                });
+                {
+                    let mut state = lock_state(&engine.state);
+                    state.last_comment_dry_run = false;
+                    state.last_comment_verified = false;
+                    state.last_comment_at = now_seconds();
+                }
+                let bubble_text = format!(
+                    "评论没发出去（点了发送但没生效，可能被审核或按钮禁用）：《{}》",
+                    facts.title
+                );
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "warn".to_string(),
+                    code: "COMMENT_BUBBLE".to_string(),
+                    message: format!("kind=failed text={bubble_text}"),
+                });
+                let _ = app.emit(
+                    "video-comment-bubble",
+                    serde_json::json!({ "kind": "failed", "text": bubble_text }),
+                );
+                let _ = app.emit(
+                    "video-auto-comment",
+                    serde_json::json!({ "ok": false, "message": bubble_text }),
+                );
+                let _ = app.emit("video-session-updated", engine.snapshot());
+                let _ = report;
+                return;
+            }
+            let message = "评论已提交并回读验证";
+            engine.store.log(DiagnosticEntry {
+                at: now_seconds(),
+                session_id: Some(engine.snapshot().session_id.clone()),
+                channel: Some(ChannelType::Cdp),
+                level: "info".to_string(),
+                code: "COMMENT_POSTED".to_string(),
+                message: format!(
+                    "url={} verified=true text={} {}",
+                    facts.canonical_url.clone().unwrap_or_default(),
+                    comment,
+                    submit_line
+                ),
             });
             {
                 let mut state = lock_state(&engine.state);
                 state.comment_count = state.comment_count.saturating_add(1);
                 state.last_comment_text = comment.clone();
                 state.last_comment_dry_run = false;
-                state.last_comment_verified = verified;
+                state.last_comment_verified = true;
                 state.last_comment_at = now_seconds();
                 state.comments.push(SessionComment {
                     text: comment.clone(),
                     url: facts.canonical_url.clone().unwrap_or_default(),
                     title: facts.title.clone(),
                     dry_run: false,
-                    verified,
+                    verified: true,
                     at: now_seconds(),
                 });
             }
@@ -3093,21 +3340,15 @@ impl SessionEngine {
                 channel: Some(ChannelType::Cdp),
                 level: "info".to_string(),
                 code: "COMMENT_BUBBLE".to_string(),
-                message: format!(
-                    "kind={} text={bubble_text}",
-                    if verified { "posted" } else { "unverified" }
-                ),
+                message: format!("kind=posted text={bubble_text}"),
             });
             let _ = app.emit(
                 "video-comment-bubble",
-                serde_json::json!({
-                    "kind": if verified { "posted" } else { "unverified" },
-                    "text": bubble_text,
-                }),
+                serde_json::json!({ "kind": "posted", "text": bubble_text }),
             );
             let _ = app.emit(
                 "video-auto-comment",
-                serde_json::json!({ "ok": verified, "message": message }),
+                serde_json::json!({ "ok": true, "message": message }),
             );
             let _ = app.emit("video-session-updated", engine.snapshot());
             let _ = report;
@@ -3167,11 +3408,16 @@ impl SessionEngine {
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_string();
+        let detail = parsed
+            .get("detail")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         Ok(CommentReport {
             ok,
             reason,
             message,
             platform: platform.as_str().to_string(),
+            detail,
         })
     }
     pub fn list_sessions(&self, limit: u32) -> Vec<SessionSummary> {

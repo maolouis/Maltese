@@ -341,6 +341,47 @@ impl CdpSession {
         Ok(())
     }
 
+    /// 用 CDP Input 派发可信点击（合成 el.click() 在 B 站评论发送上会失效）。
+    pub async fn click_at(&mut self, x: f64, y: f64) -> Result<(), FailureReason> {
+        for event_type in ["mousePressed", "mouseReleased"] {
+            let _ = self
+                .request(
+                    "Input.dispatchMouseEvent",
+                    json!({
+                        "type": event_type,
+                        "x": x,
+                        "y": y,
+                        "button": "left",
+                        "clickCount": 1
+                    }),
+                    KEY_TIMEOUT,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// 用 CDP Input 派发可信 Ctrl+Enter（B 站评论快捷键）。
+    pub async fn press_ctrl_enter(&mut self) -> Result<(), FailureReason> {
+        for event_type in ["keyDown", "keyUp"] {
+            let _ = self
+                .request(
+                    "Input.dispatchKeyEvent",
+                    json!({
+                        "type": event_type,
+                        "key": "Enter",
+                        "code": "Enter",
+                        "windowsVirtualKeyCode": 13,
+                        "nativeVirtualKeyCode": 13,
+                        "modifiers": 2
+                    }),
+                    KEY_TIMEOUT,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn reconnect(&mut self) -> Result<(), FailureReason> {
         let replacement = CdpSession::connect(self.port, self.platform).await?;
         *self = replacement;

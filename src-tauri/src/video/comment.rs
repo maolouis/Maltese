@@ -196,7 +196,10 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
   await sleep(1200);
   section = section || firstVisible(SECTION_SELECTORS);
   if (!section) {
-    return JSON.stringify({ ok: false, reason: "no-comment-section", message: "没找到评论区（页面可能没加载完或没有登录）" });
+    // 评论区懒加载：滚到底再等一次，仍没有则继续尝试找输入框（不直接失败）。
+    try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+    await sleep(1800);
+    section = firstVisible(SECTION_SELECTORS);
   }
   // 评论区可能刚渲染：再等一次并滚到可见位置。
   await sleep(600);
@@ -288,24 +291,61 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
     } catch (e) {}
   }
   await sleep(300);
-  // 5) 发送按钮：.reply-send / 文本含 发布/发送/评论。
-  var words = ["发布", "发送", "评论", "回复"];
-  var buttons = deepAll('button, [role=button], .reply-send, [class*="send"], [class*="publish"]');
-  var button = null;
-  for (var b = 0; b < buttons.length; b += 1) {
-    var candidate = buttons[b];
-    if (!visible(candidate)) continue;
-    var className = String(candidate.className || "");
-    var label = (candidate.textContent || "").trim();
-    var looksLikeSend = /reply-send|send/i.test(className);
-    var labelMatches = label.length > 0 && label.length <= 8 && words.some(function (word) { return label.indexOf(word) >= 0; });
-    if (looksLikeSend || labelMatches) { button = candidate; break; }
+  // 5) 提交：先试 Ctrl+Enter（B 站评论快捷键），再逐个点候选按钮，每次确认编辑器是否清空。
+  var attempts = [];
+  var lastDisabled = false;
+  var editorTextNow = function () {
+    var editors = deepAll('textarea, [contenteditable="true"], [contenteditable="plaintext-only"]').filter(visible);
+    if (!editors.length) return "";
+    var editor = editors[editors.length - 1];
+    return (editor.tagName === "TEXTAREA" ? editor.value : (editor.innerText || editor.textContent || "")).trim();
+  };
+  try { input.focus(); } catch (e) {}
+  for (var shortcut = 0; shortcut < 2; shortcut += 1) {
+    var keydown = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    if (shortcut === 0) keydown.ctrlKey = true;
+    try { input.dispatchEvent(new KeyboardEvent("keydown", keydown)); } catch (e) {}
+    await sleep(700);
+    if (editorTextNow() === "") { attempts.push(shortcut === 0 ? "ctrl-enter" : "enter"); break; }
   }
-  if (!button) {
-    return JSON.stringify({ ok: false, reason: "no-button", message: "评论已填入，但没找到发送按钮 | " + debugInfo("no-button") });
+  if (editorTextNow() !== "") {
+    var words = ["发布", "发送", "评论", "回复"];
+    var candidates = deepAll('button, [role=button], .reply-send');
+    var ranked = [];
+    for (var b = 0; b < candidates.length; b += 1) {
+      var candidate = candidates[b];
+      if (!visible(candidate)) continue;
+      var className = String(candidate.className || "");
+      var label = (candidate.textContent || "").trim();
+      if (/bpx-player|sending-area|danmaku|player-|search/i.test(className)) continue;
+      var isSendClass = /reply-send/i.test(className);
+      var labelMatches = label.length > 0 && label.length <= 8 && words.some(function (word) { return label.indexOf(word) >= 0; });
+      if (!isSendClass && !labelMatches) continue;
+      var scope = candidate.closest('#commentapp, bili-comments, .comment-container, [class*="comment" i], [class*="reply" i], form');
+      var score = (labelMatches ? 2 : 0) + (isSendClass ? 3 : 0) + (scope ? 2 : 0);
+      ranked.push({ node: candidate, score: score, name: className || candidate.tagName, label: label });
+    }
+    ranked.sort(function (a, b) { return b.score - a.score; });
+    for (var r = 0; r < ranked.length; r += 1) {
+      var entry = ranked[r];
+      lastDisabled = Boolean(entry.node.disabled) || entry.node.getAttribute("aria-disabled") === "true";
+      if (lastDisabled) continue;
+      try { entry.node.click(); } catch (e) {}
+      attempts.push("click:" + String(entry.name).slice(0, 40) + "[" + entry.label.slice(0, 8) + "]");
+      await sleep(800);
+      if (editorTextNow() === "") break;
+    }
   }
-  button.click();
-  return JSON.stringify({ ok: true, reason: "sent", message: "评论已提交" });
+  return JSON.stringify({
+    ok: true,
+    reason: "sent",
+    message: "评论已提交",
+    detail: {
+      clicked: attempts.join("+"),
+      disabled: lastDisabled,
+      editorCleared: editorTextNow() === "",
+    },
+  });
 })()"#;
 
 pub fn build_comment_script(text: &str) -> Result<String, String> {

@@ -124,6 +124,9 @@ pub struct CommentReport {
     pub reason: String,
     pub message: String,
     pub platform: String,
+    /// 发送细节（clicked/disabled/editorCleared 等，用于 COMMENT_SUBMIT 日志）。
+    #[serde(default)]
+    pub detail: serde_json::Value,
 }
 
 /// 在当前视频页面发一条评论（用户点「发送」时才调用）。
