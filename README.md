@@ -283,3 +283,5 @@ Maltese 在设计和实现过程中参考了以下开源项目。感谢作者与
 ## License
 
 本项目代码采用 [MIT License](LICENSE)。线条小狗美术素材不适用 MIT License，禁止商用。
+
+> 数据默认存在安装目录 data\（便携布局）；安装目录只读（如 Program Files）时自动回退到 %LOCALAPPDATA%\com.maolouis.maltese\data，可用 MALTESE_DATA_DIR 覆盖。

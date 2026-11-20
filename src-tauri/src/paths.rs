@@ -36,21 +36,20 @@ pub fn bootstrap_path() -> PathBuf {
     legacy_root().join(BOOTSTRAP_FILE)
 }
 
-/// 默认根：exe 在非 C 盘 → `<盘符>:\MalteseData`；否则沿用旧目录。
-pub fn default_root(exe: &Path, legacy: &Path) -> PathBuf {
-    let drive = exe
-        .components()
-        .next()
-        .and_then(|component| match component {
-            std::path::Component::Prefix(prefix) => Some(prefix.as_os_str().to_string_lossy().to_string()),
-            _ => None,
-        });
-    match drive {
-        Some(drive) if !drive.eq_ignore_ascii_case("C:") && !drive.is_empty() => {
-            PathBuf::from(format!("{drive}\\{DATA_DIR_NAME}"))
-        }
-        _ => legacy.to_path_buf(),
-    }
+/// 默认根：运行版安装目录下的 data（便携、换机布局一致）。
+pub fn default_root(exe: &Path, _legacy: &Path) -> PathBuf {
+    exe.parent()
+        .map(|parent| parent.join("data"))
+        .unwrap_or_else(|| PathBuf::from("data"))
+}
+
+/// 只读安装（如 Program Files）时的回退根：%LOCALAPPDATA%\com.maolouis.maltese\data。
+pub fn fallback_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(APP_DIR_NAME)
+        .join("data")
 }
 
 /// 纯解析函数（便于单测）：按优先级组装根目录，不创建目录。
@@ -91,16 +90,20 @@ pub fn data_root() -> PathBuf {
                 &current_exe(),
                 &legacy,
             );
-            if root != legacy && fs::create_dir_all(&root).is_err() {
+            if fs::create_dir_all(&root).is_err() || !writable(&root) {
+                let fallback = fallback_root();
                 eprintln!(
-                    "[paths] 数据目录不可用，已回退到旧目录：{}",
-                    legacy.display()
+                    "[paths] DATA_ROOT_FALLBACK reason=readonly root={} fallback={}",
+                    root.display(),
+                    fallback.display()
                 );
-                let _ = fs::create_dir_all(&legacy);
-                return legacy;
+                let _ = fs::create_dir_all(&fallback);
+                if fallback != root && read_bootstrap().is_none() {
+                    let _ = write_bootstrap(&fallback);
+                }
+                return fallback;
             }
-            let _ = fs::create_dir_all(&root);
-            if root != legacy && read_bootstrap().is_none() {
+            if read_bootstrap().is_none() {
                 let _ = write_bootstrap(&root);
             }
             root
@@ -126,6 +129,18 @@ pub fn write_bootstrap(root: &Path) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     Ok(())
+}
+
+/// 目录是否可写（创建 .write-test 后删除）。
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(".write-test");
+    match fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn dir_has_entries(dir: &Path) -> bool {
@@ -191,39 +206,60 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
     if read_bootstrap().is_some() {
         return None;
     }
-    let legacy = legacy_root();
-    if !dir_has_entries(&legacy) {
-        return None;
-    }
-    let new_root = default_root(&current_exe(), &legacy);
-    if new_root == legacy {
-        return None;
-    }
+    let new_root = default_root(&current_exe(), &legacy_root());
     if dir_has_entries(&new_root) {
-        // 新根已有数据：视为已迁移，写入引导文件即可。
         let _ = write_bootstrap(&new_root);
         return Some(new_root);
     }
-    let created = fs::create_dir_all(&new_root).is_ok();
-    if !created {
-        eprintln!("[paths] 无法创建数据目录 {}，继续使用旧目录", new_root.display());
+    // 候选旧位置：上一版策略的 `<盘符>:\MalteseData`，以及更早的 %APPDATA% 目录。
+    let old_default = previous_default_root(&current_exe());
+    let legacy = legacy_root();
+    let mut source: Option<PathBuf> = None;
+    for candidate in [old_default, legacy.clone()] {
+        if candidate != new_root && dir_has_entries(&candidate) {
+            source = Some(candidate);
+            break;
+        }
+    }
+    let Some(source) = source else {
+        let _ = fs::create_dir_all(&new_root);
+        let _ = write_bootstrap(&new_root);
+        return Some(new_root);
+    };
+    if fs::create_dir_all(&new_root).is_err() || !writable(&new_root) {
+        eprintln!(
+            "[paths] MIGRATION_FAILED step=create reason=readonly root={} source={}",
+            new_root.display(),
+            source.display()
+        );
         return None;
     }
-    let copied = copy_tree(&legacy, &new_root).and_then(|_| tree_stats(&new_root));
+    let copied = copy_tree(&source, &new_root).and_then(|_| tree_stats(&new_root));
     match copied {
         Ok((files, bytes)) if files > 0 && bytes > 0 => {
+            // 校验文件数 + 总大小与源一致（跳过 lock/log 后比较）。
+            let expected = tree_stats(&source).unwrap_or((0, 0));
+            if expected != (files, bytes) {
+                let _ = fs::remove_dir_all(&new_root);
+                eprintln!(
+                    "[paths] MIGRATION_FAILED step=verify source={} expected={:?} actual={:?}",
+                    source.display(),
+                    expected,
+                    (files, bytes)
+                );
+                return None;
+            }
             if write_bootstrap(&new_root).is_err() {
                 let _ = fs::remove_dir_all(&new_root);
-                eprintln!("[paths] 写 data-dir.txt 失败，继续使用旧目录");
+                eprintln!("[paths] MIGRATION_FAILED step=bootstrap");
                 return None;
             }
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|value| value.as_secs())
                 .unwrap_or(0);
-            let backup = legacy.with_file_name(format!("{APP_DIR_NAME}.migrated-{stamp}"));
-            let _ = fs::rename(&legacy, &backup);
-            // 旧目录被整体改名后，引导文件也一起走了：重建一个只含 data-dir.txt 的小目录。
+            let backup = source.with_file_name(format!("{APP_DIR_NAME}.migrated-{stamp}"));
+            let _ = fs::rename(&source, &backup);
             let _ = fs::create_dir_all(&legacy);
             let _ = write_bootstrap(&new_root);
             eprintln!(
@@ -235,9 +271,24 @@ pub fn migrate_if_needed() -> Option<PathBuf> {
         }
         _ => {
             let _ = fs::remove_dir_all(&new_root);
-            eprintln!("[paths] 数据迁移失败，继续使用旧目录");
+            eprintln!("[paths] MIGRATION_FAILED step=copy source={}", source.display());
             None
         }
+    }
+}
+
+/// 上一版默认根：exe 盘符下的 MalteseData（用于迁移）。
+fn previous_default_root(exe: &Path) -> PathBuf {
+    let drive = exe
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Prefix(prefix) => Some(prefix.as_os_str().to_string_lossy().to_string()),
+            _ => None,
+        });
+    match drive {
+        Some(drive) if !drive.is_empty() => PathBuf::from(format!("{drive}\\{DATA_DIR_NAME}")),
+        _ => legacy_root(),
     }
 }
 
@@ -256,32 +307,43 @@ mod tests {
     fn resolve_root_priorities() {
         let legacy = PathBuf::from("C:\\Users\\me\\AppData\\Roaming\\com.maolouis.maltese");
         let exe_c = PathBuf::from("C:\\Apps\\maltese.exe");
-        let exe_e = PathBuf::from("E:\\Maltese2\\maltese.exe");
-        assert_eq!(
-            resolve_root(None, None, &exe_c, &legacy),
-            legacy,
-            "C 盘 exe 应沿用旧目录"
-        );
+        let exe_e = PathBuf::from("E:\\Maltese2\\maltese-assistant.exe");
+        // 默认：安装目录下的 data（不再按盘符/旧目录）
+        assert_eq!(resolve_root(None, None, &exe_c, &legacy), PathBuf::from("C:\\Apps\\data"));
         assert_eq!(
             resolve_root(None, None, &exe_e, &legacy),
-            PathBuf::from("E:\\MalteseData"),
-            "非 C 盘 exe 应默认到 <盘符>:\\MalteseData"
+            PathBuf::from("E:\\Maltese2\\data")
         );
+        // 环境变量优先级最高
         assert_eq!(
             resolve_root(Some("F:\\Custom"), None, &exe_e, &legacy),
-            PathBuf::from("F:\\Custom"),
-            "环境变量优先级最高"
+            PathBuf::from("F:\\Custom")
         );
+        // data-dir.txt 高于默认
         assert_eq!(
             resolve_root(None, Some("G:\\FromBootstrap"), &exe_e, &legacy),
-            PathBuf::from("G:\\FromBootstrap"),
-            "引导文件高于默认策略"
+            PathBuf::from("G:\\FromBootstrap")
         );
+        // 空白环境变量忽略
         assert_eq!(
             resolve_root(Some("  "), None, &exe_e, &legacy),
-            PathBuf::from("E:\\MalteseData"),
-            "空白环境变量应忽略"
+            PathBuf::from("E:\\Maltese2\\data")
         );
+    }
+
+    #[test]
+    fn fallback_root_uses_local_app_data() {
+        let fallback = fallback_root();
+        assert!(fallback.ends_with(Path::new(APP_DIR_NAME).join("data")));
+    }
+
+    #[test]
+    fn writable_probe() {
+        let dir = temp_dir("writable");
+        assert!(writable(&dir));
+        // 不存在的目录写不进去 → 视为不可写
+        assert!(!writable(&dir.join("missing")));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -306,19 +368,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_without_bootstrap_keeps_legacy() {
-        let legacy = PathBuf::from("C:\\Users\\me\\AppData\\Roaming\\com.maolouis.maltese");
-        let exe_c = PathBuf::from("C:\\Apps\\maltese.exe");
-        // 旧目录有数据、无 data-dir.txt、exe 在 C 盘 → 继续用旧目录
-        assert_eq!(resolve_root(None, None, &exe_c, &legacy), legacy);
+    fn previous_default_root_is_drive_maltesedata() {
+        let exe = PathBuf::from("E:\\Maltese2\\maltese-assistant.exe");
+        assert_eq!(previous_default_root(&exe), PathBuf::from("E:\\MalteseData"));
     }
 
     #[test]
     fn write_bootstrap_roundtrip() {
         let base = temp_dir("bootstrap");
         let path = base.join("data-dir.txt");
-        fs::write(&path, "E:\\MalteseData\n").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap().trim(), "E:\\MalteseData");
+        fs::write(&path, "E:\\Maltese2\\data\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().trim(), "E:\\Maltese2\\data");
         let _ = fs::remove_dir_all(&base);
     }
 }

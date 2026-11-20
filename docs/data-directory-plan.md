@@ -1,6 +1,6 @@
 # 数据目录迁移方案（C 盘 → 可配置目录）
 
-> 状态：**第 1 步已实现**（paths.rs 收口 + 业务数据迁移；WebView2 profile 迁移留第 2 步）。盘点时间 2026-11-19，实测自本机
+> 状态：**默认根已改为安装目录 data/**（2026-11-20 决策；第 1 步 paths.rs 收口 + 迁移；WebView2 profile 迁移留第 2 步）。盘点时间 2026-11-19，实测自本机
 > `C:\Users\Administrator\AppData\{Roaming,Local}\com.maolouis.maltese`。
 
 ## 1. 现状盘点（实测体积）
@@ -160,3 +160,17 @@ esolve_root（环境变量 > data-dir.txt > 默认策略）、data_root()（Once
 - 设置页新增「数据目录」只读展示 + 「打开目录」（data_directory_info / open_data_directory 命令）。
 - 实机：启动后业务数据落到 E:\MalteseData（80 个文件），%APPDATA%\com.maolouis.maltese\data-dir.txt 内容 E:\MalteseData，旧目录改名为 com.maolouis.maltese.migrated-1795076175，新旧目录仅保留 data-dir.txt。
 - 单测：paths::tests（优先级/默认策略/兼容旧目录/迁移校验与回滚/引导文件），cargo check 0。
+
+---
+
+## 7. 默认根调整：运行版安装目录 data/（2026-11-20）
+
+- 默认根从「非 C 盘 <盘符>:\MalteseData」改为 **<exe 所在目录>\data**（如 E:\Maltese2\data），
+  便携、换机布局一致；
+- 优先级不变：MALTESE_DATA_DIR > %APPDATA%\com.maolouis.maltese\data-dir.txt > 新默认；
+- 首次启动迁移：新默认目录为空且旧位置（<exe 盘符>:\MalteseData 或 %APPDATA%\com.maolouis.maltese）有数据
+  → 复制 → 文件数/总大小校验 → 原子写 data-dir.txt → 旧目录改名 .migrated-<时间戳>；失败回退旧位置并记
+  MIGRATION_FAILED step=copy|verify|bootstrap|create，不阻断启动；
+- 只读安装（如 Program Files）不可写 → 回退 %LOCALAPPDATA%\com.maolouis.maltese\data，日志
+  DATA_ROOT_FALLBACK reason=readonly；
+- 单测：默认解析（exe 目录/data）、只读回退、迁移复制校验与回滚、data-dir.txt 优先级、上一版默认路径。
