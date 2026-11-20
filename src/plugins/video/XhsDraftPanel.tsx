@@ -114,6 +114,10 @@ export function XhsDraftPanel() {
   const fillCreator = async () => {
     const payload = editedDraft();
     if (!payload) return;
+    if (!draft?.dir) {
+      setError("请先生成草稿（草稿还没保存到磁盘）");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {

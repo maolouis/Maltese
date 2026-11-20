@@ -118,6 +118,10 @@ export type VideoSnapshot = {
   lastCommentDryRun: boolean;
   lastCommentVerified: boolean;
   lastCommentAt: number;
+  /** 小红书登录态（面板展示 / 草稿填充前置检查）。 */
+  xhsLoginKnown?: boolean;
+  xhsLoginOk?: boolean;
+  xhsLoginName?: string;
   startedAt: number | null;
   endedAt: number | null;
   lastActionAt: number | null;

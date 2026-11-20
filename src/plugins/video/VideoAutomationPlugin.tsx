@@ -319,7 +319,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           >
             <option value="bilibili">B站推荐流</option>
             <option value="douyin">抖音推荐流（实验）</option>
-            <option value="xiaohongshu">小红书（只读采集）</option>
+            <option value="xiaohongshu">小红书（采集 · 评论 · 草稿）</option>
           </select>
         </label>
         <span className="video-automation__login" title={selectedAccount ? "使用独立浏览器 profile" : "临时观看，不绑定账号档案"}>
@@ -408,7 +408,17 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           </p>
 
           <div className="video-automation__row video-automation__browser">
-            <span className="video-automation__muted">专用浏览器：{browserStatusText(video.browserStatus)}</span>
+            {provider === "xiaohongshu" && (
+            <span className="video-automation__account">
+              小红书：
+              {snapshot?.xhsLoginKnown
+                ? snapshot.xhsLoginOk
+                  ? `已登录${snapshot.xhsLoginName ? ` ${snapshot.xhsLoginName}` : ""}`
+                  : "未登录"
+                : "未知"}
+            </span>
+          )}
+          <span className="video-automation__muted">专用浏览器：{browserStatusText(video.browserStatus)}</span>
             <button type="button" className="video-automation__link" onClick={() => void video.loadBrowserStatus()}>
               刷新
             </button>

@@ -518,10 +518,20 @@ const XIAOHONGSHU_LOGIN_PROBE: &str = r#"
   const href = location.href;
   const redirected = /\/login\b|redirectPath=/i.test(href);
   let userId = '';
+  let nickname = '';
   try {
     const state = window.__INITIAL_STATE__ || {};
     const user = state.user || {};
     userId = String(user.userId || user.user_id || (user.userInfo && user.userInfo.userId) || '');
+    nickname = String(user.nickname || user.nickName || user.name || (user.userInfo && user.userInfo.nickname) || '');
+  } catch (e) {
+    nickname = '';
+  }
+  try {
+    if (!nickname) {
+      const nameNode = document.querySelector('.user .name, .user .username, .user-info .name');
+      nickname = ((nameNode && nameNode.textContent) || '').trim();
+    }
   } catch (e) {}
   let hasAvatar = Boolean(userId);
   try {
@@ -548,6 +558,7 @@ const XIAOHONGSHU_LOGIN_PROBE: &str = r#"
     redirected,
     hasAvatar,
     userId,
+    nickname,
     loginModal,
     loginWall: redirected || (!hasAvatar && loginModal),
   };

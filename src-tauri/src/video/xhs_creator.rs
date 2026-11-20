@@ -22,6 +22,7 @@ pub struct FillCreatorReport {
     pub body_filled: bool,
     /// content-preview / editor
     pub page: String,
+    pub step: String,
     pub reason: String,
 }
 
@@ -109,7 +110,7 @@ pub fn build_fill_script(draft: &XhsDraft) -> String {
   if (tab) {{ tab.click(); await sleep(1200); }}
   var entry = byText(['文字配图', '文字生成图片', '文字生成']);
   if (!entry) {{
-    return {{ ok: false, page: 'editor', reason: 'no-cover-entry', titleFilled: false, bodyFilled: false }};
+    return {{ ok: false, page: 'editor', step: 'tab-upload', reason: 'no-cover-entry', titleFilled: false, bodyFilled: false }};
   }}
   entry.click();
   await sleep(1500);
@@ -121,7 +122,7 @@ pub fn build_fill_script(draft: &XhsDraft) -> String {
   }}
   if (!titleInput && inputs.length) titleInput = inputs[0];
   if (!titleInput) {{
-    return {{ ok: false, page: 'editor', reason: 'no-title-input', titleFilled: false, bodyFilled: false }};
+    return {{ ok: false, page: 'editor', step: 'fill-title', reason: 'no-title-input', titleFilled: false, bodyFilled: false }};
   }}
   setValue(titleInput, title);
   await sleep(300);
@@ -131,12 +132,12 @@ pub fn build_fill_script(draft: &XhsDraft) -> String {
     if (editors[e] !== titleInput) {{ bodyEditor = editors[e]; }}
   }}
   if (!bodyEditor) {{
-    return {{ ok: false, page: 'editor', reason: 'no-body-editor', titleFilled: true, bodyFilled: false }};
+    return {{ ok: false, page: 'editor', step: 'fill-body', reason: 'no-body-editor', titleFilled: true, bodyFilled: false }};
   }}
   if (bodyEditor.tagName === 'TEXTAREA') setValue(bodyEditor, body);
   else setEditable(bodyEditor, body);
   await sleep(600);
-  return {{ ok: true, page: 'content-preview', reason: '', titleFilled: true, bodyFilled: true }};
+  return {{ ok: true, page: 'content-preview', step: 'done', reason: '', titleFilled: true, bodyFilled: true }};
 }})()"#,
         js_literal(&draft.title),
         js_literal(&draft.dog_take)
@@ -145,9 +146,38 @@ pub fn build_fill_script(draft: &XhsDraft) -> String {
 
 /// 读 draft.json 并填充创作者中心；不点发布。
 pub async fn fill_creator(app: &AppHandle, draft_dir: &str) -> Result<FillCreatorReport, String> {
+    session::engine(app).log_diagnostic(
+        "info",
+        "XHS_FILL_CREATOR",
+        format!("invoked draftDir={draft_dir}"),
+    );
+    let (known, logged_in, nickname) = session::engine(app).xhs_login_status();
+    if known && !logged_in {
+        session::engine(app).log_diagnostic(
+            "warn",
+            "XHS_FILL_CREATOR",
+            "failed step=login reason=not-logged-in",
+        );
+        return Err("小红书还没登录：先在小狗专用浏览器登录一次，再点填入".to_string());
+    }
+    let _ = nickname;
     let path = std::path::Path::new(draft_dir).join("draft.json");
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|error| format!("读不到 draft.json（{draft_dir}）：{error}"))?;
+    if !path.exists() {
+        session::engine(app).log_diagnostic(
+            "warn",
+            "XHS_FILL_CREATOR",
+            format!("failed step=load-draft reason=no-draft path={}", path.display()),
+        );
+        return Err("请先生成草稿（没找到 draft.json）".to_string());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|error| {
+        session::engine(app).log_diagnostic(
+            "warn",
+            "XHS_FILL_CREATOR",
+            format!("failed step=load-draft reason=read-error path={} error={error}", path.display()),
+        );
+        format!("读不到 draft.json（{draft_dir}）：{error}")
+    })?;
     let draft: XhsDraft = serde_json::from_str(&raw).map_err(|error| format!("draft.json 解析失败：{error}"))?;
     let port = session::engine(app).cdp_port();
     if port == 0 {
@@ -155,15 +185,34 @@ pub async fn fill_creator(app: &AppHandle, draft_dir: &str) -> Result<FillCreato
     }
     let mut cdp = CdpSession::connect(port, Platform::Xiaohongshu)
         .await
-        .map_err(|failure| format!("连不上专用浏览器：{failure:?}"))?;
-    cdp.navigate(CREATOR_URL)
-        .await
-        .map_err(|failure| format!("打不开创作中心：{failure:?}"))?;
+        .map_err(|failure| {
+            session::engine(app).log_diagnostic(
+                "warn",
+                "XHS_FILL_CREATOR",
+                format!("failed step=open-page reason=cdp-connect detail={failure:?}"),
+            );
+            format!("连不上专用浏览器：{failure:?}（先点「开始」打开专用浏览器）")
+        })?;
+    cdp.navigate(CREATOR_URL).await.map_err(|failure| {
+        session::engine(app).log_diagnostic(
+            "warn",
+            "XHS_FILL_CREATOR",
+            format!("failed step=open-page reason=navigate detail={failure:?}"),
+        );
+        format!("打不开创作中心：{failure:?}")
+    })?;
     tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
     let value = cdp
         .evaluate(&build_fill_script(&draft), std::time::Duration::from_secs(20))
         .await
-        .map_err(|failure| format!("执行填充脚本失败：{failure:?}"))?;
+        .map_err(|failure| {
+            session::engine(app).log_diagnostic(
+                "warn",
+                "XHS_FILL_CREATOR",
+                format!("failed step=fill-body reason=eval-error detail={failure:?}"),
+            );
+            format!("执行填充脚本失败：{failure:?}")
+        })?;
     let report = FillCreatorReport {
         ok: value.get("ok").and_then(|item| item.as_bool()).unwrap_or(false),
         title_filled: value
@@ -179,20 +228,45 @@ pub async fn fill_creator(app: &AppHandle, draft_dir: &str) -> Result<FillCreato
             .and_then(|item| item.as_str())
             .unwrap_or("editor")
             .to_string(),
+        step: value
+            .get("step")
+            .and_then(|item| item.as_str())
+            .unwrap_or("done")
+            .to_string(),
         reason: value
             .get("reason")
             .and_then(|item| item.as_str())
             .unwrap_or("")
             .to_string(),
     };
-    session::engine(app).log_diagnostic(
-        if report.ok { "info" } else { "warn" },
-        "XHS_FILL_CREATOR",
-        format!(
-            "ok={} title={} bodyLen={} reason={} page={}",
-            report.ok, report.title_filled, draft.dog_take.chars().count(), report.reason, report.page
-        ),
-    );
+    if report.ok {
+        session::engine(app).log_diagnostic(
+            "info",
+            "XHS_FILL_CREATOR",
+            format!(
+                "ok=true title={} bodyLen={} page={}",
+                report.title_filled,
+                draft.dog_take.chars().count(),
+                report.page
+            ),
+        );
+    } else {
+        let page_url = cdp.current_url().await;
+        let html = cdp
+            .evaluate_text(
+                "(function(){var el=document.querySelector('input, textarea, [contenteditable=\"true\"], #upload, main');return el?String(el.outerHTML||'').slice(0,200):document.body.innerText.slice(0,200);})()",
+            )
+            .await
+            .unwrap_or_default();
+        session::engine(app).log_diagnostic(
+            "warn",
+            "XHS_FILL_CREATOR",
+            format!(
+                "failed step={} reason={} page={} html={}",
+                report.step, report.reason, page_url, html.replace('\n', " ").chars().take(220).collect::<String>()
+            ),
+        );
+    }
     Ok(report)
 }
 

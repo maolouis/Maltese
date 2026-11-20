@@ -83,6 +83,10 @@ pub struct VideoSnapshot {
     pub last_comment_dry_run: bool,
     pub last_comment_verified: bool,
     pub last_comment_at: u64,
+    /// 小红书登录态（unknown/false/true）。
+    pub xhs_login_known: bool,
+    pub xhs_login_ok: bool,
+    pub xhs_login_name: String,
     pub started_at: Option<u64>,
     pub ended_at: Option<u64>,
     pub last_action_at: Option<u64>,
@@ -105,6 +109,9 @@ impl Default for VideoSnapshot {
             provider: "bilibili".to_string(),
             account_id: None,
             auto_comment: false,
+            xhs_login_known: false,
+            xhs_login_ok: false,
+            xhs_login_name: String::new(),
             phase: Phase::Idle,
             running: false,
             interval_seconds: 45,
@@ -376,6 +383,10 @@ struct RuntimeState {
     /// 最近一次评论失败提示的原因与时间（同类原因 60s 内不重复弹气泡）。
     last_comment_notice_reason: String,
     last_comment_notice_at: u64,
+    /// 小红书登录态探针结果（面板展示 + 草稿填充前置检查）。
+    xhs_login_known: bool,
+    xhs_login_ok: bool,
+    xhs_login_name: String,
     /// 稳定性改造：本轮导航轮次、失败 URL 数、成功采集轮次、已采到的不同视频 id。
     round_index: u64,
     failed_urls: u32,
@@ -423,6 +434,9 @@ impl Default for RuntimeState {
             comments: Vec::new(),
             last_comment_notice_reason: String::new(),
             last_comment_notice_at: 0,
+            xhs_login_known: false,
+            xhs_login_ok: false,
+            xhs_login_name: String::new(),
             round_index: 0,
             failed_urls: 0,
             collected_rounds: 0,
@@ -884,6 +898,9 @@ impl SessionEngine {
             last_comment_dry_run: state.last_comment_dry_run,
             last_comment_verified: state.last_comment_verified,
             last_comment_at: state.last_comment_at,
+            xhs_login_known: state.xhs_login_known,
+            xhs_login_ok: state.xhs_login_ok,
+            xhs_login_name: state.xhs_login_name.clone(),
             started_at: if state.started_at == 0 {
                 None
             } else {
@@ -2086,28 +2103,29 @@ impl SessionEngine {
                             "url={} hasAvatar={} userId={} loginModal={} redirected={}",
                             target.url, has_avatar, user_id, modal, redirect
                         );
-                        if wall {
-                            facts.hints.login_visible = true;
-                            self.log_event(
-                                Some(&session_id),
-                                Some(ChannelType::Cdp),
-                                "warn",
-                                "XHS_LOGIN_PROBE",
-                                format!("{probe_line} verdict=login-wall"),
-                            );
-                        } else if facts.hints.login_visible {
-                            // extract 粗判为未登录，但三级探针认为已登录：忽略误判。
-                            facts.hints.login_visible = false;
-                            self.log_event(
-                                Some(&session_id),
-                                Some(ChannelType::Cdp),
-                                "info",
-                                "XHS_LOGIN_PROBE",
-                                format!("{probe_line} verdict=logged-in action=ignore-false-positive"),
-                            );
-                        } else {
-                            facts.hints.login_visible = false;
+                        let nickname = value
+                            .get("nickname")
+                            .and_then(|item| item.as_str())
+                            .unwrap_or("");
+                        {
+                            let mut state = lock_state(&self.state);
+                            state.xhs_login_known = true;
+                            state.xhs_login_ok = !wall;
+                            state.xhs_login_name = nickname.to_string();
                         }
+                        // 每次小红书页面加载都写一行（不论结论），便于面板/日志核对。
+                        self.log_event(
+                            Some(&session_id),
+                            Some(ChannelType::Cdp),
+                            if wall { "warn" } else { "info" },
+                            "XHS_LOGIN_PROBE",
+                            format!(
+                                "{probe_line} nickname={} verdict={}",
+                                nickname,
+                                if wall { "login-wall" } else { "logged-in" }
+                            ),
+                        );
+                        facts.hints.login_visible = wall;
                     }
                 }
             }
@@ -2439,6 +2457,16 @@ impl SessionEngine {
     pub fn cdp_port(&self) -> u16 {
         let state = lock_state(&self.state);
         state.cdp_port
+    }
+
+    /// 小红书登录态（known, ok, nickname）。
+    pub fn xhs_login_status(&self) -> (bool, bool, String) {
+        let state = lock_state(&self.state);
+        (
+            state.xhs_login_known,
+            state.xhs_login_ok,
+            state.xhs_login_name.clone(),
+        )
     }
 
     pub fn comment_model_config(&self) -> Option<VideoCommentModelConfig> {
