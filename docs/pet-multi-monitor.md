@@ -319,3 +319,19 @@ lockCorner / apply_stage_geometry 默认锚点）。任何一环在启动顺序�
 | 拔掉副屏后重启 | 记录文件仍指向 `DISPLAY1 (-800,400)` | `0,400,259,221`（夹进主屏可见区） | `STARTUP_RESTORE_CLAMP from=(-800,400,259,221) to=(0,400) monitor=DISPLAY2` + `ok=false` |
 
 配图/复跑脚本：`work/startup-restore.ps1`、`work/sr-*.log`。
+
+## 14. 启动快照只保存「收起态狗槽」（2026-11-20 P0）
+
+**症状**：展开面板/浮层状态下退出应用 → 重启后窗口先以展开尺寸落在上次的展开矩形上，
+看起来像「重启不跟随副屏设置」。
+
+**根因**：`persist_island_snapshot` 把当前窗口矩形原样写进 `island-rect.json`，
+而展开态窗口是 727×480（面板）、浮层 587×540，不是狗槽；启动恢复于是按展开矩形落位。
+
+**修法**：写快照时若当前是 expanded / overlay，先 `dog_slot_now()` 折算成**狗槽**，
+以收起态尺寸 `(slot_w, slot_h)` 和 `mode="collapsed"` 保存；启动恢复永远只用收起态矩形。
+日志：`SNAPSHOT_CANONICAL from=(窗口矩形) slot=(狗槽)`。
+
+**验收（待构建窗口放行后执行）**：展开态下退出 → 重启 → `STARTUP_RESTORE … mode=collapsed rect=…`
+且 `GetWindowRect` 等于退出前狗槽；副屏设置下重复 5 次。
+

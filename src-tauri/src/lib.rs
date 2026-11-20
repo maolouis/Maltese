@@ -1508,15 +1508,31 @@ fn persist_island_snapshot(app: &AppHandle) {
     let monitor = window.current_monitor().ok().flatten();
     let scale = monitor.as_ref().map(|value| value.scale_factor()).unwrap_or(1.0);
     let state = read_window_state();
+    // 启动快照只保存「收起态狗槽」：展开/浮层态退出时，窗口矩形是面板尺寸（727×480 / 587×540），
+    // 直接存下来会让下次启动恢复成展开位置（用户看到“重启不跟随副屏设置”）。
+    // 这里统一折算成狗槽 + 收起态尺寸，mode 一律 collapsed；启动恢复永远走收起态。
+    let layout_overlay = current_layout_mode() == "overlay";
+    let canonical_slot = if matches!(state.mode, IslandMode::Expanded) || layout_overlay {
+        dog_slot_now(&window)
+    } else {
+        None
+    };
+    let (snapshot_x, snapshot_y, snapshot_w, snapshot_h, snapshot_mode) = match canonical_slot {
+        Some(slot) => {
+            eprintln!(
+                "SNAPSHOT_CANONICAL from=({},{},{},{}) slot=({},{},{},{})",
+                position.x, position.y, size.width, size.height, slot.x, slot.y, slot.width, slot.height
+            );
+            (slot.x, slot.y, slot.width, slot.height, "collapsed")
+        }
+        None => (position.x, position.y, size.width, size.height, "collapsed"),
+    };
     let snapshot = island_rect_store::IslandRectSnapshot {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-        mode: match state.mode {
-            IslandMode::Collapsed => "collapsed".into(),
-            IslandMode::Expanded => "expanded".into(),
-        },
+        x: snapshot_x,
+        y: snapshot_y,
+        width: snapshot_w,
+        height: snapshot_h,
+        mode: snapshot_mode.to_string(),
         monitor: monitor.as_ref().map(monitor_fingerprint_of).unwrap_or_default(),
         scale,
         updated_at: now_unix_millis(),
