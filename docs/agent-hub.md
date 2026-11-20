@@ -230,6 +230,9 @@ AgentConsole.tsx  --invoke--> agent_hub.rs --spawn--> codex / claude / doubao ..
 ## 9. 本轮边界 / 未做
 
 - 不做 DAG、条件分支、并行步骤、重试策略；流水线就是顺序执行。
+- [ ] 外部平台（Codex/Claude Code/豆包）token 用量监测：已评估，暂不实现；见
+      [research-external-token-usage.md](research-external-token-usage.md)（本地 token 统计只含
+      local/dsh，不与外部平台混算）。
 - 不做模型用量埋点（`local_chat` / `dsh_chat` 的统计仍是后续 P1），控制台里标「待接入」。
 - 不做聊天触发流水线（缺确认卡片，见 §6 第 6 条）。
 - 不做 agent 配置的 UI 编辑器：直接改 `config.json` + 刷新。

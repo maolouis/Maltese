@@ -426,3 +426,9 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
   模型调用复用 skAgent（按当前后端 local/dsh），失败/超时静默降级（记忆不更新，聊天照常）。
 - 单测：	ests/pet-memory-maintenance.test.mjs（prompt 内容、坏 JSON/围栏解析、摘要与事实上限、
   当日摘要与旧摘要淘汰、busy/近期消息/未到 idle 不调用模型）。
+
+### Token 统计（本地模型）
+
+- usage-YYYY-MM-DD.jsonl 记录本地 local 后端调用（dsh 同链路但属于 DSH 会话）；
+- durationMs = 从发出 HTTP 请求到收到完整响应（非流式）/ 到流结束（流式）的真实耗时，不再写 0；
+- 外部平台（Codex/Claude Code/豆包）不在此统计范围，见 docs/research-external-token-usage.md。

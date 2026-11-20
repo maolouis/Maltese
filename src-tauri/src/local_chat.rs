@@ -237,6 +237,7 @@ pub async fn local_chat(
     let retry_images = images.clone();
     let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
 
+    let request_started = std::time::Instant::now();
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CHAT_TIMEOUT)
@@ -292,7 +293,7 @@ pub async fn local_chat(
                 cached_tokens,
                 total_tokens: prompt_tokens + completion_tokens,
                 precision: precision.to_string(),
-                duration_ms: 0,
+                duration_ms: request_started.elapsed().as_millis() as u64,
                 ok: true,
             });
             return Ok(text);
@@ -396,6 +397,7 @@ pub async fn local_chat_stream(
     let endpoint = chat_endpoint(&base_url)?;
     let settings = settings.unwrap_or_default();
     let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
+    let request_started = std::time::Instant::now();
     let client = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CHAT_TIMEOUT)
@@ -468,6 +470,7 @@ async fn stream_once(
     settings: LocalChatGenerationSettings,
     source: Option<&str>,
 ) -> Result<String, String> {
+    let request_started = std::time::Instant::now();
     let mut request = client
         .post(endpoint.clone())
         .json(&generation_payload(model, messages, &settings, true));
@@ -572,7 +575,7 @@ async fn stream_once(
         cached_tokens,
         total_tokens: prompt_tokens + completion_tokens,
         precision: precision.to_string(),
-        duration_ms: elapsed_ms,
+        duration_ms: request_started.elapsed().as_millis() as u64,
         ok: !full_text.trim().is_empty(),
     });
     Ok(full_text)
