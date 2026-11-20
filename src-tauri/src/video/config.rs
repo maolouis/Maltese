@@ -17,6 +17,10 @@ impl Default for ChannelPriority {
     }
 }
 
+fn default_comment_thinking() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoCommentModelConfig {
@@ -36,6 +40,9 @@ pub struct VideoCommentModelConfig {
     pub character: String,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// 评论生成是否启用深度思考（默认开，质量优先；关掉更快）。
+    #[serde(default = "default_comment_thinking")]
+    pub thinking: bool,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]

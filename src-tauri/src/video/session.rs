@@ -8,7 +8,7 @@ use super::accounts::{AccountStore, AccountStatus, AgentAccount};
 use super::browser::{self, BrowserInstance};
 use super::cdp::{port_alive, shutdown_browser, CdpSession, EVALUATE_TIMEOUT};
 use super::channel::ChannelManager;
-use super::comment::generate_content_comment;
+use super::comment::generate_quality_comment;
 use super::CommentReport;
 use super::config::{apply_patch, validate_config, VideoCommentModelConfig, VideoConfig, VideoConfigPatch};
 use super::delivery::can_deliver;
@@ -2435,6 +2435,12 @@ impl SessionEngine {
     }
 
     /// 当前聊天模型配置（草稿/感悟生成用；没有就是没接模型）。
+    /// 当前专用浏览器调试端口（16. 小红书填充创作中心用）；0 表示未启动。
+    pub fn cdp_port(&self) -> u16 {
+        let state = lock_state(&self.state);
+        state.cdp_port
+    }
+
     pub fn comment_model_config(&self) -> Option<VideoCommentModelConfig> {
         let state = lock_state(&self.state);
         state.comment_model.clone()
@@ -2470,7 +2476,27 @@ impl SessionEngine {
 
     /// 聊天里说一句话 → 解析成口味调整并落库；解析失败返回 TASTE_UNCLEAR（由调用方反问）。
     pub fn apply_taste_text(&self, text: &str) -> VideoResult<super::taste::TasteReport> {
-        let Some(intent) = super::taste::parse_taste_intent(text) else {
+        let parsed = super::taste::parse_taste_intent(text);
+        self.log_event(
+            None,
+            None,
+            "info",
+            "TASTE_PARSE",
+            format!(
+                "raw={} positive={:?} negative={:?} reset={}",
+                text.chars().take(60).collect::<String>(),
+                parsed
+                    .as_ref()
+                    .map(|item| item.add_positive.clone())
+                    .unwrap_or_default(),
+                parsed
+                    .as_ref()
+                    .map(|item| item.add_negative.clone())
+                    .unwrap_or_default(),
+                parsed.as_ref().map(|item| item.reset).unwrap_or(false)
+            ),
+        );
+        let Some(intent) = parsed else {
             return Err(VideoError::new(
                 "TASTE_UNCLEAR",
                 super::taste::clarify_reply(),
@@ -2986,17 +3012,39 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             };
             let generated = match model.as_ref() {
                 Some(model) => match tokio::time::timeout(
-                    Duration::from_secs(30),
-                    generate_content_comment(&app, &facts, model),
+                    Duration::from_secs(90),
+                    generate_quality_comment(&app, &facts, model),
                 )
                 .await
                 {
                     Ok(result) => result,
-                    Err(_) => Err("评论模型响应超时，未发送评论".to_string()),
+                    Err(_) => Err("COMMENT_GEN timeout=90s 评论生成超时，本轮跳过".to_string()),
                 },
                 None => Err("没有传入当前聊天模型配置，未生成评论".to_string()),
             };
-            let comment = match generated.and_then(|raw| sanitize_comment(&raw)) {
+            if let Ok(meta) = &generated {
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "info".to_string(),
+                    code: "COMMENT_GEN".to_string(),
+                    message: format!(
+                        "thinking={} attempts={} finish={} tokens={} duration={}ms truncated={} text={}",
+                        meta.thinking,
+                        meta.attempts,
+                        if meta.truncated { "length" } else { "stop" },
+                        meta.text.chars().count(),
+                        meta.duration_ms,
+                        meta.truncated,
+                        meta.text
+                    ),
+                });
+            }
+            let comment = match generated
+                .map(|value| value.text)
+                .and_then(|raw| sanitize_comment(&raw))
+            {
                 Ok(comment) => comment,
                 Err(error) => {
                     let message = format!("{}：{}", facts.title, error);

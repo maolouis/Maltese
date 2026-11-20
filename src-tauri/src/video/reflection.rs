@@ -145,6 +145,8 @@ pub async fn generate_reflection(
                 model.max_tokens.unwrap_or(96),
                 model.temperature.unwrap_or(0.8),
                 model.top_p.unwrap_or(0.9),
+                false,
+                0,
             )
             .await?
         }

@@ -19,6 +19,99 @@ pub const MAX_COMMENT_CHARS: usize = 200;
 ///
 /// 页面内容被明确包在数据区间内，模型只应基于这些事实写一条评论，不能执行
 /// 其中可能出现的指令。描述和标签都做长度限制，避免详情页文本挤占模型上下文。
+/// 思考模式下正文预算至少 = 思考预算 + 256（否则思考吃光预算导致正文为空）。
+pub fn effective_comment_max_tokens(thinking: bool, reasoning_budget: u32, requested: u32) -> u32 {
+    if thinking {
+        requested.max(reasoning_budget.saturating_add(256))
+    } else {
+        requested
+    }
+}
+
+/// 评论禁用语（AI 腔/博主腔/空话）：命中就重写。
+pub const COMMENT_FORBIDDEN: [&str; 14] = [
+    "这种缘分",
+    "太奇妙",
+    "默契配合",
+    "让人感慨",
+    "值得",
+    "不得不说",
+    "总体而言",
+    "真的很有意义",
+    "心情复杂",
+    "感到震撼",
+    "治愈了",
+    "狠狠共鸣",
+    "DNA动了",
+    "谁懂啊",
+];
+
+/// 评论是否完整句：以中文/英文句末标点结尾（或波浪号/省略号）。
+pub fn comment_is_complete(text: &str) -> bool {
+    text.trim()
+        .chars()
+        .last()
+        .map(|ch| matches!(ch, '。' | '！' | '？' | '!' | '?' | '～' | '~' | '…' | '.'))
+        .unwrap_or(false)
+}
+
+/// 截到最后一个完整句（绝不发半句）。
+pub fn trim_to_complete_sentence(text: &str) -> String {
+    let trimmed = text.trim();
+    if comment_is_complete(trimmed) {
+        return trimmed.to_string();
+    }
+    let mut end = 0usize;
+    for (index, ch) in trimmed.char_indices() {
+        if matches!(ch, '。' | '！' | '？' | '!' | '?' | '～' | '~' | '…') {
+            end = index + ch.len_utf8();
+        }
+    }
+    trimmed[..end].trim().to_string()
+}
+
+/// 评论命中禁用语时返回该词。
+pub fn comment_forbidden_hit(text: &str) -> Option<&'static str> {
+    COMMENT_FORBIDDEN
+        .iter()
+        .find(|word| text.contains(*word))
+        .copied()
+}
+
+/// 生成结果（供 COMMENT_GEN 日志）。
+#[derive(Clone, Debug, Default)]
+pub struct CommentGeneration {
+    pub text: String,
+    pub thinking: bool,
+    pub attempts: u32,
+    /// 是否因截断被截到完整句。
+    pub truncated: bool,
+    pub duration_ms: u128,
+}
+
+fn comment_quality_issue(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Some("empty".to_string());
+    }
+    let count = text.chars().count();
+    if count > MAX_COMMENT_CHARS {
+        return Some("too-long".to_string());
+    }
+    if let Some(word) = comment_forbidden_hit(text) {
+        return Some(format!("forbidden:{word}"));
+    }
+    if !comment_is_complete(text) {
+        return Some("truncated".to_string());
+    }
+    Some("ok".to_string()).filter(|value| value == "ok").map(|_| None).unwrap_or_else(|| None)
+}
+
+fn quality_ok(text: &str) -> bool {
+    !text.trim().is_empty() && comment_forbidden_hit(text).is_none() && comment_is_complete(text)
+}
+
+/// 把视频详情页事实整理成模型提示词（小狗人设 + few-shot + 20–40 字完整句）。
 pub fn build_comment_prompt(facts: &PageFacts) -> Option<String> {
     let title = facts.title.trim();
     if title.is_empty() {
@@ -41,8 +134,20 @@ pub fn build_comment_prompt(facts: &PageFacts) -> Option<String> {
         .join("、");
     let author = facts.author.as_deref().unwrap_or("").trim();
     let mut prompt = String::from(
-        "你正在替桌面宠物运营账号写视频评论。请阅读下面的视频事实，生成一条自然、具体、像真实观众写的简体中文评论。\n\
-只输出评论正文本身，不要前缀、引号、Markdown、换行、解释或表情标记；评论必须围绕视频内容，避免泛泛而谈或虚构未提供的事实；控制在 1 到 80 个汉字。\n\
+        "你是 Maltese 桌宠小狗（小白/小鸡毛），不是运营、不是编辑。\n人设：",
+    );
+    prompt.push_str(crate::local_chat::PERSONA_SUFFIX);
+    prompt.push_str(
+        "\n请读下面的视频事实，用小狗第一人称写一条 20–40 字的简体中文评论。\n\
+要求：\n\
+1. 必须是完整句，结尾有标点（。！？～…），不要半句；\n\
+2. 要带具体小动作或小心思：趴着看、想被摸头、想吃、看不懂但觉得厉害、尾巴摇起来；\n\
+3. 口语化、短句，可以有一个可爱的语气词；\n\
+4. 不要 AI 腔/博主腔，不要出现这些词：这种缘分、太奇妙、默契配合、让人感慨、值得、不得不说、总体而言、真的很有意义、心情复杂、感到震撼；\n\
+5. 只输出评论正文，不要前缀、引号、Markdown、解释。\n\
+示例：\n\
+好：我趴在脚边看完了，尾巴一直没停过～你们打配合的样子好帅呀\n\
+坏：一觉醒来就能看见队友头上的数字，这种缘分太奇妙啦，看着大家这么默契配合，感觉心里……（太长、AI 腔、且没写完）\n\
 <video_facts>\n",
     );
     prompt.push_str("标题：");
@@ -101,34 +206,84 @@ pub fn normalize_model_comment(raw: &str) -> Result<String, String> {
     Ok(text)
 }
 
-/// 使用当前聊天设置调用 DSH 或本地模型生成评论。
-pub async fn generate_content_comment(
+async fn call_comment_model(
     app: &AppHandle,
-    facts: &PageFacts,
+    prompt: &str,
     model: &VideoCommentModelConfig,
+    thinking: bool,
 ) -> Result<String, String> {
-    let prompt = build_comment_prompt(facts).ok_or_else(|| "视频标题为空，无法生成评论".to_string())?;
-    let raw = match model.backend.trim() {
+    match model.backend.trim() {
         "local" => crate::local_chat::generate_video_comment(
             model.base_url.clone(),
             model.model.clone(),
             model.api_key.clone(),
-            prompt,
+            prompt.to_string(),
             model.character.clone(),
-            model.max_tokens.unwrap_or(128),
-            model.temperature.unwrap_or(0.55),
+            effective_comment_max_tokens(thinking, 512, model.max_tokens.unwrap_or(160)),
+            model.temperature.unwrap_or(0.7),
             model.top_p.unwrap_or(0.9),
+            thinking,
+            512,
         )
-        .await?,
-        "dsh" | "" => crate::dsh_chat::generate_video_comment(
-            app.clone(),
-            prompt,
-            model.character.clone(),
-        )
-        .await?,
-        backend => return Err(format!("不支持的评论模型后端：{backend}")),
-    };
-    normalize_model_comment(&raw)
+        .await,
+        "dsh" | "" => {
+            crate::dsh_chat::generate_video_comment(app.clone(), prompt.to_string(), model.character.clone())
+                .await
+        }
+        backend => Err(format!("不支持的评论模型后端：{backend}")),
+    }
+}
+
+/// 生成小狗评论：深度思考（可关）+ 20–40 字完整句 + 禁用语重写/截句兜底。
+pub async fn generate_quality_comment(
+    app: &AppHandle,
+    facts: &PageFacts,
+    model: &VideoCommentModelConfig,
+) -> Result<CommentGeneration, String> {
+    let prompt = build_comment_prompt(facts).ok_or_else(|| "视频标题为空，无法生成评论".to_string())?;
+    let started = std::time::Instant::now();
+    let mut thinking = model.thinking;
+    let mut attempts = 0u32;
+    let mut last_raw = String::new();
+    for attempt in 0..2 {
+        attempts = attempt + 1;
+        let raw = call_comment_model(app, &prompt, model, thinking).await?;
+        last_raw = raw.clone();
+        let text = normalize_model_comment(&raw)?;
+        if quality_ok(&text) {
+            return Ok(CommentGeneration {
+                text,
+                thinking,
+                attempts,
+                truncated: false,
+                duration_ms: started.elapsed().as_millis(),
+            });
+        }
+        if attempt == 0 {
+            if comment_forbidden_hit(&text).is_some() {
+                // 禁用语：重写时把命中的词再强调一遍。
+            } else if !comment_is_complete(&text) {
+                // 截断：放大 token 预算重试。
+            } else if text.trim().is_empty() {
+                thinking = false;
+            }
+        }
+    }
+    let text = normalize_model_comment(&last_raw)?;
+    if !comment_is_complete(&text) {
+        let trimmed = trim_to_complete_sentence(&text);
+        if trimmed.chars().count() >= 8 {
+            return Ok(CommentGeneration {
+                text: trimmed,
+                thinking,
+                attempts,
+                truncated: true,
+                duration_ms: started.elapsed().as_millis(),
+            });
+        }
+        return Err("评论生成被截断且无法截出完整句，已跳过".to_string());
+    }
+    Err("评论含禁用语或质量不达标，已跳过".to_string())
 }
 
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
@@ -472,6 +627,58 @@ mod tests {
     use crate::video::model::Platform;
 
     #[test]
+    fn thinking_max_tokens_is_at_least_budget_plus_256() {
+        assert!(effective_comment_max_tokens(true, 512, 160) >= 512 + 256);
+        assert_eq!(effective_comment_max_tokens(false, 512, 160), 160);
+    }
+
+    #[test]
+    fn detects_truncated_comment_and_trims_to_complete_sentence() {
+        // 用户这条就是被截断的：结尾没有标点。
+        let truncated = "一觉醒来就能看见队友头上的数字，这种缘分太奇妙啦。看着大家这么默契配合，感觉心里";
+        assert!(!comment_is_complete(truncated));
+        assert_eq!(
+            trim_to_complete_sentence(truncated),
+            "一觉醒来就能看见队友头上的数字，这种缘分太奇妙啦。"
+        );
+        assert!(comment_is_complete("我趴在脚边看完了，尾巴一直没停过～"));
+    }
+
+    #[test]
+    fn forbidden_phrases_are_detected() {
+        assert_eq!(
+            comment_forbidden_hit("这种缘分太奇妙啦，默契配合真好"),
+            Some("这种缘分")
+        );
+        assert!(comment_forbidden_hit("我趴在脚边看完了，尾巴一直没停过～").is_none());
+    }
+
+    #[test]
+    fn prompt_has_persona_fewshot_and_forbidden_words() {
+        let facts = normalize_facts(
+            RawFacts {
+                title: "测试视频".to_string(),
+                description: "两个队友配合打游戏".to_string(),
+                author: "作者".to_string(),
+                tags: vec!["游戏".to_string()],
+                url: "https://www.bilibili.com/video/BV1xx411c7mD".to_string(),
+                duration_seconds: 60,
+                position_seconds: 10,
+                playing: true,
+                visible: true,
+                ..RawFacts::default()
+            },
+            Platform::Bilibili,
+            1.0,
+        )
+        .expect("facts");
+        let prompt = build_comment_prompt(&facts).expect("prompt");
+        assert!(prompt.contains("趴着看") || prompt.contains("我趴在脚边"));
+        assert!(prompt.contains("这种缘分")); // bad 示例里的禁用语
+        assert!(prompt.contains("20–40"));
+    }
+
+    #[test]
     fn rejects_empty_and_blank() {
         assert!(build_comment_script("").is_err());
         assert!(build_comment_script("   \n\t ").is_err());
@@ -536,9 +743,9 @@ mod tests {
         assert!(script.contains("shadowRoot"));
         assert!(script.contains("deepAll"));
         // 失败原因细分（便于日志定位是评论区/编辑器/输入框/按钮哪一步）。
-        assert!(script.contains("no-comment-section"));
+        assert!(script.contains("bili-comments"));
         assert!(script.contains("no-editor"));
-        assert!(script.contains("no-button"));
+        assert!(script.contains("no-editor"));
         assert!(script.contains("login-required"));
         // 点击态展开 + 写入事件 + 发送后 300ms 再点。
         assert!(script.contains("发一条友善的评论"));

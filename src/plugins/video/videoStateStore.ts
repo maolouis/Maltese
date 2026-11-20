@@ -49,6 +49,8 @@ export type VideoCommentModelOptions = {
   maxTokens?: number;
   temperature?: number;
   topP?: number;
+  /** 评论生成是否启用深度思考（默认开）。 */
+  thinking?: boolean;
 };
 
 export type VideoStoreState = {

@@ -25,6 +25,7 @@ pub mod store;
 pub mod taste;
 pub mod reflection;
 pub mod xhs_draft;
+pub mod xhs_creator;
 pub mod url_guard;
 
 use accounts::AgentAccount;
@@ -471,6 +472,18 @@ pub fn xhs_save_draft(
         ),
     );
     Ok(draft)
+}
+
+/// 填入小红书创作者中心「文字配图」：只填标题 + 小狗感悟正文，最后一步「发布」留给用户。
+#[tauri::command]
+pub async fn xhs_fill_creator(
+    app: AppHandle,
+    draft_dir: String,
+) -> VideoResult<xhs_creator::FillCreatorReport> {
+    let _guard = command_guard(&app, "xhs_fill_creator");
+    xhs_creator::fill_creator(&app, &draft_dir)
+        .await
+        .map_err(|message| VideoError::new("XHS_FILL_CREATOR_FAILED", message))
 }
 
 /// 打开小红书草稿目录。

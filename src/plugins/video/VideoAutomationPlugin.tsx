@@ -41,6 +41,7 @@ export function VideoAutomationPanel({ onNotice }: Props) {
   const [autoComment, setAutoComment] = useState(false);
   // 仅预演：只生成评论、打日志、弹气泡，不真正发送（默认开）。
   const [commentDryRun, setCommentDryRun] = useState(true);
+  const [commentThinking, setCommentThinking] = useState(true);
   const [localError, setLocalError] = useState<VideoErrorInfo | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState("");
@@ -111,7 +112,8 @@ export function VideoAutomationPanel({ onNotice }: Props) {
           model: chatConfig.model,
           apiKey: chatConfig.apiKey.trim() || null,
           character: "xiaobai",
-          maxTokens: Math.min(chatConfig.maxTokens, 256),
+          maxTokens: Math.min(chatConfig.maxTokens, 1024),
+      thinking: commentThinking,
           temperature: chatConfig.temperature,
           topP: chatConfig.topP,
         },
@@ -391,6 +393,10 @@ export function VideoAutomationPanel({ onNotice }: Props) {
             </label>
             <label className="video-automation__permission">
               <input type="checkbox" checked={commentDryRun} onChange={(event) => setCommentDryRun(event.currentTarget.checked)} />
+          </label>
+          <label className="video-automation__check">
+            <input type="checkbox" checked={commentThinking} onChange={(event) => setCommentThinking(event.currentTarget.checked)} />
+            深度思考（质量优先，较慢）
               仅预演评论（不真正发送）
             </label>
             <button type="button" className="video-automation__secondary" onClick={() => void saveConfig()}>

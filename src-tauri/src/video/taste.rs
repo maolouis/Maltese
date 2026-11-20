@@ -40,6 +40,15 @@ fn normalize_category(raw: &str) -> String {
             value = rest.trim().to_string();
         }
     }
+    // 「区」后缀优先去掉（"经济区科技区" 会在 split 阶段拆开，这里兜底单区）。
+    for tail in ["区", "专区", "版区"] {
+        if let Some(rest) = value.strip_suffix(tail) {
+            let rest = rest.trim();
+            if !rest.is_empty() {
+                value = rest.to_string();
+            }
+        }
+    }
     for tail in TAIL_WORDS {
         if let Some(rest) = value.strip_suffix(tail) {
             let rest = rest.trim();
@@ -47,6 +56,9 @@ fn normalize_category(raw: &str) -> String {
                 value = rest.to_string();
             }
         }
+    }
+    if matches!(value.as_str(), "" | "的" | "了" | "吧" | "啊" | "呀" | "哦") {
+        return String::new();
     }
     value = value.trim_matches(|character: char| {
         character.is_whitespace() || "，,。.!！？?、；;：:".contains(character)
@@ -59,7 +71,11 @@ fn normalize_category(raw: &str) -> String {
         "动画" | "番剧" | "动漫" => "动画",
         "音乐" | "音乐区" => "音乐",
         "影视" | "影视区" | "电影" | "电视剧" => "影视",
-        "科技" | "科技区" | "数码" => "科技",
+        "科技" | "数码" | "数码区" | "geek" | "Geek" => "科技",
+        "经济" | "经济区" | "财经" | "财经区" | "理财" => "财经",
+        "vlog" | "Vlog" | "VLOG" | "生活" => "生活",
+        "健身" | "运动" | "健身区" => "运动",
+        "数码" => "科技",
         "知识" | "知识区" | "科普" => "知识",
         "直播" | "直播区" => "直播",
         "鬼畜" => "鬼畜",
@@ -91,7 +107,7 @@ fn push_unique(list: &mut Vec<String>, tag: String) {
     }
 }
 
-const NEGATIVE_MARKERS: [&str; 10] = [
+const NEGATIVE_MARKERS: [&str; 14] = [
     "不想看",
     "不想刷",
     "不太想看",
@@ -102,23 +118,44 @@ const NEGATIVE_MARKERS: [&str; 10] = [
     "少刷",
     "少看",
     "别看",
+    "少来点",
+    "少来",
+    "别刷",
+    "屏蔽",
 ];
 
-const POSITIVE_MARKERS: [&str; 9] = [
+const POSITIVE_MARKERS: [&str; 16] = [
     "多给我刷",
     "多给我推",
     "多刷",
     "多看",
     "多来点",
+    "多来些",
     "多推",
     "来点",
     "想看",
     "喜欢看",
+    "爱看",
+    "喜欢刷",
+    "常刷",
+    "经常刷",
+    "多点",
+    "多些",
 ];
 
 fn split_tag(raw: &str) -> Vec<String> {
-    raw.split(['/', '、', '和', '跟', '与', '，', ',', '；', ';'])
-        .map(|part| normalize_category(part))
+    // 「多刷音乐区和经济区科技区」这类连写：按区字和连接词拆开。
+    let mut parts: Vec<String> = Vec::new();
+    for chunk in raw.split("以及") {
+        for part in chunk.split(|character: char| {
+            matches!(character, '/' | '、' | '和' | '跟' | '与' | '，' | ',' | '；' | ';' | '区' | ' ' | '\u{3000}')
+        }) {
+            parts.push(part.to_string());
+        }
+    }
+    parts
+        .into_iter()
+        .map(|part| normalize_category(&part))
         .filter(|part| !part.is_empty())
         .collect()
 }
@@ -138,49 +175,54 @@ pub fn parse_taste_intent(text: &str) -> Option<TasteIntent> {
         return Some(intent);
     }
 
-    for clause in trimmed.split(['，', ',', '。', '；', ';']) {
-        let clause = clause.trim();
-        if clause.is_empty() {
-            continue;
-        }
-        let subject = clause
-            .trim_start_matches(|character: char| character.is_whitespace())
-            .trim_start_matches("我")
-            .trim_start_matches("最近")
-            .trim_start_matches("以后")
-            .trim_start_matches("给我")
-            .trim_start_matches("你")
-            .to_string();
-        let mut matched = false;
-        for marker in NEGATIVE_MARKERS {
-            if let Some(rest) = subject.split_once(marker).map(|(_, rest)| rest) {
-                let tags = split_tag(rest);
-                if !tags.is_empty() {
-                    for tag in tags {
-                        push_unique(&mut intent.add_negative, tag.clone());
-                        push_unique(&mut intent.remove_positive, tag);
-                    }
-                    matched = true;
+    // 先找所有口语标记的位置（长标记优先），标记后面到下一个标记之间的内容都是标签。
+    let mut markers: Vec<(usize, &'static str, bool)> = Vec::new();
+    let mut all: Vec<(&'static str, bool)> = Vec::new();
+    for marker in NEGATIVE_MARKERS {
+        all.push((marker, false));
+    }
+    for marker in POSITIVE_MARKERS {
+        all.push((marker, true));
+    }
+    all.sort_by(|a, b| b.0.chars().count().cmp(&a.0.chars().count()));
+    let mut search_from = 0usize;
+    while search_from < trimmed.len() {
+        let mut found: Option<(usize, &'static str, bool)> = None;
+        for (marker, positive) in &all {
+            if let Some(offset) = trimmed[search_from..].find(marker) {
+                let position = search_from + offset;
+                match found {
+                    Some((best, _, _)) if best <= position => {}
+                    _ => found = Some((position, marker, *positive)),
                 }
-                break;
             }
         }
-        if matched {
-            continue;
-        }
-        for marker in POSITIVE_MARKERS {
-            if let Some(rest) = subject.split_once(marker).map(|(_, rest)| rest) {
-                let tags = split_tag(rest);
-                if !tags.is_empty() {
-                    for tag in tags {
-                        push_unique(&mut intent.add_positive, tag.clone());
-                        push_unique(&mut intent.remove_negative, tag);
-                    }
-                    matched = true;
+        let Some((position, marker, positive)) = found else {
+            break;
+        };
+        let content_start = position + marker.len();
+        let next_start = all
+            .iter()
+            .filter_map(|(candidate, _)| {
+                trimmed[content_start..]
+                    .find(candidate)
+                    .map(|offset| content_start + offset)
+            })
+            .min()
+            .unwrap_or(trimmed.len());
+        let tags = split_tag(&trimmed[content_start..next_start]);
+        if !tags.is_empty() {
+            for tag in tags {
+                if positive {
+                    push_unique(&mut intent.add_positive, tag.clone());
+                    push_unique(&mut intent.remove_negative, tag);
+                } else {
+                    push_unique(&mut intent.add_negative, tag.clone());
+                    push_unique(&mut intent.remove_positive, tag);
                 }
-                break;
             }
         }
+        search_from = content_start;
     }
 
     if intent.is_empty() {
@@ -271,7 +313,7 @@ pub fn apply_intent(profile: &mut UserProfile, intent: &TasteIntent) -> Result<T
 
 /// 给聊天技能做兜底提示（解析失败时反问，不乱改）。
 pub fn clarify_reply() -> String {
-    "没太听清你想怎么调整视频口味——是想少看某个分区，还是多来点某个题材？比如「少刷游戏区」「多来点纪录片」。".to_string()
+    "想多看哪几个区呀？比如音乐、财经、科技，我记下来～".to_string()
 }
 
 #[cfg(test)]
@@ -279,7 +321,53 @@ mod tests {
     use super::*;
     use crate::video::profile::empty_profile;
 
+    fn intent_of(text: &str) -> TasteIntent {
+        parse_taste_intent(text).expect("intent")
+    }
+
     #[test]
+    fn parses_three_adjacent_categories() {
+        let intent = intent_of("多刷音乐区和经济区科技区的视频");
+        assert_eq!(
+            intent.add_positive,
+            vec!["音乐".to_string(), "财经".to_string(), "科技".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_colloquial_variants_and_aliases() {
+        for text in ["多来点纪录片", "常刷纪录片", "爱看纪录片", "喜欢看纪录片"] {
+            assert_eq!(intent_of(text).add_positive, vec!["纪录片".to_string()]);
+        }
+        assert_eq!(intent_of("多刷数码区").add_positive, vec!["科技".to_string()]);
+        assert_eq!(intent_of("多刷理财").add_positive, vec!["财经".to_string()]);
+        assert_eq!(intent_of("多来点vlog").add_positive, vec!["生活".to_string()]);
+        assert_eq!(intent_of("少刷游戏区").add_negative, vec!["游戏".to_string()]);
+        assert_eq!(intent_of("屏蔽游戏").add_negative, vec!["游戏".to_string()]);
+    }
+
+    #[test]
+    fn parses_mixed_punctuation_and_spaces() {
+        let intent = intent_of("多刷音乐、财经, 科技和游戏");
+        assert_eq!(
+            intent.add_positive,
+            vec![
+                "音乐".to_string(),
+                "财经".to_string(),
+                "科技".to_string(),
+                "游戏".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_text_returns_none_and_clarify_mentions_categories() {
+        assert!(parse_taste_intent("今天天气不错").is_none());
+        assert!(clarify_reply().contains("哪几个区"));
+    }
+
+    #[test]
+
     fn parses_negative_category() {
         let intent = parse_taste_intent("我不想看游戏区了").expect("intent");
         assert_eq!(intent.add_negative, vec!["游戏".to_string()]);

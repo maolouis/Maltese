@@ -111,6 +111,33 @@ export function XhsDraftPanel() {
     }
   };
 
+  const fillCreator = async () => {
+    const payload = editedDraft();
+    if (!payload) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await invoke<{
+        ok: boolean;
+        titleFilled: boolean;
+        bodyFilled: boolean;
+        page: string;
+        reason: string;
+      }>("xhs_fill_creator", { draftDir: draft?.dir ?? "" });
+      if (result.ok) {
+        setSavedAt("已填入创作者中心，请检查后手动发布");
+      } else {
+        setError(
+          `没填成功（${result.reason || "入口没找到"}）：需要先在专用浏览器登录小红书创作中心`,
+        );
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openPublish = () => {
     void openUrl(XHS_PUBLISH_URL).catch(() => setError("打不开投稿页：请检查默认浏览器"));
   };
@@ -221,6 +248,9 @@ export function XhsDraftPanel() {
             </button>
             <button type="button" className="video-automation__secondary" onClick={() => void copyAll()}>
               {copied === "all" ? "已复制" : "复制全部"}
+            </button>
+            <button type="button" className="video-automation__secondary" onClick={() => void fillCreator()}>
+              填入小红书创作者中心
             </button>
             <button type="button" className="video-automation__link" onClick={openPublish}>
               打开投稿页

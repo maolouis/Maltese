@@ -335,6 +335,76 @@ pub fn normalize_pick_note(
     }
 }
 
+/// 未选中笔记里出现、但选中笔记里没有的关键词（用于防止 dogTake 带出被放下的内容）。
+pub fn unused_topic_terms(items: &[ContentItem], used_ids: &[String]) -> Vec<String> {
+    const STOP: [&str; 8] = ["视频", "笔记", "小红书", "很多人", "不知道", "内幕", "最好", "方式"];
+    let terms_of = |text: &str| -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for chunk in text.split(|ch: char| {
+            ch.is_whitespace()
+                || "｜|、，。！？!?,.:：;；()（）[]【】\"'“”#".contains(ch)
+        }) {
+            let chunk = chunk.trim();
+            let chars: Vec<char> = chunk.chars().collect();
+            let len = chars.len();
+            if len < 2 || STOP.contains(&chunk) {
+                continue;
+            }
+            if chunk.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                out.push(chunk.to_string());
+                continue;
+            }
+            if len <= 12 {
+                out.push(chunk.to_string());
+            }
+            // 中文长句拆 2–4 字滑窗，保证能命中「内鬼」这类话题词。
+            for size in 2..=4usize {
+                if len < size {
+                    continue;
+                }
+                for start in 0..=(len - size) {
+                    let term: String = chars[start..start + size].iter().collect();
+                    if STOP.contains(&term.as_str()) {
+                        continue;
+                    }
+                    out.push(term);
+                }
+            }
+        }
+        out.truncate(40);
+        out
+    };
+    let mut used_terms: Vec<String> = Vec::new();
+    for item in items {
+        if used_ids.contains(&note_id_of(item)) {
+            for term in terms_of(&item.title) {
+                used_terms.push(term);
+            }
+        }
+    }
+    let mut unused: Vec<String> = Vec::new();
+    for item in items {
+        if used_ids.contains(&note_id_of(item)) {
+            continue;
+        }
+        for term in terms_of(&item.title) {
+            if used_terms.contains(&term) || unused.contains(&term) {
+                continue;
+            }
+            unused.push(term);
+        }
+    }
+    unused
+}
+
+/// dogTake 是否带出了未选中笔记的关键词；返回命中的词。
+pub fn dog_take_mentions_unused(value: &str, terms: &[String]) -> Option<String> {
+    terms
+        .iter()
+        .find(|term| !term.is_empty() && value.contains(term.as_str()))
+        .cloned()
+}
+
 /// dogTake 风格校验：必须第一人称含「我」，且不含博主腔黑名单。
 pub fn dog_take_ok(value: &str) -> bool {
     let text = value.trim();
@@ -374,7 +444,10 @@ pub fn build_prompt(items: &[ContentItem]) -> String {
 6. cta 也要小狗口吻的互动提问（例如“你们练球的时候都在想什么呀～”），不要“欢迎评论区留言”这种博主腔。\n\
 7. 正文顺序：hook（开头一句）→ body（3–5 个要点）→ dogTake（小狗感悟）→ cta（互动）；dogTake 与 cta 不要写进 body 里。\n\
 8. tags 3–8 个，带 # 前缀；usedNotes 填实际参考到的 noteId。\n\
-9. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
+9. dogTake 只围绕被选中的笔记写，不要提起被放下的内容（连话题都不要带，例如不要出现
+   “PyTorch”“内鬼”这类只出现在未选中笔记里的词）；pickNote 可以笼统说“有几篇没看懂/先放一边”，
+   但同样不点名具体标题或话题。
+10. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
         crate::local_chat::PERSONA_SUFFIX,
         total_notes = items.len()
     );
@@ -615,6 +688,27 @@ async fn compose(route: &ModelRoute, items: &[ContentItem]) -> Result<XhsDraft, 
             draft.cta = candidate.cta;
         }
         if !dog_take_ok(&draft.dog_take) {
+            draft.dog_take = dog_take_template(items, draft.body.chars().count());
+        }
+    }
+
+    // dogTake 不能带出被放下笔记的话题词（连话题都不要带）。
+    let unused_terms = unused_topic_terms(items, &draft.used_notes);
+    if let Some(term) = dog_take_mentions_unused(&draft.dog_take, &unused_terms) {
+        let rewrite_prompt = format!(
+            "{prompt}\n上一版 dogTake 提到了未选中笔记里的词「{term}」。请只重写 dogTake：只围绕用到的笔记写，不要提起被放下的内容（这些词都不能出现：{}）。仍输出完整 JSON。",
+            unused_terms.join("、")
+        );
+        if let Ok(candidate) = parse_model_draft(
+            &route
+                .call(rewrite_prompt, 700)
+                .await
+                .map_err(|error| format!("模型重写 dogTake 失败：{error}"))?,
+            items,
+        ) {
+            draft.dog_take = candidate.dog_take;
+        }
+        if dog_take_mentions_unused(&draft.dog_take, &unused_terms).is_some() {
             draft.dog_take = dog_take_template(items, draft.body.chars().count());
         }
     }
@@ -1015,6 +1109,33 @@ mod tests {
                 "#核心力量".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn dog_take_does_not_mention_unused_topic_terms() {
+        let items = vec![
+            item("羽毛球双打抓球思路", "正文", &["羽毛球"], "6af530e6000000002a011e07"),
+            item("字节开会抓内鬼，结果内鬼在线上听着", "正文", &["八卦"], "6adec67c000000001a0331d7"),
+        ];
+        let used = vec!["6af530e6000000002a011e07".to_string()];
+        let terms = unused_topic_terms(&items, &used);
+        // 用变量方式传入未选中标题的关键词做断言。
+        let unused_keywords = vec!["内鬼".to_string(), "字节".to_string()];
+        for keyword in &unused_keywords {
+            assert!(terms.contains(keyword), "应提取未选中关键词：{keyword}，实际 {terms:?}");
+        }
+        let bad = "我也想知道内鬼是谁，PyTorch 好像很难。";
+        assert_eq!(
+            dog_take_mentions_unused(bad, &unused_keywords).as_deref(),
+            Some("内鬼")
+        );
+        let good = "我趴在旁边看主人练球，想被摸摸头。";
+        assert!(dog_take_mentions_unused(good, &unused_keywords).is_none());
+        // 模板句不能带未选中关键词。
+        for variant in 0..4 {
+            let sentence = dog_take_template(&items, variant);
+            assert!(dog_take_mentions_unused(&sentence, &terms).is_none());
+        }
     }
 
     #[test]
