@@ -34,6 +34,7 @@ export function GeometrySelfCheck() {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [sizeReset, setSizeReset] = useState(false);
 
   const run = async () => {
     setRunning(true);
@@ -56,6 +57,15 @@ export function GeometrySelfCheck() {
       setCopied(true);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const resetSize = async () => {
+    try {
+      await invoke("reset_island_size");
+      setSizeReset(true);
+    } catch {
+      setSizeReset(false);
     }
   };
 
@@ -107,6 +117,12 @@ export function GeometrySelfCheck() {
       ) : (
         <div style={{ fontSize: 12, opacity: 0.75 }}>{copy.empty}</div>
       )}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button type="button" onClick={() => void resetSize()}>
+          {sizeReset ? copy.resetSizeDone : copy.resetSize}
+        </button>
+        <span style={{ fontSize: 11, opacity: 0.7 }}>{copy.resetSizeHint}</span>
+      </div>
       {error && <div style={{ fontSize: 12, color: "#d33" }}>{copy.error(error)}</div>}
     </div>
   );

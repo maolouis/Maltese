@@ -883,6 +883,9 @@ const zhCN: Translations = {
     delta: "偏差 dx,dy",
     pass: "通过",
     fail: "失败",
+    resetSize: "恢复默认窗口大小",
+    resetSizeDone: "已恢复默认大小",
+    resetSizeHint: "拖动窗口边缘可调整展开面板大小，设置会自动保存；点这里恢复默认。",
   },
   petVitals: {
     title: "小狗的状态",

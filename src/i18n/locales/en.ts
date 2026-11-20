@@ -873,6 +873,9 @@ const en: Translations = {
     delta: "dx,dy",
     pass: "pass",
     fail: "fail",
+    resetSize: "Reset window size",
+    resetSizeDone: "Default size restored",
+    resetSizeHint: "Drag the window edge to resize the expanded panel; the size is saved automatically. Reset here.",
   },
   petVitals: {
     title: "Pet status",

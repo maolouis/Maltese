@@ -514,6 +514,9 @@ export type Translations = {
     delta: string;
     pass: string;
     fail: string;
+    resetSize: string;
+    resetSizeDone: string;
+    resetSizeHint: string;
   };
   petVitals: {
     title: string;

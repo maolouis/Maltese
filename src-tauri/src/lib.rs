@@ -1127,6 +1127,61 @@ static PET_SLOT_MEASURE: std::sync::Mutex<Option<PetSlotMeasure>> = std::sync::M
 /// 按布局态分别保存实测偏移：collapsed 的样本绝不能用于 overlay/expanded 落位。
 static PET_SLOT_MEASURES: std::sync::Mutex<std::option::Option<std::collections::HashMap<String, PetSlotMeasure>>> =
     std::sync::Mutex::new(None);
+/// 浮层规划结果：plan 阶段算好的最终矩形，set 阶段一次落位（不再“先 set 再 set_position 修正”）。
+#[derive(Clone, Debug)]
+struct PlannedOverlay {
+    kind: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    pre_compensated: bool,
+}
+
+static PLANNED_OVERLAY: std::sync::Mutex<Option<PlannedOverlay>> = std::sync::Mutex::new(None);
+
+/// 用户拖拽边缘调整后的展开尺寸（逻辑像素）。None = 用默认/内容尺寸。
+static USER_ISLAND_SIZE: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+
+fn island_size_path() -> std::path::PathBuf {
+    island_rect_store::snapshot_path().with_file_name("island-size.json")
+}
+
+fn load_user_island_size() {
+    let path = island_size_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let width = value.get("width").and_then(serde_json::Value::as_f64);
+    let height = value.get("height").and_then(serde_json::Value::as_f64);
+    if let (Some(width), Some(height)) = (width, height) {
+        if width >= 300.0 && height >= 200.0 && width <= 2400.0 && height <= 1600.0 {
+            if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
+                *slot = Some((width, height));
+            }
+            eprintln!("ISLAND_SIZE_LOAD width={width} height={height}");
+        }
+    }
+}
+
+fn save_user_island_size(width: f64, height: f64) {
+    let path = island_size_path();
+    let payload = serde_json::json!({ "width": width, "height": height, "updatedAt": now_unix_millis() });
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut tmp = path.clone();
+    tmp.set_extension("json.tmp");
+    if let Ok(text) = serde_json::to_string_pretty(&payload) {
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+    eprintln!("ISLAND_SIZE_SAVE width={width} height={height}");
+}
 /// 本次几何操作是否已经用实测 offset 预纠正过（防止 offset 被减两次）。
 static OFFSET_ALREADY_APPLIED: AtomicBool = AtomicBool::new(false);
 
@@ -1619,6 +1674,15 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
     });
     STARTUP_RESTORED.store(true, Ordering::SeqCst);
     STARTUP_RESTORE_UNTIL_MS.store(now_unix_millis() + 3000, Ordering::SeqCst);
+    // D1：恢复后同步「最近落定矩形」，否则首次展开会拿上一个会话的旧位置。
+    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
+        *slot = Some(WindowRect {
+            x,
+            y,
+            width: snapshot.width,
+            height: snapshot.height,
+        });
+    }
     eprintln!(
         "STARTUP_RESTORE source=file rect=({x},{y},{},{}) monitor={} scale={scale} mode={} ok={}",
         snapshot.width,
@@ -1998,6 +2062,41 @@ fn set_island_overlay(
     let mon_right = safe.right;
     let mon_bottom = safe.bottom;
 
+    // 若 plan 已给出最终矩形，直接一次 set_window_rect_atomic（含预补偿），不再二次 set_position。
+    if let Some(kind) = overlay.as_deref() {
+        let planned = PLANNED_OVERLAY.lock().ok().and_then(|slot| slot.clone());
+        if let Some(planned) = planned.filter(|planned| planned.kind == kind) {
+            let single_shot = set_window_rect_atomic(
+                &window,
+                planned.x,
+                planned.y,
+                planned.width as f64 / scale,
+                planned.height as f64 / scale,
+                scale,
+            )
+            .is_ok();
+            if let Ok(mut slot) = PLANNED_OVERLAY.lock() {
+                *slot = None;
+            }
+            eprintln!(
+                "OVERLAY_SINGLE_SHOT ok={single_shot} kind={kind} rect=({},{},{},{}) preCompensated={} corrections=0",
+                planned.x, planned.y, planned.width, planned.height, planned.pre_compensated
+            );
+            let _ = window.emit("maltese-panel-side", "left");
+            let _ = window.emit("maltese-panel-vertical", "above");
+            enforce_slot_invariant(
+                &window,
+                expected_slot_from_state(&window),
+                if kind == "hover" { "doubleclick" } else { "set_island_overlay" },
+            );
+            geometry_authority::record(
+                "set_island_overlay",
+                None,
+                geometry_authority::window_rect(&window),
+            );
+            return Ok(());
+        }
+    }
     let overlay_result: Result<(), String> = match overlay.as_deref() {
         None => {
             OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
@@ -2019,7 +2118,13 @@ fn set_island_overlay(
             // 只有浮层期间尺寸设置真的变了才重算几何。否则这里再“套一次”会把窗口
             // 按 custom_position / 居中算法归位，小狗在气泡关掉时会跳一下。
             let state = read_window_state();
-            let (stage_w, stage_h) = stage_dimensions(state);
+            let (mut stage_w, mut stage_h) = stage_dimensions(state);
+    if matches!(state.mode, IslandMode::Expanded) {
+        if let Some((user_w, user_h)) = user_island_size() {
+            stage_w = user_w;
+            stage_h = user_h;
+        }
+    }
             let base_w = snapshot.map(|snapshot| snapshot.base_w).unwrap_or(stage_w);
             let base_h = snapshot.map(|snapshot| snapshot.base_h).unwrap_or(stage_h);
             if (stage_w - base_w).abs() > 0.5 || (stage_h - base_h).abs() > 0.5 {
@@ -2348,6 +2453,36 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
             anchor.x, anchor.y
         );
     }
+    // 单次落位：规划期按「锚点 − 实测偏移」算好最终矩形（预补偿），set 阶段直接用它落位。
+    let mut planned_x = plan_x;
+    let mut planned_y = plan_y;
+    let mut pre_compensated = false;
+    let overlay_layout_mode = if overlay == "hover" { "overlay" } else { "expanded" };
+    if let Some(measure) = same_mode_measure(overlay_layout_mode) {
+        let off_x = (measure.off_x * scale).round() as i32;
+        let off_y = (measure.off_y * scale).round() as i32;
+        let wanted_x = anchor.x - off_x;
+        let wanted_y = anchor.y - off_y;
+        if wanted_x != planned_x || wanted_y != planned_y {
+            planned_x = wanted_x;
+            planned_y = wanted_y;
+            pre_compensated = true;
+        }
+    }
+    if let Ok(mut slot) = PLANNED_OVERLAY.lock() {
+        *slot = Some(PlannedOverlay {
+            kind: overlay.clone(),
+            x: planned_x,
+            y: planned_y,
+            width: plan_phys_w.max(1) as u32,
+            height: plan_phys_h.max(1) as u32,
+            pre_compensated,
+        });
+    }
+    eprintln!(
+        "OVERLAY_SINGLE_SHOT phase=plan kind={overlay} rect=({planned_x},{planned_y},{plan_phys_w},{plan_phys_h}) preCompensated={pre_compensated} anchor=({},{})",
+        anchor.x, anchor.y
+    );
     // 真实路径注入：规划阶段就校验一次狗槽不变量（此时窗口还没动，超差说明锚点已算错）。
     let plan_expected = WindowRect {
         x: snapshot.anchor_x,
@@ -5115,6 +5250,23 @@ fn apply_glass_material(
     }
 }
 
+fn user_island_size() -> Option<(f64, f64)> {
+    USER_ISLAND_SIZE.lock().ok().and_then(|slot| *slot)
+}
+
+#[tauri::command]
+fn reset_island_size(app: AppHandle) -> Result<(), String> {
+    if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
+        *slot = None;
+    }
+    let _ = std::fs::remove_file(island_size_path());
+    let window = main_window(&app)?;
+    let state = read_window_state();
+    apply_stage_geometry(&window, state, false)?;
+    eprintln!("ISLAND_SIZE_RESET");
+    Ok(())
+}
+
 fn apply_stage_geometry(
     window: &WebviewWindow,
     state: IslandWindowState,
@@ -6508,6 +6660,28 @@ pub fn run() {
             if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(_)) {
                 if let Some(webview) = window.app_handle().get_webview_window(WINDOW_LABEL) {
                     sync_minimize_geometry(&webview);
+                    // 用户拖拽边缘改大小：展开态且不在动画/浮层/最小化时，记录逻辑尺寸并持久化。
+                    if matches!(event, WindowEvent::Resized(_))
+                        && matches!(read_window_state().mode, IslandMode::Expanded)
+                        && !POSITION_ANIMATING.load(Ordering::SeqCst)
+                        && !ISLAND_MINIMIZED.load(Ordering::SeqCst)
+                        && !webview.is_minimized().unwrap_or(false)
+                        && !OVERLAY_ACTIVE.load(Ordering::SeqCst)
+                    {
+                        if let (Ok(inner), Ok(scale)) = (webview.inner_size(), webview.scale_factor()) {
+                            let logical_w = inner.width as f64 / scale;
+                            let logical_h = inner.height as f64 / scale;
+                            if logical_w >= 320.0 && logical_h >= 220.0 && (logical_w, logical_h) != (0.0, 0.0) {
+                                let changed = user_island_size().map(|(w, h)| (w - logical_w).abs() > 1.0 || (h - logical_h).abs() > 1.0).unwrap_or(true);
+                                if changed {
+                                    if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
+                                        *slot = Some((logical_w, logical_h));
+                                    }
+                                    save_user_island_size(logical_w, logical_h);
+                                }
+                            }
+                        }
+                    }
                 }
                 return;
             }
@@ -6573,7 +6747,9 @@ pub fn run() {
                 eprintln!("failed to initialize notification diagnostics: {error}");
             }
             startup_mark("setup:begin");
+            load_user_island_size();
             if let Ok(window) = main_window(app.handle()) {
+                let _ = window.set_resizable(true);
                 startup_mark("setup:island_window");
                 restore_island_rect_on_startup(app.handle());
                 if let Err(error) = apply_stage_geometry(&window, IslandWindowState::default(), false) {
@@ -6588,6 +6764,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_monitors,
             island_geometry_selftest,
+            reset_island_size,
             report_pet_slot_offset,
             set_monitor_preferences,
             qq_mail::get_qq_mail_state,
