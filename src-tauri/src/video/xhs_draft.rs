@@ -856,6 +856,40 @@ mod tests {
         assert_eq!(draft.cta.chars().count(), 60);
     }
 
+    /// 用真实采集会话（默认 2026-11-20 的 7 篇小红书）跑模型草稿：
+    /// cargo test --lib --ignored video::xhs_draft::tests::live_draft_from_real_session -- --nocapture
+    #[tokio::test]
+    #[ignore = "需要本地模型服务与真实 session JSON"]
+    async fn live_draft_from_real_session() {
+        let session_path = std::env::var("MALTESE_XHS_SESSION").unwrap_or_else(|_| {
+            "E:\\MalteseData\\video\\sessions\\2026-11\\xhs-20261120-e5b851.json".to_string()
+        });
+        let raw = std::fs::read_to_string(&session_path).expect("read session");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("session json");
+        let items: Vec<ContentItem> = serde_json::from_value(
+            value.get("items").cloned().unwrap_or_default(),
+        )
+        .expect("items");
+        assert!(items.len() >= 2, "session items = {}", items.len());
+        let base = std::env::var("MALTESE_XHS_MODEL_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080/v1".to_string());
+        let model = std::env::var("MALTESE_XHS_MODEL")
+            .unwrap_or_else(|_| "qwen3.6-35b-a3b-ud-q4_k_xl".to_string());
+        let mut draft = generate_with_local_service(&items, &base, &model)
+            .await
+            .expect("model draft");
+        let root = std::env::current_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("target")
+            .join("xhs-real-draft");
+        let dir = write_draft_to(&root, &mut draft).expect("write");
+        let json =
+            std::fs::read_to_string(std::path::Path::new(&dir).join("draft.json")).expect("json");
+        println!("REAL_NOTES={}", items.len());
+        println!("REAL_DRAFT_JSON={json}");
+        assert_eq!(draft.generator, "model");
+    }
+
     /// 需要本机本地模型服务（默认 http://127.0.0.1:8080/v1）：
     /// cargo test --lib --ignored video::xhs_draft::tests::live_local_model_draft -- --nocapture
     #[tokio::test]
