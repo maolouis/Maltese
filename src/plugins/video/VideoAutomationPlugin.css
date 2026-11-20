@@ -1492,3 +1492,15 @@
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.88);
 }
+
+/* 小红书草稿：小狗的话（浅色斜体，和正文区分） */
+.xhs-draft__textarea--dog {
+  font-style: italic;
+  background: rgba(63, 122, 95, 0.07);
+  color: #2b4a3b;
+}
+
+.island__expanded .xhs-draft__textarea--dog {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}

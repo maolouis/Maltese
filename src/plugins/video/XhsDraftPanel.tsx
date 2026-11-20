@@ -27,6 +27,7 @@ export type XhsDraft = {
   tags: string[];
   sources: XhsDraftSource[];
   hook?: string;
+  dogTake?: string;
   cta?: string;
   usedNotes?: string[];
   similar?: boolean;
@@ -40,6 +41,7 @@ export function XhsDraftPanel() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [tagsText, setTagsText] = useState("");
+  const [dogTakeText, setDogTakeText] = useState("");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +53,7 @@ export function XhsDraftPanel() {
     setTitle(next.title);
     setBody(next.body);
     setTagsText(next.tags.join(" "));
+    setDogTakeText(next.dogTake || "");
     setSavedAt(null);
   };
 
@@ -74,7 +77,7 @@ export function XhsDraftPanel() {
       .split(/[\s,，、]+/)
       .map((tag) => tag.trim())
       .filter(Boolean);
-    return { ...draft, title, body, tags };
+    return { ...draft, title, body, tags, dogTake: dogTakeText };
   };
 
   const save = async () => {
@@ -95,7 +98,7 @@ export function XhsDraftPanel() {
 
   const copyAll = async () => {
     if (!draft) return;
-    const text = `${title}\n\n${body}\n\n${tagsText}`;
+    const text = `${title}\n\n${body}\n\n${dogTakeText}\n\n${tagsText}`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied("all");
@@ -175,6 +178,17 @@ export function XhsDraftPanel() {
             className="xhs-draft__input"
             value={tagsText}
             onChange={(event) => setTagsText(event.currentTarget.value)}
+          />
+
+          <label className="xhs-draft__label" htmlFor="xhs-draft-dog-take">
+            小狗的话（60–120 字，第一人称）
+          </label>
+          <textarea
+            id="xhs-draft-dog-take"
+            className="xhs-draft__textarea xhs-draft__textarea--dog"
+            value={dogTakeText}
+            rows={3}
+            onChange={(event) => setDogTakeText(event.currentTarget.value)}
           />
 
           {draft.cta && <p className="xhs-draft__hook">结尾互动：{draft.cta}</p>}

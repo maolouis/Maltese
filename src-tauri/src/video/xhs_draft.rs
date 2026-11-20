@@ -20,6 +20,24 @@ pub const MAX_BODY_CHARS: usize = 1000;
 pub const MAX_TAGS: usize = 8;
 /// 连续复制原文达到这个字数就视为摘抄。
 pub const SIMILARITY_MIN_CHARS: usize = 15;
+/// 小狗感悟长度：60–120 字（下限只做提示，不硬截断）。
+pub const MAX_DOG_TAKE_CHARS: usize = 120;
+pub const MIN_DOG_TAKE_CHARS: usize = 60;
+/// 博主腔黑名单：dogTake 命中任一词就重写/降级。
+pub const DOG_TAKE_BLACKLIST: [&str; 12] = [
+    "总之",
+    "值得一试",
+    "核心在于",
+    "综上所述",
+    "干货",
+    "码住",
+    "亲测有效",
+    "不容错过",
+    "建议收藏",
+    "划重点",
+    "宝子们",
+    "姐妹们",
+];
 
 /// 小红书投稿页（人工点发布；创建入口默认停在「上传视频」，需手切「上传图文」）。
 
@@ -43,6 +61,9 @@ pub struct XhsDraft {
     /// 开头一句（模型生成；模板为空）。
     #[serde(default)]
     pub hook: String,
+    /// 小狗第一人称感悟（60–120 字），独立于 cta。
+    #[serde(default)]
+    pub dog_take: String,
     /// 结尾互动一句。
     #[serde(default)]
     pub cta: String,
@@ -88,22 +109,20 @@ pub fn trim_body(value: &str) -> String {
 pub fn sanitize_tags(values: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::new();
     for value in values {
-        let tag = value
-            .trim()
-            .trim_start_matches('#')
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("");
-        if tag.is_empty() {
-            continue;
-        }
-        let tag = format!("#{}", clamp_chars(&tag, 12));
-        if result.iter().any(|existing| existing == &tag) {
-            continue;
-        }
-        result.push(tag);
-        if result.len() >= MAX_TAGS {
-            break;
+        // 模型偶尔把多个标签塞进一个字符串（"#羽毛球#双打#"），按 #/逗号/顿号拆开。
+        for part in value.split(|ch: char| ch == '#' || ch == ',' || ch == '，' || ch == '、') {
+            let tag = part.split_whitespace().collect::<Vec<_>>().join("");
+            if tag.is_empty() {
+                continue;
+            }
+            let tag = format!("#{}", clamp_chars(&tag, 12));
+            if result.iter().any(|existing| existing == &tag) {
+                continue;
+            }
+            result.push(tag);
+            if result.len() >= MAX_TAGS {
+                return result;
+            }
         }
     }
     result
@@ -258,6 +277,7 @@ pub fn template_draft(items: &[ContentItem]) -> XhsDraft {
         tags: sanitize_tags(&top_tags(items)),
         sources: items.iter().take(9).map(source_of).collect(),
         hook: String::new(),
+        dog_take: dog_take_template(items, 0),
         cta: "你会想试试吗？评论区聊聊。".to_string(),
         used_notes: items.iter().take(9).map(note_id_of).collect(),
         similar: false,
@@ -267,24 +287,62 @@ pub fn template_draft(items: &[ContentItem]) -> XhsDraft {
     }
 }
 
+/// 小狗感悟模板：3 条按情绪/题材轮换（模型不合格时降级）。
+pub fn dog_take_template(items: &[ContentItem], variant: usize) -> String {
+    let multi = items.len() >= 2;
+    let mut sentences = vec![
+        "看完这些我也想动起来了，明天要不要一起去试试呀？".to_string(),
+        "我有点看不太懂，但是感觉好厉害，想窝在你旁边再看一会儿。".to_string(),
+        "今天也学到一点点啦，想要摸摸头，明天再陪我看好不好？".to_string(),
+    ];
+    if multi {
+        sentences.push("大家说的东西不太一样，我有点绕晕了，但还是想黏着你一起看。".to_string());
+    }
+    sentences[variant % sentences.len()].clone()
+}
+
+/// dogTake 风格校验：必须第一人称含「我」，且不含博主腔黑名单。
+pub fn dog_take_ok(value: &str) -> bool {
+    let text = value.trim();
+    !text.is_empty()
+        && text.contains('我')
+        && !DOG_TAKE_BLACKLIST.iter().any(|word| text.contains(word))
+}
+
+/// dogTake 裁剪：≤120 字，首尾去空白。
+pub fn trim_dog_take(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .trim()
+        .chars()
+        .take(MAX_DOG_TAKE_CHARS)
+        .collect::<String>()
+}
+
 /// 模型提示词：输入 1–N 篇（标题/作者/正文截断 500 字/标签/类型/时长/点赞），
 /// 输出严格 JSON；明确「改写而非摘抄，不得连续复制原文 ≥15 字」。
 pub fn build_prompt(items: &[ContentItem]) -> String {
     let multi = items.len() >= 2;
-    let mut prompt = String::from(
-        "你是小红书内容编辑，帮主人把采集到的笔记改写成一篇原创图文文案。\n\
-只输出一行 JSON，不要 Markdown/解释：\n\
-{\"title\":\"≤20字\",\"hook\":\"开头一句\",\"body\":\"≤1000字，含3-5个要点\",\"cta\":\"结尾互动一句\",\"tags\":[\"#标签\"],\"usedNotes\":[\"noteId\"]}\n\
+    let mut prompt = format!(
+        "{{\"title\":\"≤20字\",\"hook\":\"开头一句\",\"body\":\"≤1000字，含3-5个要点\",\"dogTake\":\"60-120字，小狗第一人称感悟\",\"cta\":\"结尾互动一句\",\"tags\":[\"#标签\"],\"usedNotes\":[\"noteId\"]}}\n\
+你是小红书内容编辑，但你的身份是 Maltese 桌宠小狗（不是普通博主/编辑）。\n\
+人设：{} \n\
+帮主人把采集到的笔记改写成一篇原创图文文案。只输出一行 JSON，不要 Markdown/解释。\n\
 硬性要求：\n\
 1. 必须改写而非摘抄：不得连续复制原文 15 个字以上；用自己的话重新组织信息。\n\
 2. 不编造原文没有的事实；不写“点击链接/私信我”等引流话术。\n\
-3. title 不超过 20 个汉字；body 不超过 1000 字，按要点分段，3–5 个要点；\n\
-4. tags 3–8 个，带 # 前缀；usedNotes 填实际参考到的 noteId。\n\
-5. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
+3. title 不超过 20 个汉字；body 不超过 1000 字，按要点分段，写 3–5 个要点；\n\
+4. dogTake 必须是小狗第一人称（要出现“我”），60–120 字：写具体小动作/小心思（想去看、想吃、想被摸头、看不太懂但觉得厉害），\n\
+   口语化、短句、偶尔叠词；**不允许**说教、总结金句、鸡汤、行业黑话或博主腔（如“总之/值得一试/核心在于/综上所述/干货/码住”）。\n\
+5. cta 也要小狗口吻的互动提问（例如“你们练球的时候都在想什么呀～”），不要“欢迎评论区留言”这种博主腔。\n\
+6. 正文顺序：hook（开头一句）→ body（3–5 个要点）→ dogTake（小狗感悟）→ cta（互动）；dogTake 与 cta 不要写进 body 里。\n\
+7. tags 3–8 个，带 # 前缀；usedNotes 填实际参考到的 noteId。\n\
+8. 不要提到图片、配图、封面（配图由平台「文生图」生成）。\n",
+        crate::local_chat::PERSONA_SUFFIX
     );
     if multi {
         prompt.push_str(
-            "本次有多篇笔记：请做「主题归纳 + 我的看法」，不要逐篇罗列；先给共同主题，再给 3–5 个要点，最后写自己的看法。\n",
+            "本次有多篇笔记：请做「主题归纳 + 我的看法」，不要逐篇罗列；先给共同主题，再给 3–5 个要点，最后把“我的看法”写进 dogTake（小狗第一人称），不要写成编辑总结。\n",
         );
     }
     prompt.push_str("<notes>\n");
@@ -392,6 +450,7 @@ pub fn parse_model_draft(raw: &str, items: &[ContentItem]) -> Result<XhsDraft, S
         tags: sanitize_tags(&tags),
         sources: items.iter().take(9).map(source_of).collect(),
         hook: clamp_chars(&parse_string(&value, "hook"), 60),
+        dog_take: trim_dog_take(&parse_string(&value, "dogTake")),
         cta: clamp_chars(&parse_string(&value, "cta"), 60),
         used_notes,
         similar: false,
@@ -497,6 +556,27 @@ async fn compose(route: &ModelRoute, items: &[ContentItem]) -> Result<XhsDraft, 
         }
     };
 
+    // dogTake 风格校验：第一人称 + 无博主腔；不合格先重写一次，仍不合格降级模板。
+    if !dog_take_ok(&draft.dog_take) {
+        let rewrite_prompt = format!(
+            "{prompt}\n上一版 dogTake 不合格（必须含第一人称“我”，且不能出现这些词：{}）。只重写 dogTake，仍输出完整 JSON。",
+            DOG_TAKE_BLACKLIST.join("、")
+        );
+        if let Ok(candidate) = parse_model_draft(
+            &route
+                .call(rewrite_prompt, 700)
+                .await
+                .map_err(|error| format!("模型重写 dogTake 失败：{error}"))?,
+            items,
+        ) {
+            draft.dog_take = candidate.dog_take;
+            draft.cta = candidate.cta;
+        }
+        if !dog_take_ok(&draft.dog_take) {
+            draft.dog_take = dog_take_template(items, draft.body.chars().count());
+        }
+    }
+
     if let Some(snippet) = similarity_hit(&draft.body, items) {
         // 命中 ≥15 字：重写一次。
         let rewrite_prompt = format!(
@@ -588,6 +668,9 @@ fn readme(draft: &XhsDraft) -> String {
     if !draft.hook.is_empty() {
         text.push_str(&format!("## 开头\n{}\n\n", draft.hook));
     }
+    if !draft.dog_take.is_empty() {
+        text.push_str(&format!("## 小狗的话\n{}\n\n", draft.dog_take));
+    }
     text.push_str(&format!("## 标题（{} 字）\n{}\n\n", draft.title.chars().count(), draft.title));
     text.push_str(&format!("## 正文（{} 字）\n{}\n\n", draft.body.chars().count(), draft.body));
     if !draft.cta.is_empty() {
@@ -650,6 +733,7 @@ pub fn normalize_edited(draft: &mut XhsDraft) {
     draft.body = trim_body(&draft.body);
     draft.tags = sanitize_tags(&draft.tags);
     draft.hook = clamp_chars(&draft.hook, 60);
+    draft.dog_take = trim_dog_take(&draft.dog_take);
     draft.cta = clamp_chars(&draft.cta, 60);
 }
 
@@ -856,7 +940,69 @@ mod tests {
         assert_eq!(draft.cta.chars().count(), 60);
     }
 
-    /// 用真实采集会话（默认 2026-11-20 的 7 篇小红书）跑模型草稿：
+    #[test]
+    fn tags_split_multiple_hashes_in_one_string() {
+        let items = sample_items();
+        let draft = parse_model_draft(
+            r##"{"title":"羽球","body":"要点一\n要点二","dogTake":"我也想动起来啦～","cta":"你打球会想什么呀～","tags":["#羽毛球#双打#核心力量#"],"usedNotes":[]}"##,
+            &items,
+        )
+        .expect("draft");
+        assert_eq!(
+            draft.tags,
+            vec![
+                "#羽毛球".to_string(),
+                "#双打".to_string(),
+                "#核心力量".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dog_take_requires_first_person_and_blocks_blogger_phrases() {
+        assert!(dog_take_ok("我也想动起来了，明天一起去试试呀～"));
+        assert!(!dog_take_ok("核心在于坚持，值得一试。")); // 无「我」+ 黑名单
+        assert!(!dog_take_ok("我总结一下，总之要坚持。")); // 含「总之」
+        assert!(!dog_take_ok("看完好感动。")); // 无第一人称
+    }
+
+    #[test]
+    fn dog_take_is_trimmed_to_120_chars() {
+        let long = "我".repeat(200);
+        let trimmed = trim_dog_take(&long);
+        assert_eq!(trimmed.chars().count(), MAX_DOG_TAKE_CHARS);
+    }
+
+    #[test]
+    fn dog_take_templates_are_three_distinct_first_person_sentences() {
+        let items = sample_items();
+        let a = dog_take_template(&items, 0);
+        let b = dog_take_template(&items, 1);
+        let c = dog_take_template(&items, 2);
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        for sentence in [a, b, c] {
+            assert!(sentence.contains('我'), "模板必须第一人称：{sentence}");
+            assert!(dog_take_ok(&sentence));
+        }
+    }
+
+    #[test]
+    fn parses_dog_take_and_normalizes_edited_version() {
+        let items = sample_items();
+        let mut draft = parse_model_draft(
+            r##"{"title":"海边","body":"要点一\n要点二","dogTake":"我也想去海边，想被摸摸头。","cta":"你们去海边会做什么呀～","tags":["#旅行"],"usedNotes":[]}"##,
+            &items,
+        )
+        .expect("draft");
+        assert!(dog_take_ok(&draft.dog_take));
+        assert_eq!(draft.dog_take, "我也想去海边，想被摸摸头。");
+        draft.dog_take = "我".repeat(300);
+        normalize_edited(&mut draft);
+        assert_eq!(draft.dog_take.chars().count(), MAX_DOG_TAKE_CHARS);
+    }
+
+    /// 用真实采集会话（默认 2026-11-20 的 7 篇小红书）跑模型草稿：    /// 用真实采集会话（默认 2026-11-20 的 7 篇小红书）跑模型草稿：
     /// cargo test --lib --ignored video::xhs_draft::tests::live_draft_from_real_session -- --nocapture
     #[tokio::test]
     #[ignore = "需要本地模型服务与真实 session JSON"]

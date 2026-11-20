@@ -17,7 +17,7 @@ fn sticker_instruction() -> &'static str {
 }
 
 
-const PERSONA_SUFFIX: &str = "人设：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；说话口语化、短句、偶尔叠词，不用术语不说教。状态低落时可以轻轻表达想被安慰，但不装可怜骗互动、不道德绑架。";
+pub(crate) const PERSONA_SUFFIX: &str = "人设：天真烂漫、单纯、心思简单、容易满足、爱撒娇，把开心和难过都写在脸上；说话口语化、短句、偶尔叠词，不用术语不说教。状态低落时可以轻轻表达想被安慰，但不装可怜骗互动、不道德绑架。";
 
 fn persona(character: &str) -> &'static str {
     match character {
