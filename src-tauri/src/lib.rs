@@ -32,8 +32,6 @@ mod shortcut_hotkeys;
 mod collapse_shortcut;
 mod custom_sound;
 mod video;
-mod video_automation;
-mod video_rules;
 mod window_factory;
 mod actions;
 mod agent_hub;
@@ -1161,7 +1159,11 @@ fn report_pet_slot_offset(
         height,
     };
     if let Ok(mut slot) = PET_SLOT_MEASURE.lock() {
-        *slot = Some(measure);
+        *slot = Some(measure.clone());
+    }
+    if let Ok(mut map) = PET_SLOT_MEASURES.lock() {
+        map.get_or_insert_with(std::collections::HashMap::new)
+            .insert(mode.clone(), measure.clone());
     }
     let scale = window.scale_factor().unwrap_or(1.0);
     if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) {
@@ -1549,9 +1551,8 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
         eprintln!("STARTUP_RESTORE source=file ok=false reason=missing path={}", path.display());
         return;
     };
-    let exact_monitor = find_monitor_by_key(app, &snapshot.monitor);
-    let exact = exact_monitor.is_some();
-    let target = exact_monitor.or_else(|| nearest_monitor_to_rect(app, snapshot.x, snapshot.y));
+    let target = find_monitor_by_key(app, &snapshot.monitor)
+        .or_else(|| nearest_monitor_to_rect(app, snapshot.x, snapshot.y));
     let Some(monitor) = target else {
         eprintln!("STARTUP_RESTORE source=file ok=false reason=no_monitor");
         return;
@@ -1560,8 +1561,14 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
     let logical_w = snapshot.width as f64 / snapshot.scale.max(0.1);
     let logical_h = snapshot.height as f64 / snapshot.scale.max(0.1);
     let work = monitor.work_area();
-    let work_rect = (work.position.x, work.position.y, work.size.width, work.size.height);
+    let work_rect = (
+        work.position.x,
+        work.position.y,
+        work.size.width,
+        work.size.height,
+    );
     let (mut x, mut y) = (snapshot.x, snapshot.y);
+    let exact = find_monitor_by_key(app, &snapshot.monitor).is_some();
     if !exact {
         (x, y) = island_rect_store::clamp_to_work_area(
             (snapshot.x, snapshot.y, snapshot.width, snapshot.height),
@@ -1569,7 +1576,10 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
         );
         eprintln!(
             "STARTUP_RESTORE_CLAMP from=({},{},{},{}) to=({x},{y}) monitor={}",
-            snapshot.x, snapshot.y, snapshot.width, snapshot.height,
+            snapshot.x,
+            snapshot.y,
+            snapshot.width,
+            snapshot.height,
             monitor_fingerprint_of(&monitor)
         );
     }
@@ -1577,6 +1587,7 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
         eprintln!("STARTUP_RESTORE source=file ok=false reason=set_rect: {error}");
         return;
     }
+    // 让后续兜底链路（custom_position）也以这份矩形为准。
     mutate_window_state(|state| {
         state.custom_position = Some(IslandPosition { x, y });
         *state
@@ -2180,7 +2191,6 @@ fn set_island_overlay(
                 scale,
             )
         }
-    }
     };
     // 先放掉浮层请求锁再纠正：set_position 会同步触发窗口事件，持锁调用有死锁风险。
     drop(_request_guard);
@@ -2306,7 +2316,7 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         "overlay plan ({overlay}): side={side} vertical={vertical} anchor=({}, {}) base={base_w:.1}x{base_h:.1}",
         anchor.x, anchor.y
     );
-    if overlay.as_deref() == Some("hover") {
+    if overlay == "hover" {
         eprintln!(
             "DOUBLECLICK_GEOM phase=pre source={} target=({plan_x},{plan_y},{plan_phys_w},{plan_phys_h}) slot=({},{}) side={side} vertical={vertical}",
             if settled_anchor.is_some() { "settled" } else { "current-window" },
@@ -5092,7 +5102,8 @@ fn apply_stage_geometry(
     {
         return Ok(());
     }
-    // 启动恢复的 3s 窗口内，收起态几何不允许被前端 syncNativeInteraction 重算覆盖。
+    // 启动恢复的 3s 窗口内，收起态几何不允许被前端 syncNativeInteraction 重算覆盖，
+    // 否则「刚恢复对的矩形」会被默认锚点再算一遍（P0 启动位置不对的直接原因）。
     if matches!(state.mode, IslandMode::Collapsed) && startup_restore_active() {
         eprintln!("STARTUP_SKIP_RECALC reason=startup_window");
         return Ok(());
@@ -6515,7 +6526,6 @@ pub fn run() {
             wake_shortcut::init(app.handle());
             shortcut_hotkeys::init(app.handle());
             collapse_shortcut::init(app.handle());
-            video_automation::init(app.handle());
             dsh_api::init(app.handle());
             if let Err(error) = qq_mail::init(app.handle()) {
                 eprintln!("failed to initialize QQ mail: {error}");
@@ -6688,10 +6698,6 @@ pub fn run() {
             actions::set_clipboard_text,
             actions::type_text,
             actions::press_shortcut,
-            video_automation::get_video_automation_state,
-            video_automation::set_video_automation_config,
-            video_automation::start_video_automation,
-            video_automation::stop_video_automation,
             video::video_start_session,
             video::video_list_accounts,
             video::video_get_active_account,
@@ -6708,6 +6714,13 @@ pub fn run() {
             video::video_get_profile,
             video::video_update_profile,
             video::video_take_pending_digest,
+            video::video_get_taste,
+            video::video_update_taste,
+            video::video_reset_taste,
+            video::xhs_generate_draft,
+            video::xhs_open_drafts_dir,
+            video::xhs_save_draft,
+            video::xhs_fill_creator,
             video::video_mark_delivery,
             video::video_diagnostics,
             video::video_clear_data,
@@ -6755,25 +6768,3 @@ pub fn run() {
             }
         });
 }
-            video::video_open_logs_dir,
-            video::video_get_taste,
-            video::video_update_taste,
-            video::video_reset_taste,
-            video::video_get_taste,
-            video::video_update_taste,
-            video::video_reset_taste,
-            video::xhs_generate_draft,
-            video::xhs_open_drafts_dir,
-            video::video_get_taste,
-            video::video_update_taste,
-            video::video_reset_taste,
-            video::xhs_generate_draft,
-            video::xhs_open_drafts_dir,
-            video::xhs_save_draft,
-            video::video_get_taste,
-            video::video_update_taste,
-            video::video_reset_taste,
-            video::xhs_generate_draft,
-            video::xhs_open_drafts_dir,
-            video::xhs_save_draft,
-            video::xhs_fill_creator,

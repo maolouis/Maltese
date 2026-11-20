@@ -143,6 +143,11 @@ fn read_manifest(path: &Path) -> Result<PluginManifest, String> {
     if manifest.name.trim().is_empty() {
         return Err("插件缺少 name。".to_string());
     }
+    if !manifest.actions.is_empty()
+        && !manifest.capabilities.iter().any(|capability| capability == "process")
+    {
+        return Err("插件声明了可执行动作，但没有声明 process 能力。".to_string());
+    }
     for action in &manifest.actions {
         if action.id.trim().is_empty() || action.label.trim().is_empty() {
             return Err("插件动作缺少 id 或 label。".to_string());
@@ -188,12 +193,13 @@ pub fn list_plugins(app: AppHandle) -> Result<PluginList, String> {
     let mut errors = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // 预置插件先扫（安装包自带、只读），用户目录后扫：同 id 时用户目录覆盖预置版本。
+    // 用户目录先扫，预置目录后扫：同 id 时用户安装版本覆盖安装包预置版本。
+    // `find_installed_plugin` 也采用同样的优先级，保证列表、界面和动作指向一致。
     let mut directories: Vec<(PathBuf, bool)> = Vec::new();
+    directories.push((root.clone(), false));
     if let Some(preset) = preset_plugins_root(&app) {
         directories.push((preset, true));
     }
-    directories.push((root.clone(), false));
 
     for (directory, locked) in directories {
         let entries = match fs::read_dir(&directory) {
@@ -215,7 +221,7 @@ pub fn list_plugins(app: AppHandle) -> Result<PluginList, String> {
             match read_manifest(&manifest_path) {
                 Ok(manifest) => {
                     if !seen.insert(manifest.id.clone()) {
-                        errors.push(format!("插件 id 重复，已跳过：{}", manifest.id));
+                        // 预置版本被用户目录覆盖是正常情况，不应显示成插件错误。
                         continue;
                     }
                     let info = plugin_info_from(manifest, &path, locked);

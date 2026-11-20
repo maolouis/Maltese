@@ -9,7 +9,7 @@ import { Music, ListTodo, MessageCircle, Grid2x2, PinOff, X } from "lucide-react
 import { PetChat } from "./PetChat";
 import { PinnedTodo } from "./PinnedTodo";
 import { PinnedMusic } from "./PinnedMusic";
-import { AssistantPanel } from "./App";
+import { AssistantPanel } from "./AssistantPanel";
 import "./PinnedPanel.css";
 
 const TABS = [

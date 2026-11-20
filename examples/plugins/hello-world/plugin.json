@@ -5,6 +5,7 @@
   "description": "Maltese 最小插件示例：自带一个页面，也能用 PowerShell 弹问候窗口。",
   "author": "Maltese",
   "homepage": "https://github.com/maolouis/Maltese",
+  "capabilities": ["process"],
   "ui": "index.html",
   "actions": [
     {

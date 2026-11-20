@@ -30,6 +30,7 @@ type PluginInfo = {
   locked: boolean;
   path: string | null;
   ui: string | null;
+  capabilities: string[];
   actions: PluginAction[];
 };
 
@@ -369,6 +370,9 @@ export function PluginsPanel() {
                   {plugin.builtin ? t.plugins.builtin : plugin.locked ? "预置" : `v${plugin.version || "0.0.0"}`}
                 </span>
                 {isDisabled && <span className="plugin-card__badge plugin-card__badge--muted">{t.plugins.disabled}</span>}
+                {plugin.capabilities.includes("process") && (
+                  <span className="plugin-card__badge plugin-card__badge--muted" title="此插件可启动本机进程">进程权限</span>
+                )}
                 <button
                   type="button"
                   className="plugin-card__help-toggle"
