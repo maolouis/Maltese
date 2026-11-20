@@ -21,6 +21,33 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 所有感知与消息预览都在本机完成；不内嵌第三方登录页，不把聊天内容、剪贴板或通知文本上传到服务器。消息提醒只保留「有新消息」信号，不读取也不显示聊天正文。
 
+## 📖 使用手册
+
+> 第一次用：先看 **安装与升级** 和 **运行发布版**；哪里不对：直接跳到 **常见问题与排障**。
+> 每条都写了「什么时候该看它」，不用从头读。
+
+- **安装与升级** → [docs/releases/v2.0.4.md](docs/releases/v2.0.4.md)：想装、想升级、要分安装包 / 便携版 / 插件，或要核对 SHA-256 时看；下载后被 SmartScreen 拦住也看这里。
+- **聊天 / 记忆 / 自我状态** → [docs/pet-chat.md](docs/pet-chat.md)、[docs/pet-vitals-usage.md](docs/pet-vitals-usage.md)：聊天没反应、想换本地模型、想关掉表情轮播或「体力 / 情绪 / 亲密 / 专注」时看。
+- **视频插件（小狗刷视频）** → [docs/video-plugin-usage.md](docs/video-plugin-usage.md)：第一次用刷视频、要登录、想看小结、评论没发出去时看。
+- **小红书采集与图文草稿** → [docs/video-plugin-xiaohongshu.md](docs/video-plugin-xiaohongshu.md)：想只读采集小红书、让小狗写图文草稿、确认「能不能自动发布」时看；可行性结论在 [docs/research-xiaohongshu.md](docs/research-xiaohongshu.md)。
+- **多屏 / 窗口几何** → [docs/pet-multi-monitor.md](docs/pet-multi-monitor.md)：小狗跑到副屏、切屏后位置不对、窗口大小 / 任务栏挡住它时看。
+- **两只小狗的联动** → [docs/pet-linkage-usage.md](docs/pet-linkage-usage.md)：**当前已下线**（feature flag 关闭，设置里看不到入口）；想知道它原本怎么用、为什么关、什么时候回来时看。
+- **Agent 控制台** → [docs/agent-hub.md](docs/agent-hub.md)：想把本机 Codex / Claude 等 agent 接进桌宠、看任务列表和 Token 卡片时看。
+- **数据目录与迁移** → [docs/data-directory-plan.md](docs/data-directory-plan.md)：想知道数据存在哪、怎么换到别的盘（`data-dir.txt`）、重装后数据还在不在时看。
+- **常见问题与排障** → [docs/diagnostics/startup-hang-playbook.md](docs/diagnostics/startup-hang-playbook.md)（冷启动卡死 / 双击没反应）、[docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md)（快捷键不生效）：出问题先按这两份自查。
+- **待办进度** → [docs/TODO.md](docs/TODO.md)：想知道某个问题修到哪一步、哪些还没做时看。
+
+## 正在研发
+
+> 完整清单、影响与文档入口见 [docs/TODO.md](docs/TODO.md)。
+
+- **冷启动间歇卡死（P0）**：个别时候双击后小狗不出现、进程无响应；已能定位停点，正在抓线程栈找根因。
+- **小红书评论自动提交（P0）**：找入口、等输入框、填字都已通，还差最后「点发送」，目前结果如实报未发送。
+- **B 站自动评论受账号限制**：站点返回「账号未转正（-107）」，面板会给出原因，本机不会绕过风控。
+- **窗口几何重构（进行中）**：双击 / 右键开浮层偶发闪动与位移；窗口边缘拖拽缩放、尺寸记忆、切页签不再带动窗口上下移动都在这一轮里做。
+- **混合 DPI 未实测**：150% 缩放的副屏还没有实机跑过，只有单测。
+- **字体自定义（进行中）**，同时**实例联动暂时下线**（feature flag 关闭），修好后再开。
+
 ## 功能一览
 
 ### 桌宠与快捷操作
