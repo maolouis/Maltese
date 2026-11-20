@@ -3021,12 +3021,35 @@ impl SessionEngine {
                 }
             };
 
+            // 回读验证：B 站评论区在 Shadow DOM 里，document.body.innerText 看不到，
+            // 必须递归 shadowRoot 收集文本；同时把评论区滚进视口，等评论渲染。
+            let deep_text_script = r#"
+(function () {
+  var out = '';
+  var walk = function (root) {
+    if (!root) return;
+    try { out += (root.innerText || root.textContent || '') + '\n'; } catch (e) {}
+    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    for (var i = 0; i < all.length; i += 1) {
+      if (all[i].shadowRoot) walk(all[i].shadowRoot);
+    }
+  };
+  walk(document);
+  return out.slice(0, 30000);
+})()
+"#;
             let mut verified = false;
             if port != 0 {
                 if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
-                    for _ in 0..3 {
-                        tokio::time::sleep(Duration::from_millis(1500)).await;
-                        if let Ok(text) = cdp.evaluate_text("document.body.innerText").await {
+                    let _ = cdp
+                        .evaluate(
+                            "(function(){var s=document.querySelector('#commentapp,bili-comments,.comment-container,#comment');if(s){s.scrollIntoView({block:'center'});}return true;})()",
+                            std::time::Duration::from_secs(3),
+                        )
+                        .await;
+                    for _ in 0..4 {
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                        if let Ok(text) = cdp.evaluate_text(deep_text_script).await {
                             if comment_in_text(&text, &comment) {
                                 verified = true;
                                 break;
