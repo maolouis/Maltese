@@ -677,9 +677,13 @@ fn sanitize_comment(raw: &str) -> Result<String, String> {
     }
 }
 
-fn comment_bubble(title: &str, comment: &str) -> String {
+fn comment_bubble(title: &str, comment: &str, platform: Platform) -> String {
     let short: String = title.trim().chars().take(12).collect();
-    format!("刚给《{short}》评论了一句：{comment}")
+    if platform == Platform::Xiaohongshu {
+        format!("刚在小红书《{short}》下评论了一句：{comment}")
+    } else {
+        format!("刚给《{short}》评论了一句：{comment}")
+    }
 }
 
 /// 评论回读匹配：去掉空白与标点后做子串匹配（容忍页面截断/换行差异）。
@@ -2349,9 +2353,7 @@ impl SessionEngine {
 
             // 评论：异步派发，绝不 await（模型慢/失败都不阻塞刷视频）。
             // 小红书本期只读采集，不做评论（需求明确不做评论/点赞）。
-            if platform == Platform::Xiaohongshu {
-                // skip
-            } else if let Some(facts) = final_facts {
+            if let Some(facts) = final_facts {
                 let url = facts.canonical_url.clone().unwrap_or_default();
                 let is_login_or_risk = facts.hints.login_visible
                     || facts.hints.captcha_visible
@@ -2382,8 +2384,13 @@ impl SessionEngine {
                             format!("url={} reason=login_or_risk", url),
                         );
                     }
-                } else if url.contains("/video/") {
-                    let watched_ms = facts.position_seconds.saturating_mul(1000);
+                } else if url.contains("/video/") || platform == Platform::Xiaohongshu {
+                    // 小红书图文没有播放进度：按停留一个采样间隔算「读完」；视频仍按播放秒数。
+                    let watched_ms = if platform == Platform::Xiaohongshu {
+                        config.page_interval_seconds.max(8).saturating_mul(1000)
+                    } else {
+                        facts.position_seconds.saturating_mul(1000)
+                    };
                     let allowed = config.auto_comment
                         && comment_count < 10
                         && watched_ms >= 8_000
@@ -3034,6 +3041,10 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             if !engine.comment_run_active(run_id) {
                 return;
             }
+            let platform = {
+                let state = lock_state(&engine.state);
+                state.platform
+            };
             let model = {
                 let state = lock_state(&engine.state);
                 state.comment_model.clone()
@@ -3140,7 +3151,7 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                         at: now_seconds(),
                     });
                 }
-                let dry_run_text = comment_bubble(&facts.title, &comment);
+                let dry_run_text = comment_bubble(&facts.title, &comment, platform);
                 engine.store.log(DiagnosticEntry {
                     at: now_seconds(),
                     session_id: Some(engine.snapshot().session_id.clone()),
@@ -3172,7 +3183,12 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             let page_ready = if port == 0 {
                 false
             } else if let Ok(mut cdp) = CdpSession::connect(port, platform).await {
-                cdp.current_url().await.contains("/video/")
+                let url = cdp.current_url().await;
+                if platform == Platform::Xiaohongshu {
+                    url.contains("/explore/") || url.contains("/discovery/item/")
+                } else {
+                    url.contains("/video/")
+                }
             } else {
                 false
             };
@@ -3470,7 +3486,7 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                     at: now_seconds(),
                 });
             }
-            let bubble_text = comment_bubble(&facts.title, &comment);
+            let bubble_text = comment_bubble(&facts.title, &comment, platform);
             engine.store.log(DiagnosticEntry {
                 at: now_seconds(),
                 session_id: Some(engine.snapshot().session_id.clone()),

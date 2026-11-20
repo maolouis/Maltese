@@ -331,7 +331,7 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
     }
     return null;
   }
-  var SECTION_SELECTORS = ['#commentapp', 'bili-comments', '.comment-container', '[class*="comment-container"]', '[data-e2e="comment"]', '#comment', '.reply-tools', '.comment-wrapper', '.comment'];
+  var SECTION_SELECTORS = ['#commentapp', 'bili-comments', '.comment-container', '.comments-container', '.comment-list', '[class*="comment-container"]', '[data-e2e="comment"]', '#comment', '.reply-tools', '.comment-wrapper', '.comment'];
   var debugInfo = function (label) {
     try {
       var editable = deepAll('[contenteditable="true"]').length;
@@ -378,7 +378,7 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
     for (var i = 0; i < candidates.length; i += 1) {
       var node = candidates[i];
       if (!visible(node)) continue;
-      if (/发一条友善的评论|善意的评论|说点什么|写评论/.test(node.textContent || "")) { placeholder = node; break; }
+      if (/发一条友善的评论|善意的评论|说点什么|写评论|评论一下|留下你的评论/.test(node.textContent || "")) { placeholder = node; break; }
     }
   }
   if (placeholder) {
@@ -388,6 +388,9 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
   }
   // 3) 真正的输入框：textarea / contenteditable=true / comment-input。
   var inputSelectors = [
+    '.comments-container [contenteditable="true"]',
+    '.comment-input',
+    '[class*="input-box"] [contenteditable="true"]',
     '.reply-box [contenteditable="true"]',
     '[class*="comment"] [contenteditable="true"]',
     'div[contenteditable="true"]',
@@ -740,6 +743,8 @@ mod tests {
         let script = build_comment_script("测试评论").unwrap();
         // B 站评论区是 <bili-comments> web component：必须穿透 shadowRoot。
         assert!(script.contains("bili-comments"));
+        assert!(script.contains(".comments-container"));
+        assert!(script.contains(".submit"));
         assert!(script.contains("shadowRoot"));
         assert!(script.contains("deepAll"));
         // 失败原因细分（便于日志定位是评论区/编辑器/输入框/按钮哪一步）。
