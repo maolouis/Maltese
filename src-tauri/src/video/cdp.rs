@@ -361,6 +361,18 @@ impl CdpSession {
         Ok(())
     }
 
+    /// 用 CDP Input 插入文本（可信事件，小红书 contenteditable 用）。
+    pub async fn insert_text(&mut self, text: &str) -> Result<(), FailureReason> {
+        let _ = self
+            .request(
+                "Input.insertText",
+                json!({ "text": text }),
+                KEY_TIMEOUT,
+            )
+            .await?;
+        Ok(())
+    }
+
     /// 用 CDP Input 派发可信 Ctrl+Enter（B 站评论快捷键）。
     pub async fn press_ctrl_enter(&mut self) -> Result<(), FailureReason> {
         for event_type in ["keyDown", "keyUp"] {

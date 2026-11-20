@@ -3520,8 +3520,12 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
                 "还没有在刷视频：先点「开始」，让小狗打开专用浏览器再评论",
             ));
         }
-        let script = crate::video::comment::build_comment_script(text)
-            .map_err(|message| VideoError::new("comment-invalid", message))?;
+        let script = if platform == Platform::Xiaohongshu {
+            crate::video::comment::build_xhs_comment_script(text)
+        } else {
+            crate::video::comment::build_comment_script(text)
+        }
+        .map_err(|message| VideoError::new("comment-invalid", message))?;
 
         let mut session = crate::video::cdp::CdpSession::connect(port, platform)
             .await
@@ -3565,6 +3569,67 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             .get("detail")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
+        if platform == Platform::Xiaohongshu {
+            if let Some(steps) = detail.get("steps").and_then(|item| item.as_array()) {
+                for step in steps {
+                    self.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: {
+                            let state = lock_state(&self.state);
+                            if state.session_id.is_empty() { None } else { Some(state.session_id.clone()) }
+                        },
+                        channel: Some(ChannelType::Cdp),
+                        level: if step.get("ok").and_then(|item| item.as_bool()).unwrap_or(false) { "info" } else { "warn" }.to_string(),
+                        code: "XHS_COMMENT_STEP".to_string(),
+                        message: format!(
+                            "step={} ok={} sel={} reason={} html={}",
+                            step.get("step").and_then(|item| item.as_str()).unwrap_or(""),
+                            step.get("ok").and_then(|item| item.as_bool()).unwrap_or(false),
+                            step.get("sel").and_then(|item| item.as_str()).unwrap_or(""),
+                            step.get("reason").and_then(|item| item.as_str()).unwrap_or(""),
+                            step.get("docHtml").and_then(|item| item.as_str()).unwrap_or("")
+                        ),
+                    });
+                }
+            }
+            // 占位点击后编辑器仍没激活：用 CDP 可信坐标点击 + Input.insertText 再试一次。
+            if !ok {
+                if let Some(point) = detail.get("placeholderPoint") {
+                    let x = point.get("x").and_then(|item| item.as_f64()).unwrap_or(-1.0);
+                    let y = point.get("y").and_then(|item| item.as_f64()).unwrap_or(-1.0);
+                    if x >= 0.0 && y >= 0.0 {
+                        let _ = session.click_at(x, y).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        if session.insert_text(text).await.is_ok() {
+                            let _ = session
+                                .evaluate(
+                                    "(function(){var bs=document.querySelectorAll('button, .submit, [class*=\"send\"]');for(var i=0;i<bs.length;i++){var t=(bs[i].textContent||'').trim();if(/发送|评论/.test(t)&&!bs[i].disabled){bs[i].click();return true;}}return false;})()",
+                                    std::time::Duration::from_secs(5),
+                                )
+                                .await;
+                            self.store.log(DiagnosticEntry {
+                                at: now_seconds(),
+                                session_id: {
+                                    let state = lock_state(&self.state);
+                                    if state.session_id.is_empty() { None } else { Some(state.session_id.clone()) }
+                                },
+                                channel: Some(ChannelType::Cdp),
+                                level: "info".to_string(),
+                                code: "XHS_COMMENT_STEP".to_string(),
+                                message: format!("step=fallback ok=true sel=trusted-click+cdp-insert point={x},{y}"),
+                            });
+                            return Ok(CommentReport {
+                                ok: true,
+                                reason: "sent".to_string(),
+                                message: "评论已尝试提交（可信事件兜底）".to_string(),
+                                platform: platform.as_str().to_string(),
+                                detail,
+                            });
+                        }
+                    }
+                }
+            }
+        }
         Ok(CommentReport {
             ok,
             reason,

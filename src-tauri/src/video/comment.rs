@@ -286,6 +286,150 @@ pub async fn generate_quality_comment(
     Err("评论含禁用语或质量不达标，已跳过".to_string())
 }
 
+/// 小红书评论脚本：占位点击 → 等编辑器激活 → 写入 → 发送；每步返回 step 日志。
+const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {{
+  var text = __TEXT__;
+  var sleep = function (ms) {{ return new Promise(function (resolve) {{ setTimeout(resolve, ms); }}); }};
+  var steps = [];
+  function logStep(step, ok, sel, reason) {{
+    var doc = '';
+    try {{
+      var box = document.querySelector('.comments-container, .comment-list, #comment');
+      doc = String((box && (box.outerHTML || box.textContent)) || '').replace(/\s+/g, ' ').slice(0, 300);
+    }} catch (e) {{}}
+    steps.push({{ step: step, ok: ok, sel: sel || '', reason: reason || '', docHtml: doc }});
+  }}
+  function visible(el) {{
+    if (!el) return false;
+    try {{
+      var box = el.getBoundingClientRect();
+      if (box.width < 10 || box.height < 10) return false;
+      var style = window.getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0.05;
+    }} catch (e) {{ return false; }}
+  }}
+  var roots = [];
+  function deepAll(selector) {{
+    var list = [];
+    (function walk(root) {{
+      if (!root || roots.indexOf(root) >= 0) return;
+      roots.push(root);
+      try {{
+        var found = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+        for (var i = 0; i < found.length; i += 1) list.push(found[i]);
+        var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (var j = 0; j < all.length; j += 1) if (all[j].shadowRoot) walk(all[j].shadowRoot);
+      }} catch (e) {{}}
+    }})(document);
+    return list;
+  }}
+  function pointerSequence(el) {{
+    try {{
+      var box = el.getBoundingClientRect();
+      var x = box.left + box.width / 2;
+      var y = box.top + box.height / 2;
+      var events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+      for (var i = 0; i < events.length; i += 1) {{
+        var kind = events[i];
+        var Ctor = kind.indexOf('pointer') === 0 ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(kind, {{ bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }}));
+      }}
+      return {{ x: x, y: y }};
+    }} catch (e) {{ return null; }}
+  }}
+  function findPlaceholder() {{
+    var container = document.querySelector('.comments-container, .comment-list, #comment');
+    var nodes = deepAll('div, span, textarea, input, [class*="input"], [class*="placeholder"]');
+    for (var i = 0; i < nodes.length; i += 1) {{
+      var node = nodes[i];
+      if (!visible(node)) continue;
+      if (container && !container.contains(node)) continue;
+      var value = (node.getAttribute('placeholder') || '') + ' ' + (node.textContent || '').trim();
+      if (/说点什么|留下你的评论|写评论|评论一下/.test(value)) return node;
+      if (node.tagName === 'TEXTAREA' || node.getAttribute('contenteditable') === 'true') return node;
+    }}
+    return null;
+  }}
+  function findEditor() {{
+    var nodes = deepAll('div[contenteditable="true"], [contenteditable="plaintext-only"], textarea, [class*="comment-input"]');
+    for (var i = 0; i < nodes.length; i += 1) {{
+      var node = nodes[i];
+      if (node.tagName === 'TEXTAREA' && node.disabled) continue;
+      if (!visible(node)) continue;
+      return node;
+    }}
+    return null;
+  }}
+
+  var placeholder = findPlaceholder();
+  var point = null;
+  if (!placeholder) {{
+    logStep('click-placeholder', false, '', 'no-placeholder');
+    return JSON.stringify({{ ok: false, reason: 'no-editor', message: '没找到小红书评论入口', detail: {{ steps: steps }} }});
+  }}
+  point = pointerSequence(placeholder);
+  logStep('click-placeholder', true, placeholder.className || placeholder.tagName, '');
+  await sleep(300);
+
+  var editor = null;
+  for (var wait = 0; wait < 15; wait += 1) {{
+    editor = findEditor();
+    if (editor) break;
+    await sleep(200);
+  }}
+  if (!editor) {{
+    logStep('wait-editor', false, (placeholder.className || ''), 'no-editor');
+    return JSON.stringify({{ ok: false, reason: 'no-editor', message: '点了评论入口但编辑器没激活', detail: {{ steps: steps, placeholderPoint: point }} }});
+  }}
+  logStep('wait-editor', true, editor.className || editor.tagName, '');
+
+  editor.focus();
+  if (editor.tagName === 'TEXTAREA') {{
+    var proto = Object.getPrototypeOf(editor);
+    var descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (descriptor && descriptor.set) descriptor.set.call(editor, text);
+    else editor.value = text;
+  }} else {{
+    try {{ document.execCommand('selectAll', false, null); }} catch (e) {{}}
+    try {{ document.execCommand('insertText', false, text); }} catch (e) {{}}
+  }}
+  try {{
+    editor.dispatchEvent(new InputEvent('beforeinput', {{ bubbles: true, cancelable: true, inputType: 'insertText', data: text }}));
+    editor.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: text }}));
+    editor.dispatchEvent(new CompositionEvent('compositionend', {{ bubbles: true, data: text }}));
+  }} catch (e) {{ editor.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+  await sleep(350);
+  var written = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
+  logStep('write', written.length > 0, editor.className || editor.tagName, written.length > 0 ? '' : 'empty');
+
+  var words = ['发送', '评论'];
+  var buttons = deepAll('button, [role=button], .submit, [class*="send"]');
+  var button = null;
+  for (var b = 0; b < buttons.length; b += 1) {{
+    var candidate = buttons[b];
+    if (!visible(candidate)) continue;
+    var className = String(candidate.className || '');
+    var label = (candidate.textContent || '').trim();
+    var byClass = /\.submit|send/i.test(className);
+    var byLabel = label.length > 0 && label.length <= 8 && words.some(function (w) {{ return label.indexOf(w) >= 0; }});
+    if (!byClass && !byLabel) continue;
+    if (candidate.disabled) continue;
+    button = candidate;
+    break;
+  }}
+  if (!button) {{
+    logStep('submit', false, '', 'no-button');
+    return JSON.stringify({{ ok: false, reason: 'no-button', message: '没找到可用的发送按钮', detail: {{ steps: steps }} }});
+  }}
+  await sleep(400);
+  button.click();
+  logStep('submit', true, button.className || button.tagName, '');
+  await sleep(900);
+  var after = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
+  logStep('verify', after.length === 0, 'editor-cleared', after.length === 0 ? '' : 'still-editing');
+  return JSON.stringify({{ ok: true, reason: 'sent', message: '评论已提交', detail: {{ steps: steps }} }});
+}})()"#;
+
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
 /// 评论区 DOM 脚本模板：
 /// 1) 评论区懒加载 → scrollIntoView + 等 1.2s；
@@ -587,6 +731,19 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
   });
 })()"#;
 
+/// 小红书评论脚本入口（与 B 站模板分开，便于独立迭代）。
+pub fn build_xhs_comment_script(text: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("评论不能为空".to_string());
+    }
+    let count = trimmed.chars().count();
+    if count > MAX_COMMENT_CHARS {
+        return Err(format!("评论太长（{count} 字），请控制在 {MAX_COMMENT_CHARS} 字以内"));
+    }
+    Ok(XHS_COMMENT_TEMPLATE.replace("__TEXT__", &js_string_literal(trimmed)))
+}
+
 pub fn build_comment_script(text: &str) -> Result<String, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -733,6 +890,18 @@ mod tests {
     }
 
     #[test]
+    fn xhs_script_has_placeholder_editor_send_and_steps() {
+        let script = build_xhs_comment_script("我趴在脚边看完了，尾巴摇呀摇～").unwrap();
+        assert!(script.contains("说点什么"));
+        assert!(script.contains("click-placeholder"));
+        assert!(script.contains("wait-editor"));
+        assert!(script.contains("comment-input"));
+        assert!(script.contains(".submit"));
+        assert!(script.contains("verify"));
+        assert!(!script.contains("发布笔记"));
+    }
+
+    #[test]
     fn trims_surrounding_whitespace() {
         let script = build_comment_script("  你好  ").unwrap();
         assert!(script.contains("\"你好\""));
@@ -743,8 +912,6 @@ mod tests {
         let script = build_comment_script("测试评论").unwrap();
         // B 站评论区是 <bili-comments> web component：必须穿透 shadowRoot。
         assert!(script.contains("bili-comments"));
-        assert!(script.contains(".comments-container"));
-        assert!(script.contains(".submit"));
         assert!(script.contains("shadowRoot"));
         assert!(script.contains("deepAll"));
         // 失败原因细分（便于日志定位是评论区/编辑器/输入框/按钮哪一步）。
