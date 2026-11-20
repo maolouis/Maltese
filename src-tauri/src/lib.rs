@@ -1938,10 +1938,43 @@ fn set_island_overlay(
                 snapshot.anchor_x, snapshot.anchor_y, snapshot.base_w, snapshot.base_h,
                 (clamped_w as f64) / scale, (clamped_h as f64) / scale
             );
+            // 移动前预纠正：按计划矩形反推狗槽，若与落定狗槽偏差 >2px，先平移矩形（保持狗槽），
+            // 这样用户看到的是「直接到位」，而不是「先移开再被拉回」。
+            let mut move_x = clamped_x;
+            let mut move_y = clamped_y;
+            if let Some(expected) = expected_slot_from_state(&window) {
+                let planned_slot = geometry_invariant::slot_from_window(
+                    geometry_invariant::SlotRect::new(
+                        clamped_x,
+                        clamped_y,
+                        clamped_w,
+                        clamped_h,
+                    ),
+                    panel_side,
+                    panel_vertical,
+                    (snapshot.base_w * scale).round() as i32,
+                    (snapshot.base_h * scale).round() as i32,
+                );
+                let dx = planned_slot.x - expected.x;
+                let dy = planned_slot.y - expected.y;
+                if dx.abs() > 2 || dy.abs() > 2 {
+                    move_x = clamped_x - dx;
+                    move_y = clamped_y - dy;
+                    if overlay.as_deref() == Some("hover") {
+                        eprintln!(
+                            "DOUBLECLICK_GEOM phase=move pre_corrected=true planned=({clamped_x},{clamped_y}) move=({move_x},{move_y}) dx={dx} dy={dy}"
+                        );
+                    }
+                } else if overlay.as_deref() == Some("hover") {
+                    eprintln!(
+                        "DOUBLECLICK_GEOM phase=move pre_corrected=false move=({move_x},{move_y}) dx={dx} dy={dy}"
+                    );
+                }
+            }
             set_window_rect_atomic(
                 &window,
-                clamped_x,
-                clamped_y,
+                move_x,
+                move_y,
                 (clamped_w as f64) / scale,
                 (clamped_h as f64) / scale,
                 scale,
@@ -2010,10 +2043,27 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         None => create_overlay_snapshot(&window, scale)?,
     };
     let (base_w, base_h) = (snapshot.base_w, snapshot.base_h);
-    let anchor = IslandPosition {
-        x: snapshot.anchor_x,
-        y: snapshot.anchor_y,
-    };
+    // 与右键完全同源：锚点一律取「最近一次落定 / custom_position」的狗槽，不用窗口临时坐标。
+    let settled_anchor = expected_slot_from_state(&window);
+    let anchor = settled_anchor
+        .map(|slot| IslandPosition { x: slot.x, y: slot.y })
+        .unwrap_or(IslandPosition {
+            x: snapshot.anchor_x,
+            y: snapshot.anchor_y,
+        });
+    let mut snapshot = snapshot;
+    if anchor.x != snapshot.anchor_x || anchor.y != snapshot.anchor_y {
+        eprintln!(
+            "DOUBLECLICK_GEOM phase=pre source=settled old_anchor=({}, {}) new_anchor=({}, {})",
+            snapshot.anchor_x, snapshot.anchor_y, anchor.x, anchor.y
+        );
+        // 写回快照：set_island_overlay 直接用修正后的锚点，移动前后狗槽不变。
+        snapshot.anchor_x = anchor.x;
+        snapshot.anchor_y = anchor.y;
+        if let Ok(mut slot) = OVERLAY_SNAPSHOT.lock() {
+            *slot = Some(snapshot);
+        }
+    }
 
     let (panel_w, panel_h): (f64, f64) = match overlay.as_str() {
         "hover" => (320.0, 540.0),
@@ -2033,10 +2083,30 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         safe.top,
         safe.bottom,
     );
+    // 计划目标矩形（和 set_island_overlay 同一套公式），仅用于日志/预校验。
+    let plan_phys_w = ((base_w + gap + panel_w) * scale).round() as i32;
+    let plan_phys_h = ((base_h + gap + panel_h) * scale).round() as i32;
+    let plan_x = if side == "left" {
+        anchor.x + base_w_phys - plan_phys_w
+    } else {
+        anchor.x
+    };
+    let plan_y = if vertical == "above" {
+        anchor.y + base_h_phys - plan_phys_h
+    } else {
+        anchor.y
+    };
     eprintln!(
         "overlay plan ({overlay}): side={side} vertical={vertical} anchor=({}, {}) base={base_w:.1}x{base_h:.1}",
-        snapshot.anchor_x, snapshot.anchor_y
+        anchor.x, anchor.y
     );
+    if overlay.as_deref() == Some("hover") {
+        eprintln!(
+            "DOUBLECLICK_GEOM phase=pre source={} target=({plan_x},{plan_y},{plan_phys_w},{plan_phys_h}) slot=({},{}) side={side} vertical={vertical}",
+            if settled_anchor.is_some() { "settled" } else { "current-window" },
+            anchor.x, anchor.y
+        );
+    }
     // 真实路径注入：规划阶段就校验一次狗槽不变量（此时窗口还没动，超差说明锚点已算错）。
     let plan_expected = WindowRect {
         x: snapshot.anchor_x,
