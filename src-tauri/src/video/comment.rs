@@ -176,7 +176,7 @@ const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
     }
     return null;
   }
-  var SECTION_SELECTORS = ['#commentapp', '.comment-container', '[class*="comment-container"]', '[data-e2e="comment"]', '#comment', '.reply-tools', '.comment-wrapper', '.comment'];
+  var SECTION_SELECTORS = ['#commentapp', 'bili-comments', '.comment-container', '[class*="comment-container"]', '[data-e2e="comment"]', '#comment', '.reply-tools', '.comment-wrapper', '.comment'];
   var debugInfo = function (label) {
     try {
       var editable = deepAll('[contenteditable="true"]').length;
@@ -405,6 +405,23 @@ mod tests {
     fn trims_surrounding_whitespace() {
         let script = build_comment_script("  你好  ").unwrap();
         assert!(script.contains("\"你好\""));
+    }
+
+    #[test]
+    fn script_handles_bilibili_shadow_dom_and_reason_codes() {
+        let script = build_comment_script("测试评论").unwrap();
+        // B 站评论区是 <bili-comments> web component：必须穿透 shadowRoot。
+        assert!(script.contains("bili-comments"));
+        assert!(script.contains("shadowRoot"));
+        assert!(script.contains("deepAll"));
+        // 失败原因细分（便于日志定位是评论区/编辑器/输入框/按钮哪一步）。
+        assert!(script.contains("no-comment-section"));
+        assert!(script.contains("no-editor"));
+        assert!(script.contains("no-button"));
+        assert!(script.contains("login-required"));
+        // 点击态展开 + 写入事件 + 发送后 300ms 再点。
+        assert!(script.contains("发一条友善的评论"));
+        assert!(script.contains("compositionend"));
     }
 
     #[test]
