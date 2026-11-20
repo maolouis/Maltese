@@ -242,6 +242,23 @@ const AGENT_SKILL_ACTIONS: SkillAction[] = ["agent_registry", "agent_status", "d
 const VIDEO_TASTE_MIGRATION_KEY = "maltese-skills-migrated-20261119-video-taste";
 const VIDEO_TASTE_ACTIONS: SkillAction[] = ["video_taste"];
 
+const VIDEO_TASTE_KEYWORD =
+  /多刷|少刷|多看|少看|不想看|别看|口味|刷点|来点|推荐.{0,4}区|(音乐|经济|财经|科技|数码|游戏|纪录|美食|生活|知识|动画|鬼畜|影视|体育|舞蹈|时尚|汽车|健身|旅行|学习|人文|科学)区/;
+
+/**
+ * 关键词快速通道：命中口味/分区相关词时直接进 video_taste 技能，不等模型决策。
+ * 返回 null 表示交给模型判断。
+ */
+export function matchSkillByKeyword(
+  text: string,
+): { action: "video_taste"; via: "keyword" } | null {
+  if (!text) return null;
+  if (VIDEO_TASTE_KEYWORD.test(text)) {
+    return { action: "video_taste", via: "keyword" };
+  }
+  return null;
+}
+
 export function loadEnabledSkills(): SkillAction[] {
   const stored = readJson<SkillAction[] | null>(SKILLS_STORAGE_KEY, null);
   if (!stored) return SKILLS.filter((skill) => skill.group !== "clipboard").map((s) => s.action);

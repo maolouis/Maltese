@@ -458,3 +458,15 @@ localStorage[maltese-pet-vitals]，loadVitalsSummary() 返回 null → stateBarV
   格式「前几天看过《X》，我当时的想法是：…」；watch 部分 ≤30 token、总量预算不变；
 - **隐私**：设置页可关闭「把看过的视频写进记忆」（默认开），「清空记忆」同时清 `watch[]`；
 - 单测：`tests/pet-watch-memory.test.mjs`（门槛、每日 20 条、LRU/衰减、关键词 top-3、预算、开关、清空）。
+
+### 视频口味技能（video_taste）触发与回复
+
+- **关键词快速通道**：消息命中 多刷|少刷|多看|少看|不想看|别看|口味|刷点|来点|推荐…区|(音乐|经济|财经|科技|游戏|纪录|美食|…)区
+  时**跳过模型决策**，直接执行 ideo_taste；未命中才走模型判断。
+- 触发日志：console.info([SKILL_MATCH], {name, via:keyword|model, confidence})，
+  同时写入 localStorage[maltese-skill-debug] 便于取证（区分「没触发」与「触发了但解析失败」）。
+- **回复落地**：技能返回的 
+eply 直接作为聊天确认（由 Rust ideo_update_taste 生成，含实际生效标签），
+  不再让模型自由改写；执行后派发 ideo-taste-changed 刷新面板口味卡片。
+- 老用户迁移：VIDEO_TASTE_MIGRATION_KEY = maltese-skills-migrated-20261119-video-taste，
+  首次加载自动把 ideo_taste 补进启用列表，之后仍可手动关闭。

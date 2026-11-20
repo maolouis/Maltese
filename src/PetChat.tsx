@@ -5,6 +5,7 @@ import { useTranslation } from "./i18n";
 import {
   loadCustomSkills,
   loadEnabledSkills,
+  matchSkillByKeyword,
   parseSkillCall,
   runSkill,
   skillsPrompt,
@@ -615,7 +616,20 @@ export function PetChat() {
         ]);
       // 命中技能时由技能自己上报确定性任务，不再跑兜底模型推断。
       let skillHandled = false;
-      if (agentEnabled && sendImages.length === 0 && SKILL_HINT.test(text)) {
+      // 关键词快速通道：口味/分区相关直接进 video_taste，不等模型决策。
+      const keywordMatch = agentEnabled && sendImages.length === 0 ? matchSkillByKeyword(text) : null;
+      if (keywordMatch) {
+        try {
+          window.localStorage.setItem(
+            "maltese-skill-debug",
+            JSON.stringify({ at: Date.now(), name: keywordMatch.action, via: keywordMatch.via, confidence: 1 }),
+          );
+        } catch {
+          // 忽略
+        }
+        console.info("[SKILL_MATCH]", { name: keywordMatch.action, via: keywordMatch.via, confidence: 1 });
+      }
+      if (agentEnabled && sendImages.length === 0 && (keywordMatch || SKILL_HINT.test(text))) {
         const askAgent = async (prompt: string, maxTokens: number, temperature: number, source = "chat") => {
           if (chatConfig.backend === "local") {
             return askModel(prompt, [], null, { maxTokens, temperature, source });
@@ -630,27 +644,31 @@ export function PetChat() {
           return reply.text;
         };
         // 技能判断最多等 20 秒，超时/失败都退回普通聊天，绝不挡住回复。
-        const decision =
-          (await withTimeout(
-            askAgent(`${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`, 128, 0.1, "decision"),
-            20_000,
-          )) ?? "";
+        const decision = keywordMatch
+          ? JSON.stringify({ tool: "video_taste", args: { text } })
+          : (await withTimeout(
+              askAgent(`${skillsPrompt(enabledSkills, customSkills)}\n\n主人说：${text}`, 128, 0.1, "decision"),
+              20_000,
+            )) ?? "";
         const call = parseSkillCall(decision);
+        if (call) {
+          const via = keywordMatch ? "keyword" : "model";
+          try {
+            window.localStorage.setItem(
+              "maltese-skill-debug",
+              JSON.stringify({ at: Date.now(), name: call.action, via, confidence: keywordMatch ? 1 : 0.7 }),
+            );
+          } catch {
+            // 忽略
+          }
+          console.info("[SKILL_MATCH]", { name: call.action, via, confidence: keywordMatch ? 1 : 0.7 });
+        }
         if (call) {
           skillHandled = true;
           const result = await runSkill(call.action, call.args);
           const toolNote = result.ok ? result.message : `没做成：${result.message}`;
-          const summary =
-            (await withTimeout(
-              askAgent(
-                `主人说：${text}\n你刚才执行的动作结果：${result.message}\n请用简洁中文回答主人；如果结果里有搜索资料，就根据资料直接回答，不要输出 JSON。`,
-                400,
-                0.7,
-                "chat",
-              ),
-              25_000,
-            )) ?? "";
-          replyText = (summary || result.message).trim();
+          // 技能返回的 reply 直接作为确认反馈，避免模型“说做了但没生效”。
+          replyText = result.message.trim();
           persist([
             ...next,
             {
