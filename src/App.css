@@ -6450,3 +6450,35 @@ html.maltese-page-opening .island__collapsed {
   70% { translate: 0 -2px; scale: 1.01; }
   100% { translate: 0 0; scale: 1; }
 }
+
+/* 自定义字体（设置页）：界面字体 / 桌宠字体。
+   自定义字体名不存在时，浏览器自动回退到堆栈里的系统字体（fontStack 已加回退）。 */
+body {
+  font-family: var(--app-font-family, inherit);
+}
+
+.pet-chat,
+.pet-bubble-cloud,
+.pet-bubble-panel,
+.pet-state {
+  font-family: var(--pet-font-family, var(--app-font-family, inherit));
+}
+
+.sw-font {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+
+.sw-font > span {
+  min-width: 64px;
+  opacity: 0.85;
+}
+
+.sw-font select,
+.sw-font input {
+  flex: 1 1 140px;
+  min-width: 120px;
+}

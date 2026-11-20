@@ -62,6 +62,7 @@ import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { shouldSkipProactiveForChat } from "./chatGuard";
 import { MINIMIZE_BLUR_SETTLE_MS, shouldCollapseOnBlur } from "./islandMinimizeGuard";
 import { previewPetLinkage } from "./petLinkPreview";
+import { applyFontVariables } from "./fontSettings";
 import { PET_LINK_ENABLED } from "./petLinkBus";
 // 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重 + 设置页卡片。
 import {
@@ -386,6 +387,10 @@ type IslandSettings = {
   petLinkage: boolean;
   /** 消息只提醒、不显示文字；这个开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
   messagePreview: boolean;
+  /** 界面字体：preset key（default/pixel/sans/serif）或自定义字体名。 */
+  appFont: string;
+  /** 桌宠（聊天/气泡/状态条）字体：preset key 或自定义字体名。 */
+  petFont: string;
   animFrequency: AnimFrequency;
   bubbleOn: boolean;
   bubbleDurationMs: number;
@@ -710,6 +715,8 @@ const DEFAULT_SETTINGS: IslandSettings = {
   fullscreenHideBongo: true,
   petLinkage: true,
   messagePreview: false,
+  appFont: "",
+  petFont: "",
   animFrequency: "medium",
   bubbleOn: true,
   bubbleDurationMs: 6000,
@@ -1003,6 +1010,8 @@ function normalizeSettings(
     petLinkage: settings?.petLinkage !== false,
     // 消息预览默认关：只有显式打开才 true（旧版 read-content 键已在启动时清掉）。
     messagePreview: settings?.messagePreview === true,
+    appFont: typeof (settings as { appFont?: unknown } | null)?.appFont === "string" ? (settings as { appFont: string }).appFont : "",
+    petFont: typeof (settings as { petFont?: unknown } | null)?.petFont === "string" ? (settings as { petFont: string }).petFont : "",
     animFrequency: normalizeAnimFrequency(settings),
     bubbleOn: settings?.bubbleOn !== false,
     bubbleDurationMs: typeof settings?.bubbleDurationMs === "number" && Number.isFinite(settings.bubbleDurationMs)
@@ -4653,6 +4662,11 @@ function IslandApp({
     expiresAt: number;
   } | null>(null);
   const [settings, setSettings] = useState<IslandSettings>(loadSettings);
+
+  // 字体：settings 变化时写入 CSS 变量（界面 / 桌宠两套）。
+  useEffect(() => {
+    applyFontVariables(settings.appFont, settings.petFont);
+  }, [settings.appFont, settings.petFont]);
   const startPetInteraction = useCallback(
     (kind: PetInteractionKind, emotion?: PetInteractionSession["emotion"]) => {
       const next = createPetInteraction({

@@ -21,6 +21,7 @@ import { CustomSoundControl } from "./CustomSoundControl";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { previewPetLinkage } from "./petLinkPreview";
 import { PET_LINK_ENABLED } from "./petLinkBus";
+import { FONT_PRESETS, customFontName } from "./fontSettings";
 import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
@@ -84,6 +85,10 @@ type PetSettings = {
   tuckedVisibleHeight: number;
   /** 多实例联动：主狗动作传染给陪玩狗 / Bongo 呼应，默认开。 */
   petLinkage: boolean;
+  /** 界面字体（preset 或自定义字体名）。 */
+  appFont: string;
+  /** 桌宠字体（聊天/气泡/状态条）。 */
+  petFont: string;
   /** 消息只提醒、不显示文字；开关只控制「来源 + 有新消息」这类通用提示，默认关。 */
   messagePreview: boolean;
   /** 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重，默认开。 */
@@ -137,6 +142,8 @@ const DEFAULTS: PetSettings = {
   sleepAfterSeconds: 150,
   tuckedVisibleHeight: 80,
   petLinkage: true,
+  appFont: "",
+  petFont: "",
   messagePreview: false,
   petVitalsEnabled: true,
   islandScreen: "last",
@@ -425,6 +432,39 @@ export default function SettingsWindow() {
           items={[["high", "高频"], ["medium", "中频"], ["low", "低频"]]}
           onChange={(value) => update("animFrequency", value)}
         />
+
+        {(
+          [
+            ["appFont", "界面字体"],
+            ["petFont", "桌宠字体"],
+          ] as Array<["appFont" | "petFont", string]>
+        ).map(([key, label]) => {
+          const value = settings[key] ?? "";
+          const custom = customFontName(value);
+          const preset = custom ? "default" : value || "default";
+          return (
+            <div className="sw-font" key={key}>
+              <span>{label}</span>
+              <select
+                value={preset}
+                aria-label={label}
+                onChange={(event) => update(key, event.currentTarget.value)}
+              >
+                {FONT_PRESETS.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder="自定义字体名（留空用上面的预设）"
+                value={custom}
+                aria-label={`${label}自定义`}
+                onChange={(event) => update(key, event.currentTarget.value.trim())}
+              />
+            </div>
+          );
+        })}
+        <p className="sw-hint">字体不存在时自动回退系统字体；聊天、气泡、状态条使用桌宠字体。</p>
         <Switch label="点击时 Q 弹" checked={settings.clickSquash} onChange={(value) => update("clickSquash", value)} />
       </section>
 
