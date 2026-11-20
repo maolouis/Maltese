@@ -338,29 +338,49 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
     } catch (e) { return null; }
   }
   function findPlaceholder() {
-    var container = document.querySelector('.comments-container, .comment-list, #comment');
-    var nodes = deepAll('div, span, textarea, input, [class*="input"], [class*="placeholder"]');
-    for (var i = 0; i < nodes.length; i += 1) {
-      var node = nodes[i];
+    // 小红书评论输入框通常在底部固定条（不在 .comments-container 内）：先全局找固定条。
+    var fixedSelector = '.input-box, [class*="input-box"], [placeholder*="说点什么"], [contenteditable="true"], [class*="comment-editor"], [class*="editor"]';
+    var fixed = deepAll(fixedSelector);
+    for (var f = 0; f < fixed.length; f += 1) {
+      var node = fixed[f];
       if (!visible(node)) continue;
-      if (container && !container.contains(node)) continue;
-      var value = (node.getAttribute('placeholder') || '') + ' ' + (node.textContent || '').trim();
-      if (/说点什么|留下你的评论|写评论|评论一下/.test(value)) return node;
-      if (node.tagName === 'TEXTAREA' || node.getAttribute('contenteditable') === 'true') return node;
+      // 排除视频播放器/搜索框等无关区域。
+      var cls = String(node.className || '');
+      var ph = String(node.getAttribute('placeholder') || '');
+      if (/bpx-player|search|header/i.test(cls)) continue;
+      if (node.tagName === 'TEXTAREA' || /说点什么|留下你的评论|写评论|评论一下|发布评论/.test(ph + ' ' + (node.textContent || '').trim() + ' ' + cls)) {
+        return node;
+      }
+    }
+    // 其次：滚到评论区，在 .comments-container 内找。
+    var container = document.querySelector('.comments-container, .comment-list, #comment');
+    if (container) {
+      try { container.scrollIntoView({ block: 'center' }); } catch (e) {}
+    }
+    var nodes = deepAll('div, span, textarea, input, [class*="input"], [class*="placeholder"], [class*="publish"]');
+    for (var i = 0; i < nodes.length; i += 1) {
+      var candidate = nodes[i];
+      if (!visible(candidate)) continue;
+      if (container && !container.contains(candidate)) continue;
+      var value = (candidate.getAttribute('placeholder') || '') + ' ' + (candidate.textContent || '').trim() + ' ' + String(candidate.className || '');
+      if (/说点什么|留下你的评论|写评论|评论一下|发布评论|comment-input|input-box/i.test(value)) return candidate;
     }
     return null;
   }
+
   function findEditor() {
     var nodes = deepAll('div[contenteditable="true"], [contenteditable="plaintext-only"], textarea, [class*="comment-input"]');
     for (var i = 0; i < nodes.length; i += 1) {
       var node = nodes[i];
       if (node.tagName === 'TEXTAREA' && node.disabled) continue;
+      if (node.getAttribute('contenteditable') === 'true' && node.offsetHeight <= 20) continue;
       if (!visible(node)) continue;
       return node;
     }
     return null;
   }
 
+  try {
   var placeholder = findPlaceholder();
   var point = null;
   if (!placeholder) {
@@ -428,6 +448,10 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
   var after = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
   logStep('verify', after.length === 0, 'editor-cleared', after.length === 0 ? '' : 'still-editing');
   return JSON.stringify({ ok: true, reason: 'sent', message: '评论已提交', detail: { steps: steps } });
+  } catch (err) {
+    logStep('script', false, '', String(err));
+    return JSON.stringify({ ok: false, reason: 'script-error', message: String(err), detail: { steps: steps } });
+  }
 })()"#;
 
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
@@ -897,6 +921,8 @@ mod tests {
         assert!(script.contains("wait-editor"));
         assert!(script.contains("comment-input"));
         assert!(script.contains(".submit"));
+        assert!(script.contains("script-error"));
+        assert!(script.contains("input-box"));
         assert!(script.contains("verify"));
         assert!(!script.contains("发布笔记"));
     }

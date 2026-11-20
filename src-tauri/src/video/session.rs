@@ -3570,6 +3570,25 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         if platform == Platform::Xiaohongshu {
+            if reason == "script-error" {
+                self.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: {
+                        let state = lock_state(&self.state);
+                        if state.session_id.is_empty() {
+                            None
+                        } else {
+                            Some(state.session_id.clone())
+                        }
+                    },
+                    channel: Some(ChannelType::Cdp),
+                    level: "warn".to_string(),
+                    code: "XHS_COMMENT_STEP".to_string(),
+                    message: format!(
+                        "step=script ok=false reason=script-error message={message}"
+                    ),
+                });
+            }
             if let Some(steps) = detail.get("steps").and_then(|item| item.as_array()) {
                 for step in steps {
                     self.store.log(DiagnosticEntry {
