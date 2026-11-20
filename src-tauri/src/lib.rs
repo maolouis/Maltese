@@ -143,6 +143,7 @@ static FRONTEND_READY_AT: OnceLock<Instant> = OnceLock::new();
 // 启动阶段每一步的时间戳：卡死时直接看最后一条 [startup] 停在哪。
 static STARTUP_START: OnceLock<Instant> = OnceLock::new();
 static STARTUP_WATCHDOG_FIRED: AtomicBool = AtomicBool::new(false);
+static FIRST_INTERACTION_AFTER_READY: AtomicBool = AtomicBool::new(false);
 
 fn startup_start() -> Instant {
     *STARTUP_START.get_or_init(Instant::now)
@@ -677,6 +678,14 @@ fn set_island_interaction(
     glass_tint: Option<String>,
 ) -> Result<String, String> {
     let window = main_window(&app)?;
+    if FRONTEND_READY_AT.get().is_some()
+        && !FIRST_INTERACTION_AFTER_READY.swap(true, Ordering::SeqCst)
+    {
+        eprintln!(
+            "[startup] first_interaction_after_ready +{}ms",
+            startup_start().elapsed().as_millis()
+        );
+    }
     let mode = IslandMode::from_value(&mode)?;
     let previous_state = read_window_state();
     // 操作前期望的狗槽：custom_position 优先，否则最近一次落定矩形（右键/展开的锚点语义）。
@@ -3037,6 +3046,13 @@ fn frontend_ready(app: AppHandle) -> Result<(), String> {
     if first_ready {
         eprintln!("frontend reported first paint ready");
         startup_mark("frontend_ready");
+        // 首帧后心跳：卡死时看停在第几拍，区分「首帧前」还是「首帧后」卡死。
+        tauri::async_runtime::spawn_blocking(|| {
+            for (delay_seconds, label) in [(1u64, "+1s"), (2u64, "+3s"), (7u64, "+10s")] {
+                std::thread::sleep(std::time::Duration::from_secs(delay_seconds));
+                eprintln!("[startup] heartbeat frontend_ready{label} tick");
+            }
+        });
     }
     if ISLAND_SHOWN.load(Ordering::SeqCst) {
         return Ok(());
