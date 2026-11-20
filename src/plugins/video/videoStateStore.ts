@@ -67,7 +67,8 @@ export type VideoStoreState = {
   taste: TasteProfile | null;
   preview: DigestDraft | null;
   browserStatus: BrowserStatus | null;
-  autoCommentNotice: { ok: boolean; message: string } | null;
+  /** 最近一条自动评论结果：成功绿色/失败橙色，5 秒后自动清空。 */
+  autoCommentNotice: { ok: boolean; message: string; at: number } | null;
 };
 
 const OLD_KEYS = ["maltese-video-auto-comment", "maltese-video-auto-send-comment"];
@@ -292,7 +293,12 @@ function startCoordinator() {
   });
   unlistenComment = listen<{ ok?: unknown; message?: unknown }>("video-auto-comment", (event) => {
     const message = typeof event.payload?.message === "string" ? event.payload.message : "自动评论没有完成";
-    publish({ autoCommentNotice: { ok: event.payload?.ok === true, message } });
+    const at = Date.now();
+    publish({ autoCommentNotice: { ok: event.payload?.ok === true, message, at } });
+    // 面板状态区高亮 5 秒后自动清空（气泡另有独立展示）。
+    window.setTimeout(() => {
+      if (state.autoCommentNotice?.at === at) publish({ autoCommentNotice: null });
+    }, 5000);
   });
 }
 

@@ -293,8 +293,16 @@ export function VideoAutomationPanel({ onNotice }: Props) {
         <p className="video-automation__muted">当前使用较低能力通道，时长与互动可能不完整。</p>
       )}
       {video.autoCommentNotice && (
-        <p className="video-automation__muted" role="status">
-          自动评论：{video.autoCommentNotice.message}
+        <p
+          className={`video-comment-notice ${
+            video.autoCommentNotice.ok
+              ? "video-comment-notice--ok"
+              : "video-comment-notice--failed"
+          }`}
+          role="status"
+        >
+          {video.autoCommentNotice.ok ? "✅ 自动评论：" : "⚠️ 自动评论："}
+          {video.autoCommentNotice.message}
         </p>
       )}
 

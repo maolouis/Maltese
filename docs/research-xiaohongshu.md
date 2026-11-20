@@ -114,3 +114,36 @@
 - [huashu-chrome 小红书实测笔记](https://github.com/shuaipotian-joke/huashu-chrome/blob/HEAD/docs/%E7%BB%8F%E9%AA%8C/xiaohongshu.com.md)（2026-09 发布页 DOM：18 图、tiptap 正文、话题候选、closed shadow DOM 发布按钮）
 - [开放平台 API 实操](https://cloud.tencent.cn/developer/article/2735161)（OAuth2/资质/笔记接口，个人限制；**发布权限需向官方核实**）
 - 本机代码：`src-tauri/src/video/{model,adapter,extract,session,browser}.rs`、`src/plugins/video/*`；实测 `GET /explore` 200 含登录、creator `/publish/publish` 200 登录页
+## 9. 图片懒加载处理与已知易碎点（2026-11-20 实测补充）
+
+### 9.1 懒加载处理（已实现）
+
+- 详情页 `Page.navigate` 成功、页面就绪后，先 `prime` 一次：
+  `window.scrollTo(0, document.body.scrollHeight)` → 回顶 → 对滑动画廊逐张
+  `scrollIntoView({block:"center"})`（每步 180–220ms），触发首屏外/轮播图加载；
+- 轮询图片签名（`src` → `data-src` → `srcset` 第一项），签名**连续 2 次 300ms 相同**视为稳定，
+  最多等 6s；随后才执行抽取脚本；
+- 抽取时同一来源再读一遍 `src / data-src / srcset`，过滤 `data:`、`blob:`、
+  `/placeholder` 与 `complete` 且 `naturalWidth<=1` 的占位图；
+- `image_urls` 去重按**去掉 query/hash 的路径**（`?imageView2/…` 参数不同视为同一张），
+  Rust 侧 `normalize_image_urls` 再做一次同样规则的兜底去重；
+- 抽不到图时落诊断日志：
+  `XHS_EXTRACT_MISS field=image_urls url=… reason=selector-empty|placeholder-only|lazy-not-loaded`。
+
+### 9.2 其它字段健壮性
+
+- 点赞/收藏：多套选择器（`.like-wrapper .count`、`.interact-container .count`、
+  `[class*="like"] .count`、`.collect-wrapper .count`…）任一命中即取；解析 `1.2万`→12000、`3k`→3000；
+- 发布时间：`.date`、`.bottom-container .date`、`time`、`[class*="date"]`，支持
+  「刚刚 / N分钟前 / N小时前 / 昨天 / YYYY-MM-DD / MM-DD」（未来日期回退到上一年）；
+- 正文/标签：`.desc`、`#detail-desc`、`[class*="desc"]`；标签取正文里以 `#` 开头的 `a` 文本。
+
+### 9.3 已知易碎点
+
+- 小红书 Web 前端更新频繁，`#detail-title`、`.note-slider`、`.like-wrapper` 等 class 可能改名；
+  选择器均带 `[class*="…"]` 兜底，但仍需按 `XHS_EXTRACT_MISS` / 缺字段日志回归；
+- 滑动画廊若未真正切换，部分图片仍可能拿不到（`lazy-not-loaded`），此时 `image_urls` 会偏少但不会崩；
+- 点赞/收藏/日期在首屏异步渲染前可能短暂缺失（值为 `null`），不是采集失败；
+- 登录墙/验证码/风控未做绕过（只识别并停止）；未登录时 explore feed 可用，但部分笔记会跳登录；
+- 图片直链有防盗链（`sns-webpic-qc.xhscdn.com` 直链 403）：本插件**只记录 URL、不下载**，
+  再发布一律使用平台「文生图」，不搬运原图。

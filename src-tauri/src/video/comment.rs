@@ -132,6 +132,182 @@ pub async fn generate_content_comment(
 }
 
 /// 校验 + 拼装脚本。返回 Err 时说明为什么不能发。
+/// 评论区 DOM 脚本模板：
+/// 1) 评论区懒加载 → scrollIntoView + 等 1.2s；
+/// 2) B 站评论框是点击态 → 先点占位元素展开编辑器；
+/// 3) 找 textarea / contenteditable；
+/// 4) 原生 setter + input/beforeinput/compositionend 写值；
+/// 5) 找发送按钮并点击。
+/// 失败原因细分：no-comment-section / no-editor / no-input / no-button。
+const COMMENT_SCRIPT_TEMPLATE: &str = r#"(async function () {
+  var text = __TEXT__;
+  var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+  function visible(el) {
+    if (!el) return false;
+    var box = el.getBoundingClientRect();
+    if (box.width < 40 || box.height < 14) return false;
+    var style = window.getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0.05;
+  }
+  // B 站2026评论区是 <bili-comments> web component（shadow DOM 包裹），普通 querySelector 进不去。
+  function deepAll(selector) {
+    var out = [];
+    var roots = [];
+    (function walk(root) {
+      if (!root || roots.indexOf(root) >= 0) return;
+      roots.push(root);
+      try {
+        var found = root.querySelectorAll ? root.querySelectorAll(selector) : [];
+        for (var i = 0; i < found.length; i += 1) out.push(found[i]);
+        var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (var j = 0; j < all.length; j += 1) {
+          if (all[j].shadowRoot) walk(all[j].shadowRoot);
+        }
+      } catch (e) {}
+    })(document);
+    return out;
+  }
+  function firstVisible(selectors) {
+    for (var i = 0; i < selectors.length; i += 1) {
+      var nodes = deepAll(selectors[i]);
+      for (var j = 0; j < nodes.length; j += 1) {
+        if (visible(nodes[j])) return nodes[j];
+      }
+    }
+    return null;
+  }
+  var SECTION_SELECTORS = ['#commentapp', '.comment-container', '[class*="comment-container"]', '[data-e2e="comment"]', '#comment', '.reply-tools', '.comment-wrapper', '.comment'];
+  var debugInfo = function (label) {
+    try {
+      var editable = deepAll('[contenteditable="true"]').length;
+      var textarea = deepAll('textarea').length;
+      var box = deepAll('.reply-box, [class*="editor"], [class*="comment"], bili-comments, #commentapp')[0] || null;
+      var html = box ? String(box.outerHTML || '').replace(/\s+/g, ' ').slice(0, 300) : '';
+      return label + ' section=' + Boolean(section) + ' editable=' + editable + ' textarea=' + textarea + ' html=' + html;
+    } catch (e) {
+      return label;
+    }
+  };
+  // 1) 评论区是懒加载的：先滚到位置，等 1.2s 让 DOM 渲染。
+  var section = firstVisible(SECTION_SELECTORS);
+  if (section) {
+    try { section.scrollIntoView({ block: 'center' }); } catch (e) {}
+  }
+  await sleep(1200);
+  section = section || firstVisible(SECTION_SELECTORS);
+  if (!section) {
+    return JSON.stringify({ ok: false, reason: "no-comment-section", message: "没找到评论区（页面可能没加载完或没有登录）" });
+  }
+  // 评论区可能刚渲染：再等一次并滚到可见位置。
+  await sleep(600);
+  // 未登录时评论区只显示「登录后参与评论」，没有输入框：直接给出可执行原因。
+  var sectionText = (section && section.textContent) || (document.body && document.body.innerText) || '';
+  var loginGate = /登录后参与评论|请先登录|登录后查看|扫码登录/.test(sectionText.slice(0, 4000));
+  // 2) B 站评论框默认是「点击态」：先点占位元素展开真正的编辑器。
+  var placeholderSelectors = [
+    '.reply-box .input-area',
+    '.reply-box [class*="input"]',
+    '[class*="publish"] [class*="input"]',
+    '[class*="publish"]',
+    '.reply-box',
+    '[class*="comment-input"]',
+    '[class*="editor"]',
+    '#comment [class*="input"]'
+  ];
+  var placeholder = firstVisible(placeholderSelectors);
+  if (!placeholder) {
+    var candidates = deepAll('[contenteditable="false"], .reply-box, [class*="input-area"], [class*="comment-box"]');
+    for (var i = 0; i < candidates.length; i += 1) {
+      var node = candidates[i];
+      if (!visible(node)) continue;
+      if (/发一条友善的评论|善意的评论|说点什么|写评论/.test(node.textContent || "")) { placeholder = node; break; }
+    }
+  }
+  if (placeholder) {
+    try { placeholder.click(); } catch (e) {}
+    try { placeholder.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); placeholder.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); } catch (e) {}
+    await sleep(1500);
+  }
+  // 3) 真正的输入框：textarea / contenteditable=true / comment-input。
+  var inputSelectors = [
+    '.reply-box [contenteditable="true"]',
+    '[class*="comment"] [contenteditable="true"]',
+    'div[contenteditable="true"]',
+    '[contenteditable="plaintext-only"]',
+    'textarea',
+    '[class*="comment-input"]',
+    '[class*="editor"] [contenteditable="true"]',
+    '.bili-comment [contenteditable="true"]'
+  ];
+  var inputs = [];
+  for (var k = 0; k < inputSelectors.length; k += 1) {
+    var found = deepAll(inputSelectors[k]);
+    for (var m = 0; m < found.length; m += 1) {
+      var el = found[m];
+      if (!visible(el)) continue;
+      if (el.closest('header, nav, [class*="search" i]')) continue;
+      if (inputs.indexOf(el) < 0) inputs.push(el);
+    }
+  }
+  var scoped = inputs.filter(function (el) {
+    return Boolean(el.closest('#commentapp, .comment-container, [class*="comment" i], [class*="reply" i], form'));
+  });
+  var input = scoped.length ? scoped[scoped.length - 1] : inputs[inputs.length - 1];
+  if (!input) {
+    if (loginGate) {
+      return JSON.stringify({ ok: false, reason: "login-required", message: "评论区要求登录：先在小狗专用窗口登录 B 站，这条先没评" });
+    }
+    return JSON.stringify({ ok: false, reason: "no-editor", message: "评论区已展开，但没找到输入框 | " + debugInfo("no-editor") });
+  }
+  input.focus();
+  try { input.click(); } catch (e) {}
+  await sleep(200);
+  // 4) 写值：原生 setter + input/compositionend；contenteditable 用 insertText/beforeinput。
+  if (input.tagName === "TEXTAREA") {
+    var proto = Object.getPrototypeOf(input);
+    var descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && descriptor.set) descriptor.set.call(input, text);
+    else input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    try { document.execCommand("selectAll", false, null); } catch (e) {}
+    var inserted = false;
+    try { inserted = document.execCommand("insertText", false, text); } catch (e) { inserted = false; }
+    if (!inserted) {
+      input.textContent = text;
+    }
+    try {
+      input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: text }));
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    } catch (e) {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    try {
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: text }));
+    } catch (e) {}
+  }
+  await sleep(300);
+  // 5) 发送按钮：.reply-send / 文本含 发布/发送/评论。
+  var words = ["发布", "发送", "评论", "回复"];
+  var buttons = deepAll('button, [role=button], .reply-send, [class*="send"], [class*="publish"]');
+  var button = null;
+  for (var b = 0; b < buttons.length; b += 1) {
+    var candidate = buttons[b];
+    if (!visible(candidate)) continue;
+    var className = String(candidate.className || "");
+    var label = (candidate.textContent || "").trim();
+    var looksLikeSend = /reply-send|send/i.test(className);
+    var labelMatches = label.length > 0 && label.length <= 8 && words.some(function (word) { return label.indexOf(word) >= 0; });
+    if (looksLikeSend || labelMatches) { button = candidate; break; }
+  }
+  if (!button) {
+    return JSON.stringify({ ok: false, reason: "no-button", message: "评论已填入，但没找到发送按钮 | " + debugInfo("no-button") });
+  }
+  button.click();
+  return JSON.stringify({ ok: true, reason: "sent", message: "评论已提交" });
+})()"#;
+
 pub fn build_comment_script(text: &str) -> Result<String, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -142,68 +318,7 @@ pub fn build_comment_script(text: &str) -> Result<String, String> {
         return Err(format!("评论太长（{count} 字），请控制在 {MAX_COMMENT_CHARS} 字以内"));
     }
     let literal = js_string_literal(trimmed);
-
-    // 脚本要点：
-    // 1. 找可见的评论输入框（textarea 或 contenteditable），优先在评论区域里；
-    // 2. 用原生 setter + input 事件写值，React/Vue 页面才认；
-    // 3. 点「发送/发布/评论」按钮；
-    // 4. 返回 JSON，前端据此显示结果。
-    let script = format!(
-        r#"(function(){{
-  var text = {literal};
-  function visible(el) {{
-    if (!el) return false;
-    var r = el.getBoundingClientRect();
-    if (r.width < 40 || r.height < 14) return false;
-    var s = window.getComputedStyle(el);
-    return s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity) > 0.05;
-  }}
-  var holders = Array.prototype.slice.call(
-    document.querySelectorAll('textarea, div[contenteditable="true"], [contenteditable="plaintext-only"]')
-  ).filter(visible);
-  if (holders.length === 0) {{
-    return JSON.stringify({{ ok: false, reason: "no-input", message: "没找到评论输入框（页面可能没加载完或没有登录）" }});
-  }}
-  var commentScoped = holders.filter(function(el) {{
-    var box = el.closest('[class*="comment" i], [id*="comment" i], [class*="reply" i]');
-    return Boolean(box);
-  }});
-  var input = (commentScoped.length ? commentScoped : holders).pop();
-  input.focus();
-  if (input.tagName === "TEXTAREA") {{
-    var proto = Object.getPrototypeOf(input);
-    var setter = Object.getOwnPropertyDescriptor(proto, "value");
-    if (setter && setter.set) setter.set.call(input, text);
-    else input.value = text;
-  }} else {{
-    input.textContent = text;
-  }}
-  input.dispatchEvent(new Event("input", {{ bubbles: true }}));
-  input.dispatchEvent(new Event("change", {{ bubbles: true }}));
-
-  var words = ["发送", "发布", "评论", "回复"];
-  var buttons = Array.prototype.slice.call(document.querySelectorAll("button, [role=button], span, div"))
-    .filter(function(el) {{
-      if (!visible(el)) return false;
-      var label = (el.textContent || "").trim();
-      return label.length > 0 && label.length <= 6 && words.indexOf(label) >= 0;
-    }});
-  var button = null;
-  for (var i = 0; i < buttons.length; i += 1) {{
-    var candidate = buttons[i];
-    var scope = candidate.closest('[class*="comment" i], [class*="reply" i], [class*="send" i]');
-    if (scope || candidate.closest("form")) {{ button = candidate; break; }}
-  }}
-  if (!button && buttons.length) button = buttons[buttons.length - 1];
-  if (!button) {{
-    return JSON.stringify({{ ok: false, reason: "no-button", message: "已经填好评论，但没找到发送按钮" }});
-  }}
-  button.click();
-  return JSON.stringify({{ ok: true, reason: "sent", message: "评论已提交" }});
-}})()"#,
-    literal = literal
-    );
-    Ok(script)
+    Ok(COMMENT_SCRIPT_TEMPLATE.replace("__TEXT__", &literal))
 }
 
 /// 安全地生成 JS 字符串字面量（含引号与 U+2028/U+2029 处理，防止行分隔符打断脚本）。

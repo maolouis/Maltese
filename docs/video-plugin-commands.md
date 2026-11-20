@@ -85,3 +85,13 @@ WORST_UI_MS=13
 - 采集循环仍然只跑在独立 async task（`tauri::async_runtime::spawn`）；
 - 共享状态锁内不做 await / IO；需要 await 的导航、评论、落盘都在锁外完成；
 - 评论派发不 await（`spawn_auto_comment` 独立 task），不阻塞采集。
+## 自动评论：评论区选择器与气泡（2026-11-20）
+
+- 评论区懒加载：先滚到评论区（`#commentapp` / `.comment-container` / `<bili-comments>` 等），等 1.2s 再展开；
+- **B 站评论区是 Shadow DOM（`<bili-comments>` web component）**：脚本用递归 `deepAll()` 穿透 `shadowRoot` 查询输入框/发送按钮；
+- B 站评论框是点击态：先点 `.reply-box .input-area` / 文本「发一条友善的评论」的占位元素，等 1.5s；
+- 写入：textarea 用原生 setter；contenteditable 用 `execCommand("insertText")` + `beforeinput`/`input`/`compositionend`；
+- 失败原因细分：`no-comment-section` / `no-editor` / `no-input` / `no-button` / `login-required`（评论区只有「登录后参与评论」时）；
+- 失败日志带 DOM 诊断（`section= editable= textarea= html=`，html 是评论区外层 300 字符片段）；
+- 气泡：成功 `{kind:"posted"}`；失败 `{kind:"failed", text:"没找到评论区/输入框，这条先没评（原因：…）"}`；
+  展开态面板状态区绿色/橙色高亮 5 秒；同类失败原因 60s 内只提示一次（不刷屏）。

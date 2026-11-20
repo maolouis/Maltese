@@ -1412,3 +1412,35 @@
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.86);
 }
+
+/* 面板状态区：自动评论结果（成功绿 / 失败橙，5 秒后自动消失） */
+.video-comment-notice {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid transparent;
+}
+
+.video-comment-notice--ok {
+  background: rgba(45, 120, 82, 0.14);
+  border-color: rgba(45, 120, 82, 0.4);
+  color: #1d5237;
+}
+
+.video-comment-notice--failed {
+  background: rgba(196, 92, 60, 0.14);
+  border-color: rgba(196, 92, 60, 0.42);
+  color: #7a3418;
+}
+
+.island__expanded .video-comment-notice--ok {
+  background: rgba(140, 230, 180, 0.18);
+  color: #d9ffe8;
+}
+
+.island__expanded .video-comment-notice--failed {
+  background: rgba(255, 170, 140, 0.2);
+  color: #ffd9c9;
+}

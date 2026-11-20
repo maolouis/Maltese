@@ -42,7 +42,7 @@ export type VideoPluginState = {
   taste: TasteProfile | null;
   preview: DigestDraft | null;
   browserStatus: BrowserStatus | null;
-  autoCommentNotice: { ok: boolean; message: string } | null;
+  autoCommentNotice: { ok: boolean; message: string; at: number } | null;
   refresh: () => Promise<void>;
   loadBrowserStatus: () => Promise<void>;
   closeBrowser: () => Promise<void>;

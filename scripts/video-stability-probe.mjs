@@ -70,6 +70,11 @@ function parseArgs(argv) {
     pageInterval: 15,
     maxItems: 200,
     account: true,
+    autoComment: false,
+    commentDryRun: true,
+    commentBackend: "local",
+    commentBaseUrl: "http://127.0.0.1:8080/v1",
+    commentModel: "",
     report: "",
   };
   for (const raw of argv.slice(2)) {
@@ -80,6 +85,11 @@ function parseArgs(argv) {
     else if (key === "page-interval") options.pageInterval = Math.max(15, Number(value || 15));
     else if (key === "max-items") options.maxItems = Number(value || 200);
     else if (key === "no-account") options.account = false;
+    else if (key === "auto-comment") options.autoComment = true;
+    else if (key === "comment-dry-run") options.commentDryRun = value !== "false";
+    else if (key === "comment-backend") options.commentBackend = value || "local";
+    else if (key === "comment-base-url") options.commentBaseUrl = value || options.commentBaseUrl;
+    else if (key === "comment-model") options.commentModel = value || "";
     else if (key === "report") options.report = value || "";
     else if (key === "help" || key === "-h") {
       console.log(
@@ -323,8 +333,21 @@ async function main() {
       sampleIntervalSeconds: 2,
       maxMinutes: Math.max(1, Math.ceil(options.minutes)),
       maxItems: options.maxItems,
-      autoComment: false,
-      commentDryRun: true,
+      autoComment: options.autoComment,
+      commentDryRun: options.commentDryRun,
+      ...(options.autoComment
+        ? {
+            commentModel: {
+              backend: options.commentBackend,
+              baseUrl: options.commentBaseUrl,
+              model: options.commentModel,
+              character: "xiaobai",
+              maxTokens: 128,
+              temperature: 0.55,
+              topP: 0.9,
+            },
+          }
+        : {}),
     },
   });
   const sessionId = startedStatus?.sessionId || "";

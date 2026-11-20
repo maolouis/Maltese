@@ -373,6 +373,9 @@ struct RuntimeState {
     cdp_port: u16,
     /// 本轮评论记录（历史详情用）。
     comments: Vec<SessionComment>,
+    /// 最近一次评论失败提示的原因与时间（同类原因 60s 内不重复弹气泡）。
+    last_comment_notice_reason: String,
+    last_comment_notice_at: u64,
     /// 稳定性改造：本轮导航轮次、失败 URL 数、成功采集轮次、已采到的不同视频 id。
     round_index: u64,
     failed_urls: u32,
@@ -418,6 +421,8 @@ impl Default for RuntimeState {
             diagnostics: 0,
             cdp_port: 0,
             comments: Vec::new(),
+            last_comment_notice_reason: String::new(),
+            last_comment_notice_at: 0,
             round_index: 0,
             failed_urls: 0,
             collected_rounds: 0,
@@ -497,6 +502,120 @@ const PAGE_PROBE_JS: &str = r#"
   };
 })()
 "#;
+
+enum XhsMediaState {
+    /// 图片候选已经稳定（不保证字段一定非空，抽取结果再看）。
+    Ready,
+    /// 没有可用图片，带上可诊断原因。
+    NoImages(&'static str),
+}
+
+impl XhsMediaState {
+    fn reason(&self) -> &'static str {
+        match self {
+            XhsMediaState::Ready => "lazy-not-loaded",
+            XhsMediaState::NoImages(reason) => reason,
+        }
+    }
+}
+
+/// 触发小红书图片懒加载：页面滚到底再回顶 + 画廊逐张 scrollIntoView。
+const XHS_PRIME_JS: &str = r#"
+(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  window.scrollTo(0, document.body.scrollHeight);
+  await sleep(220);
+  window.scrollTo(0, 0);
+  await sleep(220);
+  const nodes = Array.from(document.querySelectorAll('.note-slider img, .swiper-slide img, .media-container img, #noteContainer img, img[data-src], img[src*="xhscdn"]'));
+  for (const node of nodes.slice(0, 20)) {
+    try { node.scrollIntoView({ block: 'center' }); } catch (e) {}
+    await sleep(180);
+  }
+  window.scrollTo(0, 0);
+  return nodes.length;
+})()
+"#;
+
+/// 图片候选签名：src / data-src / srcset 第一项，按去 query 的路径去重。
+const XHS_IMAGE_SIG_JS: &str = r#"
+(function () {
+  const resolve = (image) => {
+    const src = image.currentSrc || image.src || '';
+    const data = image.getAttribute('data-src') || '';
+    const srcset = image.getAttribute('srcset') || '';
+    const first = ((srcset.split(',')[0] || '').trim().split(/s+/)[0] || '');
+    const url = [src, data, first].find((value) => /^https?:/.test(value) && !/^(data|blob):/.test(value)) || '';
+    return url;
+  };
+  const nodes = Array.from(document.querySelectorAll('.note-slider img, .swiper-slide img, .media-container img, #noteContainer img, .note-content img, img[data-src], img[src*="xhscdn"]'));
+  const keys = new Set();
+  const urls = [];
+  for (const node of nodes) {
+    const url = resolve(node);
+    if (!url) continue;
+    if (/(avatar|emoji|icon|feeds\/|comment|static|fe-platform|guide|logo|sprite|watermark|placeholder)/i.test(url)) continue;
+    const key = url.split('?')[0].split('#')[0];
+    if (keys.has(key)) continue;
+    keys.add(key);
+    urls.push(url);
+    if (urls.length >= 18) break;
+  }
+  return JSON.stringify({ total: nodes.length, urls: urls });
+})()
+"#;
+
+/// 小红书导航后先等图片懒加载稳定（最多 6s，连续 2 次 300ms 相同即稳定）。
+async fn prime_xhs_media(cdp: &mut CdpSession) -> XhsMediaState {
+    let _ = cdp
+        .evaluate(XHS_PRIME_JS, Duration::from_secs(12))
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut last = String::new();
+    let mut stable = 0u32;
+    let mut total = 0usize;
+    let mut urls: Vec<String> = Vec::new();
+    loop {
+        let signature = cdp
+            .evaluate(XHS_IMAGE_SIG_JS, EVALUATE_TIMEOUT)
+            .await
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&signature) {
+            total = parsed.get("total").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
+            urls = parsed
+                .get("urls")
+                .and_then(|value| value.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+        if signature == last && !signature.is_empty() {
+            stable = stable.saturating_add(1);
+            if stable >= 2 {
+                break;
+            }
+        } else {
+            stable = 0;
+            last = signature;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    if !urls.is_empty() {
+        XhsMediaState::Ready
+    } else if total == 0 {
+        XhsMediaState::NoImages("selector-empty")
+    } else {
+        XhsMediaState::NoImages("placeholder-only")
+    }
+}
 
 /// navigate 后等待「页面关键信息就绪」的最长时间与轮询间隔。
 const PAGE_READY_WAIT_SECONDS: u64 = 8;
@@ -1891,6 +2010,12 @@ impl SessionEngine {
             };
             cdp_failures = 0;
 
+            // 小红书图片是懒加载：导航后先触发滚动、等图片 src 稳定，再抽取。
+            let mut xhs_media = XhsMediaState::Ready;
+            if platform == Platform::Xiaohongshu {
+                xhs_media = prime_xhs_media(&mut session).await;
+            }
+
             // 页面关键信息就绪 → 取事实（标题/时长/作者/互动）。
             // 刚到位时 video 元数据可能还没来（duration=0 会被误判成「短且无作者」），
             // 因此对可重试的伪条目判定最多再试 3 次（约 2 秒）。
@@ -1947,6 +2072,20 @@ impl SessionEngine {
                 );
                 continue;
             };
+
+            if platform == Platform::Xiaohongshu && facts.image_urls.is_empty() {
+                self.log_event(
+                    Some(&session_id),
+                    Some(ChannelType::Cdp),
+                    "warn",
+                    "XHS_EXTRACT_MISS",
+                    format!(
+                        "field=image_urls url={} reason={}",
+                        target.url,
+                        xhs_media.reason()
+                    ),
+                );
+            }
 
             // 页面分类：风控直接停；登录墙进入等待登录；视频页（含平台适配器判成 Feed 的详情页）继续采集。
             match adapter.classify_page(&facts) {
@@ -2330,6 +2469,60 @@ impl SessionEngine {
         profile
     }
 
+    /// 评论失败提示：气泡 + 面板提示都发；同类原因 60s 内只提示一次（不刷屏）。
+    fn comment_failure_notice(&self, app: &AppHandle, url: &str, reason: &str, message: &str) {
+        let now = now_seconds();
+        {
+            let mut state = lock_state(&self.state);
+            if state.last_comment_notice_reason == reason
+                && now.saturating_sub(state.last_comment_notice_at) < 60
+            {
+                return;
+            }
+            state.last_comment_notice_reason = reason.to_string();
+            state.last_comment_notice_at = now;
+        }
+        let text = format!("没找到评论区/输入框，这条先没评（原因：{message}）");
+        self.store.log(DiagnosticEntry {
+            at: now,
+            session_id: {
+                let state = lock_state(&self.state);
+                if state.session_id.is_empty() {
+                    None
+                } else {
+                    Some(state.session_id.clone())
+                }
+            },
+            channel: Some(ChannelType::Cdp),
+            level: "info".to_string(),
+            code: "COMMENT_BUBBLE".to_string(),
+            message: format!("kind=failed text={text}"),
+        });
+        self.store.log(DiagnosticEntry {
+            at: now,
+            session_id: {
+                let state = lock_state(&self.state);
+                if state.session_id.is_empty() {
+                    None
+                } else {
+                    Some(state.session_id.clone())
+                }
+            },
+            channel: Some(ChannelType::Cdp),
+            level: "warn".to_string(),
+            code: "COMMENT_SKIPPED".to_string(),
+            message: format!("url={} reason={} message={}", url, reason, message),
+        });
+        let _ = app.emit(
+            "video-comment-bubble",
+            serde_json::json!({ "kind": "failed", "text": text }),
+        );
+        let _ = app.emit(
+            "video-auto-comment",
+            serde_json::json!({ "ok": false, "message": text }),
+        );
+    }
+
     /// 异步生成「看完感悟」并回写 session.digest；失败降级模板并标 reflection=template。
     fn spawn_reflection(self: &Arc<Self>, app: &AppHandle, session_id: String, items: Vec<ContentItem>) {
         if items.is_empty() {
@@ -2667,11 +2860,20 @@ impl SessionEngine {
                             "message": message,
                         }),
                     );
+                    let bubble_text = "模型没有生成评论，本轮没有发送。";
+                    engine.store.log(DiagnosticEntry {
+                        at: now_seconds(),
+                        session_id: Some(engine.snapshot().session_id.clone()),
+                        channel: Some(ChannelType::Cdp),
+                        level: "info".to_string(),
+                        code: "COMMENT_BUBBLE".to_string(),
+                        message: format!("kind=failed text={bubble_text}"),
+                    });
                     let _ = app.emit(
                         "video-comment-bubble",
                         serde_json::json!({
                             "kind": "failed",
-                            "text": "模型没有生成评论，本轮没有发送。",
+                            "text": bubble_text,
                         }),
                     );
                     return;
@@ -2707,11 +2909,20 @@ impl SessionEngine {
                         at: now_seconds(),
                     });
                 }
+                let dry_run_text = comment_bubble(&facts.title, &comment);
+                engine.store.log(DiagnosticEntry {
+                    at: now_seconds(),
+                    session_id: Some(engine.snapshot().session_id.clone()),
+                    channel: Some(ChannelType::Cdp),
+                    level: "info".to_string(),
+                    code: "COMMENT_BUBBLE".to_string(),
+                    message: format!("kind=dry-run text={dry_run_text}"),
+                });
                 let _ = app.emit(
                     "video-comment-bubble",
                     serde_json::json!({
                         "kind": "dry-run",
-                        "text": comment_bubble(&facts.title, &comment),
+                        "text": dry_run_text,
                     }),
                 );
                 let _ = app.emit(
@@ -2735,45 +2946,38 @@ impl SessionEngine {
                 false
             };
             if !page_ready || !engine.comment_run_active(run_id) {
-                let message = "视频页面已变化，未发送评论".to_string();
-                engine.store.log(DiagnosticEntry {
-                    at: now_seconds(),
-                    session_id: Some(engine.snapshot().session_id.clone()),
-                    channel: Some(ChannelType::Cdp),
-                    level: "info".to_string(),
-                    code: "COMMENT_SKIPPED".to_string(),
-                    message: message.clone(),
-                });
-                let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                engine.comment_failure_notice(
+                    &app,
+                    facts.canonical_url.as_deref().unwrap_or(""),
+                    "page-changed",
+                    "视频页面已经切走",
+                );
                 return;
             }
 
             let report = match engine.post_comment(&comment).await {
                 Ok(report) if report.ok => report,
                 Ok(report) => {
-                    let message = format!("评论未提交：{}", report.message);
-                    engine.store.log(DiagnosticEntry {
-                        at: now_seconds(),
-                        session_id: Some(engine.snapshot().session_id.clone()),
-                        channel: Some(ChannelType::Cdp),
-                        level: "warn".to_string(),
-                        code: "COMMENT_SKIPPED".to_string(),
-                        message: message.clone(),
-                    });
-                    let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                    let reason = if report.reason.trim().is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        report.reason.clone()
+                    };
+                    engine.comment_failure_notice(
+                        &app,
+                        facts.canonical_url.as_deref().unwrap_or(""),
+                        &reason,
+                        &report.message,
+                    );
                     return;
                 }
                 Err(error) => {
-                    let message = error.to_string();
-                    engine.store.log(DiagnosticEntry {
-                        at: now_seconds(),
-                        session_id: Some(engine.snapshot().session_id.clone()),
-                        channel: Some(ChannelType::Cdp),
-                        level: "warn".to_string(),
-                        code: "COMMENT_FAILED".to_string(),
-                        message: message.clone(),
-                    });
-                    let _ = app.emit("video-auto-comment", serde_json::json!({ "ok": false, "message": message }));
+                    engine.comment_failure_notice(
+                        &app,
+                        facts.canonical_url.as_deref().unwrap_or(""),
+                        &error.code,
+                        &error.message,
+                    );
                     return;
                 }
             };
@@ -2820,11 +3024,23 @@ impl SessionEngine {
                     at: now_seconds(),
                 });
             }
+            let bubble_text = comment_bubble(&facts.title, &comment);
+            engine.store.log(DiagnosticEntry {
+                at: now_seconds(),
+                session_id: Some(engine.snapshot().session_id.clone()),
+                channel: Some(ChannelType::Cdp),
+                level: "info".to_string(),
+                code: "COMMENT_BUBBLE".to_string(),
+                message: format!(
+                    "kind={} text={bubble_text}",
+                    if verified { "posted" } else { "unverified" }
+                ),
+            });
             let _ = app.emit(
                 "video-comment-bubble",
                 serde_json::json!({
                     "kind": if verified { "posted" } else { "unverified" },
-                    "text": comment_bubble(&facts.title, &comment),
+                    "text": bubble_text,
                 }),
             );
             let _ = app.emit(

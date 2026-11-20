@@ -186,6 +186,13 @@ const XIAOHONGSHU_EXTRACT: &str = r#"
 (() => {
   const pick = (sel) => document.querySelector(sel);
   const text = (sel) => (pick(sel)?.textContent || '').trim();
+  const firstText = (selectors) => {
+    for (const sel of selectors) {
+      const value = text(sel);
+      if (value) return value;
+    }
+    return '';
+  };
   const meta = (name) => (document.querySelector('meta[property="' + name + '"], meta[name="' + name + '"]')?.content || '').trim();
   const stripSite = (value) => {
     const cleaned = (value || '').replace(/\s*[-_]\s*小红书.*$/, '').trim();
@@ -204,61 +211,150 @@ const XIAOHONGSHU_EXTRACT: &str = r#"
     title = stripSite(title.slice(0, 40));
   }
   if (!title) title = stripSite(document.title);
-  const description = (text('#detail-desc') || text('.note-content .desc') || text('.desc') || meta('og:description') || meta('description')).trim();
-  const author = (text('.author-wrapper .username') || text('.author .name') || text('.username') || meta('author')).trim();
-  const tags = Array.from(document.querySelectorAll('#detail-desc a[href*="search_result"], .note-content a[href*="keyword"], a[href*="search_result?keyword="]'))
-    .map((node) => '#' + (node.textContent || '').trim().replace(/^#/, ''))
-    .filter((tag) => tag.length > 1)
-    .slice(0, 10);
-  const seen = new Set();
+
+  const description = (
+    firstText(['#detail-desc', '.note-content .desc', '.desc', '[class*="desc"]'])
+    || meta('og:description')
+    || meta('description')
+  ).trim();
+  const author = (
+    firstText(['.author-wrapper .username', '.author .name', '.author-container .name', '.username'])
+    || meta('author')
+  ).trim();
+
+  // 标签：正文里的 # 开头链接 / search_result 链接。
+  const tagKeys = new Set();
+  const tags = [];
+  const tagNodes = Array.from(document.querySelectorAll('#detail-desc a, .note-content a, .desc a, a[href*="search_result"], a[href*="keyword="]'));
+  for (const node of tagNodes) {
+    const raw = (node.textContent || '').trim();
+    if (!raw.startsWith('#')) continue;
+    const tag = '#' + raw.replace(/^#+/, '');
+    if (tag.length < 2 || tagKeys.has(tag)) continue;
+    tagKeys.add(tag);
+    tags.push(tag);
+    if (tags.length >= 10) break;
+  }
+
+  // 图片：src / data-src / srcset 第一项；按去 query 的路径去重。
+  const imageKeys = new Set();
   const imageUrls = [];
-  const looksLikeIcon = (src) => /(avatar|emoji|icon|feeds\/|comment|static|fe-platform|guide|logo|sprite|watermark)/i.test(src);
-  const collectImage = (src) => {
-    if (!/^https?:/.test(src)) return;
-    if (looksLikeIcon(src)) return;
-    if (seen.has(src)) return;
-    seen.add(src);
-    imageUrls.push(src);
+  const isPlaceholderUrl = (url) => /^(data|blob):/i.test(url) || /placeholder|spacer|blank\.(gif|png)/i.test(url);
+  const looksLikeIcon = (url) => /(avatar|emoji|icon|feeds\/|comment|static|fe-platform|guide|logo|sprite|watermark)/i.test(url);
+  const resolveImage = (image) => {
+    const src = image.currentSrc || image.src || '';
+    const data = image.getAttribute('data-src') || '';
+    const srcset = image.getAttribute('srcset') || '';
+    const first = ((srcset.split(',')[0] || '').trim().split(/\s+/)[0] || '');
+    return [src, data, first].find((value) => /^https?:/.test(value) && !isPlaceholderUrl(value)) || '';
   };
-  for (const image of document.querySelectorAll('.swiper-slide img, .note-slider img, #noteContainer img, .media-container img, .note-content img')) {
-    const src = image.currentSrc || image.src || image.getAttribute('data-src') || '';
-    collectImage(src);
+  const isTinyPlaceholder = (image) => {
+    try {
+      if (!image.complete) return false; // 还没加载完：保留 URL，交给上层判断
+      return image.naturalWidth <= 1 || image.naturalHeight <= 1;
+    } catch (e) {
+      return false;
+    }
+  };
+  const collectImage = (image) => {
+    if (!image) return;
+    const url = resolveImage(image);
+    if (!url || looksLikeIcon(url)) return;
+    if (isTinyPlaceholder(image)) return;
+    const key = url.split('?')[0].split('#')[0];
+    if (imageKeys.has(key)) return;
+    imageKeys.add(key);
+    imageUrls.push(url);
+  };
+  for (const image of document.querySelectorAll('.note-slider img, .swiper-slide img, .media-container img, #noteContainer img, .note-content img, picture source')) {
+    if (image.tagName === 'SOURCE') {
+      const srcset = image.getAttribute('srcset') || '';
+      const first = ((srcset.split(',')[0] || '').trim().split(/\s+/)[0] || '');
+      if (/^https?:/.test(first) && !isPlaceholderUrl(first) && !looksLikeIcon(first)) {
+        const key = first.split('?')[0].split('#')[0];
+        if (!imageKeys.has(key)) {
+          imageKeys.add(key);
+          imageUrls.push(first);
+        }
+      }
+    } else {
+      collectImage(image);
+    }
     if (imageUrls.length >= 18) break;
   }
   if (imageUrls.length === 0) {
     for (const image of document.querySelectorAll('img')) {
       const src = image.currentSrc || image.src || image.getAttribute('data-src') || '';
-      if (/(sns-webpic|sns-img|xhscdn)/i.test(src)) collectImage(src);
+      if (/(sns-webpic|sns-img|xhscdn)/i.test(src) && !isPlaceholderUrl(src)) collectImage(image);
       if (imageUrls.length >= 18) break;
     }
   }
   if (imageUrls.length === 0) {
     const og = meta('og:image');
-    if (/^https?:/.test(og)) imageUrls.push(og);
+    if (/^https?:/.test(og) && !isPlaceholderUrl(og)) imageUrls.push(og);
   }
+
   const video = document.querySelector('video');
   const bodyText = (document.body?.innerText || '').slice(0, 4000);
-  const countText = (selector) => {
-    const node = pick(selector);
-    return node ? (node.textContent || '').trim() : '';
-  };
-  const likeText = countText('.like-wrapper .count') || countText('[class*="like"] .count');
-  const collectText = countText('.collect-wrapper .count') || countText('[class*="collect"] .count');
+
   const parseCount = (value) => {
     if (!value) return 0;
-    const number = parseFloat(value);
+    const cleaned = value.replace(/[+＋\s]/g, '');
+    const number = parseFloat(cleaned);
     if (!Number.isFinite(number)) return 0;
-    if (/[wW万]/.test(value)) return Math.round(number * 10000);
-    if (/[kK千]/.test(value)) return Math.round(number * 1000);
+    if (/[wW万]/.test(cleaned)) return Math.round(number * 10000);
+    if (/[kK千]/.test(cleaned)) return Math.round(number * 1000);
     return Math.round(number);
   };
-  let publishedAt = 0;
-  const dateMatch = bodyText.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
-  if (dateMatch) {
-    const date = new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]));
-    publishedAt = Math.floor(date.getTime() / 1000);
-  }
+  const likeText = firstText([
+    '.like-wrapper .count',
+    '.interact-container .count',
+    '[class*="like"] .count',
+    '[data-testid*="like"] .count',
+    '.like .count',
+  ]);
+  const collectText = firstText([
+    '.collect-wrapper .count',
+    '.interact-container .count',
+    '[class*="collect"] .count',
+    '[class*="star"] .count',
+    '.collect .count',
+  ]);
+
+  const pad = (value) => String(value).padStart(2, '0');
+  const parseDateText = (raw) => {
+    const value = (raw || '').trim();
+    if (!value) return 0;
+    const now = Date.now();
+    if (/刚刚/.test(value)) return Math.floor(now / 1000);
+    let match = value.match(/(\d+)\s*分钟前/);
+    if (match) return Math.floor((now - Number(match[1]) * 60000) / 1000);
+    match = value.match(/(\d+)\s*小时前/);
+    if (match) return Math.floor((now - Number(match[1]) * 3600000) / 1000);
+    if (/昨天/.test(value)) {
+      const date = new Date();
+      date.setDate(date.getDate() - 1);
+      date.setHours(0, 0, 0, 0);
+      return Math.floor(date.getTime() / 1000);
+    }
+    match = value.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+    if (match) {
+      const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      return Math.floor(date.getTime() / 1000);
+    }
+    match = value.match(/(\d{1,2})[-/.月](\d{1,2})/);
+    if (match) {
+      const nowDate = new Date();
+      const date = new Date(nowDate.getFullYear(), Number(match[1]) - 1, Number(match[2]));
+      if (date.getTime() > now + 86400000) date.setFullYear(date.getFullYear() - 1);
+      return Math.floor(date.getTime() / 1000);
+    }
+    return 0;
+  };
+  const dateText = firstText(['.date', '.bottom-container .date', 'time', '[class*="date"]']);
+  const publishedAt = parseDateText(dateText) || parseDateText(bodyText);
   const tokenMatch = location.search.match(/[?&]xsec_token=([^&#]+)/);
+
   return {
     itemId: (location.pathname.match(/\/explore\/([0-9a-zA-Z]+)/) || location.pathname.match(/\/discovery\/item\/([0-9a-zA-Z]+)/) || [])[1] || '',
     title, description, author,
@@ -275,8 +371,14 @@ const XIAOHONGSHU_EXTRACT: &str = r#"
     xsecToken: tokenMatch ? decodeURIComponent(tokenMatch[1]) : '',
     coverUrl: imageUrls[0] || (/^https?:/.test(meta('og:image')) ? meta('og:image') : ''),
     loginVisible: !!pick('.login-container, .login-mask, .sign-container') || /登录后查看|请先登录/.test(bodyText.slice(0, 800)),
-    captchaVisible: !!pick('.captcha, [class*="captcha"], .geetest_panel'),
-    riskBanner: /(当前账号存在异常|访问频繁|操作过于频繁|验证|风控)/.test(bodyText.slice(0, 2000)),
+    captchaVisible: (() => {
+      const node = pick('.captcha, [class*="captcha"], .geetest_panel, iframe[src*="captcha" i]');
+      if (!node) return false;
+      const box = node.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    })(),
+    // 风控只认具体短语，避免正文里普通「验证」二字误判成风控。
+    riskBanner: /(当前账号存在异常|账号存在异常|访问频繁|操作过于频繁|请完成安全验证|安全验证|滑块验证|完成验证后继续)/.test(bodyText.slice(0, 2000)),
     onFeed: /^\/(explore|discovery)?\/?$/.test(location.pathname)
   };
 })()
