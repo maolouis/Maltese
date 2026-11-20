@@ -64,7 +64,8 @@ import { MINIMIZE_BLUR_SETTLE_MS, shouldCollapseOnBlur } from "./islandMinimizeG
 import { previewPetLinkage } from "./petLinkPreview";
 // 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重 + 设置页卡片。
 import {
-  buildIdlePlaylist,
+  buildIdlePlaylistStateful,
+  type IdlePlaylistResult,
   vitalsBucketKey,
   vitalsEventForPetAction,
   weightsForVitals,
@@ -72,6 +73,7 @@ import {
   type PetVitalsSnapshot,
 } from "./petVitals";
 import { usePetVitals } from "./usePetVitals";
+import { loadBagStore, saveBagStore } from "./petRotationBag.ts";
 import PetVitalsCard from "./PetVitalsCard";
 // 多屏放置：小狗 / Bongo 落在哪块显示器（指纹 = 名字 + 分辨率）。
 import ScreenPlacementCard from "./ScreenPlacementCard";
@@ -1602,15 +1604,24 @@ export function IslandShell({
   // 权重表在 petVitals.weightsForVitals（每个状态都有基线，不留「纯随机兜底」）。
   // 动作 / 通知 / 音乐 / Agent 指定的表情优先级完全不变（usePetGifRotation 也不改）。
   const vitalsBucket = petVitals && petVitalsEnabled ? vitalsBucketKey(petVitals) : "";
+  // 待机轮播：洗牌袋 + 最近去重 + 权重封顶（袋进度持久化在 localStorage，跨会话保持）。
+  const idlePlaylist = useMemo<IdlePlaylistResult | null>(() => {
+    if (petState !== "idle" || !petVitals || !petVitalsEnabled) return null;
+    return buildIdlePlaylistStateful({
+      states: gifRotationStates,
+      weights: weightsForVitals(petVitals),
+      framesFor: (state) => rotationFramesForState(gifRotationConfig, state, gifRotationStates, petCharacter),
+      slots: 64,
+      store: loadBagStore(window.localStorage),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gifRotationConfig, gifRotationStates, petCharacter, petState, petVitalsEnabled, vitalsBucket]);
+  useEffect(() => {
+    if (!idlePlaylist) return;
+    saveBagStore(window.localStorage, idlePlaylist.store);
+  }, [idlePlaylist]);
   const carouselFrames = useMemo(() => {
-    if (petState === "idle" && petVitals && petVitalsEnabled) {
-      const playlist = buildIdlePlaylist({
-        states: gifRotationStates,
-        weights: weightsForVitals(petVitals),
-        framesFor: (state) => rotationFramesForState(gifRotationConfig, state, gifRotationStates, petCharacter),
-      });
-      if (playlist.length > 0) return playlist;
-    }
+    if (idlePlaylist && idlePlaylist.frames.length > 0) return idlePlaylist.frames;
     return rotationFramesForState(gifRotationConfig, petState, gifRotationStates, petCharacter);
     // vitalsBucket 是为了「数值小幅变化不重建播放列表」：只在跨分桶时重算。
     // eslint-disable-next-line react-hooks/exhaustive-deps

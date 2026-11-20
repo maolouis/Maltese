@@ -351,9 +351,11 @@ test("体力低 → 轮播里 sleeping/relax 显著多于 happy（固定随机�
   const states = ["sleeping", "relax", "happy", "play", "celebrate", "idle"];
   const tired = drawStates(weightsForVitals({ energy: 12, mood: 60, bond: 50, focus: 0 }), states, seeded(11));
   const fresh = drawStates(weightsForVitals({ energy: 90, mood: 60, bond: 50, focus: 0 }), states, seeded(11));
+  // 权重封顶（单状态 ≤3）+ 每状态最低占比（≥2%）之后，累时 sleeping 相对 happy 的倍率会从
+  // 原来的 ~25x 收敛到约 5–10x（这正是「不让某状态霸屏」的预期），阈值按 ≥3x 断言。
   assert.ok(
-    (tired.sleeping ?? 0) >= (tired.happy ?? 0) * 10,
-    `累时 sleeping 应远多于 happy：${JSON.stringify(tired)}`,
+    (tired.sleeping ?? 0) >= (tired.happy ?? 0) * 3,
+    `累时 sleeping 应明显多于 happy：${JSON.stringify(tired)}`,
   );
   assert.ok(
     (tired.sleeping ?? 0) + (tired.relax ?? 0) > (fresh.sleeping ?? 0) + (fresh.relax ?? 0),

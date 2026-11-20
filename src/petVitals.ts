@@ -662,6 +662,84 @@ export function vitalsLevel(vitals: Pick<PetVitals, "energy" | "mood" | "bond" |
  * - 权重来自 `weights`，帧从 `framesFor(state)` 里随机；
  * - 去掉相邻重复帧；空池返回空数组（调用方回退到现有行为）。
  */
+import {
+  clampRotationWeights,
+  emptyBagStore,
+  nextFromBag,
+  pickWeightedState,
+  pushRecent,
+  refillBag,
+  RECENT_LIMIT,
+  RECENT_RETRY,
+  type BagStore,
+} from "./petRotationBag.ts";
+
+export type IdlePlaylistResult = { frames: string[]; store: BagStore };
+
+/**
+ * 待机轮播列表（带状态：洗牌袋 + 最近去重 + 权重封顶）。
+ *
+ * 与旧版的区别：
+ * - 每个状态用**洗牌袋**取帧：一轮内不重复、全量覆盖，播完再重新洗；
+ * - 最近 8 个播放过的帧不再抽到；
+ * - 权重先封顶（单状态 ≤3）再保底（每状态 ≥2%），避免某状态霸屏；
+ * - 默认 64 个槽（旧版 24），列表更长、重建频率更低。
+ */
+export function buildIdlePlaylistStateful(
+  options: {
+    states: string[];
+    weights: Record<string, number>;
+    framesFor: (state: string) => string[];
+    rng?: () => number;
+    slots?: number;
+    store?: BagStore;
+  },
+): IdlePlaylistResult {
+  const rng = options.rng ?? Math.random;
+  const slots = Math.max(1, options.slots ?? 64);
+  const store: BagStore = options.store
+    ? { version: 1, bags: { ...options.store.bags }, recent: [...options.store.recent] }
+    : emptyBagStore();
+  const pool: Array<{ state: string; frames: string[] }> = [];
+  for (const state of options.states) {
+    const frames = options.framesFor(state);
+    if (!frames.length) continue;
+    pool.push({ state, frames });
+  }
+  if (pool.length === 0) return { frames: [], store };
+
+  const clamped = clampRotationWeights(
+    Object.fromEntries(pool.map((entry) => [entry.state, options.weights[entry.state] ?? 0.5])),
+  );
+  const totalFrames = pool.reduce((sum, entry) => sum + entry.frames.length, 0);
+  // 帧池比「最近窗口 + 1」还小时无法既去重又不空列表：只保留“不连播同一张”。
+  const recentForDraw = totalFrames <= RECENT_LIMIT + 1 ? [] : store.recent;
+  const frames: string[] = [];
+  let lastFrame: string | null = store.recent[0] ?? null;
+  for (let slot = 0; slot < slots; slot += 1) {
+    const state = pickWeightedState(clamped, rng);
+    if (!state) break;
+    const entry = pool.find((item) => item.state === state);
+    if (!entry) continue;
+    if (!store.bags[state]) store.bags[state] = refillBag(entry.frames, rng);
+    let drawn = nextFromBag(entry.frames, store.bags[state], recentForDraw, rng);
+    store.bags[state] = drawn.bag;
+    // 相邻不重复：抽到和上一张一样就再抽（最多 RECENT_RETRY 次），避免洗牌袋重洗边界处连播。
+    let guard = 0;
+    while (drawn.frame && drawn.frame === lastFrame && guard < RECENT_RETRY) {
+      guard += 1;
+      drawn = nextFromBag(entry.frames, store.bags[state], recentForDraw, rng);
+      store.bags[state] = drawn.bag;
+    }
+    if (!drawn.frame || drawn.frame === lastFrame) continue;
+    store.recent = pushRecent(store.recent, drawn.frame);
+    lastFrame = drawn.frame;
+    frames.push(drawn.frame);
+  }
+  return { frames, store };
+}
+
+/** 兼容旧签名：无持久化袋的一次性列表（单测/不需要跨会话的调用方用）。 */
 export function buildIdlePlaylist(options: {
   states: string[];
   weights: Record<string, number>;
@@ -669,35 +747,7 @@ export function buildIdlePlaylist(options: {
   rng?: () => number;
   slots?: number;
 }): string[] {
-  const rng = options.rng ?? Math.random;
-  const slots = Math.max(1, options.slots ?? 24);
-  const pool: Array<{ state: string; weight: number; frames: string[] }> = [];
-  for (const state of options.states) {
-    const frames = options.framesFor(state);
-    if (!frames.length) continue;
-    pool.push({ state, weight: Math.max(0.05, options.weights[state] ?? 0.5), frames });
-  }
-  if (pool.length === 0) return [];
-  const total = pool.reduce((sum, entry) => sum + entry.weight, 0);
-  const out: string[] = [];
-  let guard = slots * 8;
-  while (out.length < slots && guard > 0) {
-    guard -= 1;
-    let roll = rng() * total;
-    let picked = pool[pool.length - 1];
-    for (const entry of pool) {
-      roll -= entry.weight;
-      if (roll <= 0) {
-        picked = entry;
-        break;
-      }
-    }
-    const frame = picked.frames[Math.floor(rng() * picked.frames.length)];
-    if (!frame) continue;
-    if (out[out.length - 1] === frame) continue;
-    out.push(frame);
-  }
-  return out;
+  return buildIdlePlaylistStateful(options).frames;
 }
 
 /** 轮播重建的分桶键：数值小幅变化不重建，避免播放列表频繁从头开始。 */

@@ -198,7 +198,7 @@ export const PET_ASSET_DEDUPE = { removedFiles: 383, removedMB: 31 } as const;
  * 单个状态最多轮播多少张：素材池里一个动作可能有 100 多张 GIF，
  * 全部预加载会吃掉几十 MB 内存，这里按均匀间隔抽一批，本次运行保持不变。
  */
-const MAX_FRAMES_PER_STATE = 30;
+const MAX_FRAMES_PER_STATE = 80;
 /** 设置页提示用：轮播每个状态最多抽多少张（完整素材池仍然全部可选）。 */
 export const PET_ROTATION_FRAMES_PER_STATE = MAX_FRAMES_PER_STATE;
 
