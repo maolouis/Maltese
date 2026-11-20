@@ -147,3 +147,25 @@
 - 登录墙/验证码/风控未做绕过（只识别并停止）；未登录时 explore feed 可用，但部分笔记会跳登录；
 - 图片直链有防盗链（`sns-webpic-qc.xhscdn.com` 直链 403）：本插件**只记录 URL、不下载**，
   再发布一律使用平台「文生图」，不搬运原图。
+
+## 10. 登录检测修正（2026-11-20，误判「已登录仍报登录墙」）
+
+旧逻辑只看 `loginVisible`（`.login-container/.login-mask` 选择器存在或正文含
+`登录后查看/请先登录`），会把隐藏的登录按钮容器/页脚文案误判成登录墙。
+
+新逻辑三级判定（`adapter::XIAOHONGSHU_LOGIN_PROBE`，导航后、抽取后执行并覆盖旧判断）：
+
+1. URL 是否被重定向：`/login` 或含 `redirectPath=`；
+2. 登录用户标识：`.user .avatar` / `.user-info` / `[class*="user-avatar"]` 可见，
+   或 `window.__INITIAL_STATE__.user.userId` 非空；
+3. 登录弹窗遮罩：`.login-container` / `[class*="login-modal"]` / `.mask` **可见**
+   且内部 `input` 可见。
+
+只有「① 重定向」或「② 无用户标识 **且** ③ 弹窗可见」才判为登录墙；否则忽略旧误判并继续采集。
+诊断日志（未登录判定或纠正误判时）：
+
+```
+XHS_LOGIN_PROBE url=… hasAvatar=… userId=… loginModal=… redirected=… verdict=login-wall|logged-in
+```
+
+实测（已登录 profile）：4 分钟采到 7 篇不同笔记、0 失败、无 `LOGIN_REQUIRED`。

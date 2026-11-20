@@ -19,6 +19,10 @@ pub trait PlatformAdapter: Send + Sync {
     fn candidate_script(&self) -> &'static str;
     fn interact_script(&self, action: InteractAction) -> Option<&'static str>;
     fn classify_page(&self, facts: &PageFacts) -> PageKind;
+    /// 登录状态探针（小红书专用）；None 表示用通用逻辑。
+    fn login_probe_script(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 pub fn adapter_for(platform: Platform) -> &'static dyn PlatformAdapter {
@@ -507,6 +511,49 @@ impl PlatformAdapter for DouyinAdapter {
     }
 }
 
+/// 小红书登录探针：三级判定（URL 重定向 / 登录用户标识 / 登录弹窗遮罩）。
+/// 只有「无用户标识 + 弹窗可见」才算登录墙，避免把登录按钮容器误判成未登录。
+const XIAOHONGSHU_LOGIN_PROBE: &str = r#"
+(function () {
+  const href = location.href;
+  const redirected = /\/login\b|redirectPath=/i.test(href);
+  let userId = '';
+  try {
+    const state = window.__INITIAL_STATE__ || {};
+    const user = state.user || {};
+    userId = String(user.userId || user.user_id || (user.userInfo && user.userInfo.userId) || '');
+  } catch (e) {}
+  let hasAvatar = Boolean(userId);
+  try {
+    const avatar = document.querySelector('.user .avatar, .user .avatar img, .user-info, [class*="user-avatar"], [class*="avatar-wrapper"] img');
+    if (avatar) {
+      const box = avatar.getBoundingClientRect();
+      hasAvatar = hasAvatar || (box.width > 4 && box.height > 4);
+    }
+  } catch (e) {}
+  let loginModal = false;
+  try {
+    const nodes = Array.from(document.querySelectorAll('.login-container, .login-mask, [class*="login-modal"], .mask'));
+    for (const node of nodes) {
+      const box = node.getBoundingClientRect();
+      if (box.width <= 40 || box.height <= 40) continue;
+      const style = window.getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.05) continue;
+      const input = node.querySelector('input');
+      if (input && input.getBoundingClientRect().width > 20) { loginModal = true; break; }
+    }
+  } catch (e) {}
+  return {
+    href,
+    redirected,
+    hasAvatar,
+    userId,
+    loginModal,
+    loginWall: redirected || (!hasAvatar && loginModal),
+  };
+})()
+"#;
+
 impl PlatformAdapter for XiaohongshuAdapter {
     fn id(&self) -> Platform {
         Platform::Xiaohongshu
@@ -532,6 +579,10 @@ impl PlatformAdapter for XiaohongshuAdapter {
 
     fn classify_page(&self, facts: &PageFacts) -> PageKind {
         classify_hints(facts)
+    }
+
+    fn login_probe_script(&self) -> Option<&'static str> {
+        Some(XIAOHONGSHU_LOGIN_PROBE)
     }
 }
 

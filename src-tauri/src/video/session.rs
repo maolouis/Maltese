@@ -2062,7 +2062,7 @@ impl SessionEngine {
                 tokio::time::sleep(Duration::from_millis(800)).await;
             }
             let facts = facts;
-            let Some(facts) = facts else {
+            let Some(mut facts) = facts else {
                 self.record_url_failure(
                     &mut queue,
                     &target,
@@ -2072,6 +2072,45 @@ impl SessionEngine {
                 );
                 continue;
             };
+
+            // 小红书登录判定：用三级探针覆盖 extract 的粗判，避免「已登录仍报登录墙」。
+            if platform == Platform::Xiaohongshu {
+                if let Some(script) = adapter.login_probe_script() {
+                    if let Ok(value) = session.evaluate(script, EVALUATE_TIMEOUT).await {
+                        let redirect = value.get("redirected").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let has_avatar = value.get("hasAvatar").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let user_id = value.get("userId").and_then(|v| v.as_str()).unwrap_or("");
+                        let modal = value.get("loginModal").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let wall = value.get("loginWall").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let probe_line = format!(
+                            "url={} hasAvatar={} userId={} loginModal={} redirected={}",
+                            target.url, has_avatar, user_id, modal, redirect
+                        );
+                        if wall {
+                            facts.hints.login_visible = true;
+                            self.log_event(
+                                Some(&session_id),
+                                Some(ChannelType::Cdp),
+                                "warn",
+                                "XHS_LOGIN_PROBE",
+                                format!("{probe_line} verdict=login-wall"),
+                            );
+                        } else if facts.hints.login_visible {
+                            // extract 粗判为未登录，但三级探针认为已登录：忽略误判。
+                            facts.hints.login_visible = false;
+                            self.log_event(
+                                Some(&session_id),
+                                Some(ChannelType::Cdp),
+                                "info",
+                                "XHS_LOGIN_PROBE",
+                                format!("{probe_line} verdict=logged-in action=ignore-false-positive"),
+                            );
+                        } else {
+                            facts.hints.login_visible = false;
+                        }
+                    }
+                }
+            }
 
             if platform == Platform::Xiaohongshu && facts.image_urls.is_empty() {
                 self.log_event(
