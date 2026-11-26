@@ -307,6 +307,8 @@ docs/diagnostics/tools/find_main_thread.py      ← 尝试用 CRT 启动帧定�
 
 ```powershell
 # 1) 复现（杀进程→等4s→启动→每秒采样14s→卡死则抓 dump）
+#    2026-11-26 起该脚本改为「参数化 20 轮验收」：默认测本地 release 构建、
+#    数据目录/WebView2 profile 都落在工作区（agent 会话必需），失败轮仍抓 dump。
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\Maltese\docs\diagnostics\tools\cold-hang-repro.ps1
 
 # 2) 手工抓栈
@@ -335,3 +337,17 @@ python E:\Maltese\docs\diagnostics\tools\minidump_stacks.py <dmp> --exe <exe> --
 
 辅助脚本 `find_main_thread.py`（本轮未成功启用：CRT 启动帧所在栈顶段未被 dump 覆盖，故改用
 "单实例插件隐藏窗口归属线程"来定主线程，见 §3.3）。
+
+---
+
+## 9. 后续（2026-11-26）：修复与 20 轮验证
+
+修复已落地，内容与证据见 [cold-start-hang-fix.md](cold-start-hang-fix.md)：
+
+- 新增 `src-tauri/src/mutex_trace.rs` 探针（`MUTEX_TRACE lock=<名> thread=<tid> phase=before/after`
+  + 持有者 tid + `MUTEX_TRACE lock=PROBE` 只读锁探针）；
+- 本报告 §6 的 1/2/3/4/5 全部实现：事件回调只置脏标记 + 专用几何线程 + `run_on_main_thread`
+  投递、几何缓存锁全 `try_lock`、extras 重同步延后到 `frontend_ready`、watchdog 异步投递 + 超时；
+- **验收：20/20 冷启动 `Responding=True`，每轮都有 `frontend_ready` 与 +1s/+3s/+10s 心跳**；
+- 局限（诚实说明）：本地 14 轮「原始逻辑 + 探针」冷启动没有复现卡死、`MUTEX_TRACE` 零争用，
+  具体锁实例仍未实测确认；实机复现时看 `phase=before contended=true holder=<tid>` 即可定案。

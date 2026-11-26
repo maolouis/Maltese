@@ -198,6 +198,17 @@ pub fn lock<'a, T>(index: usize, mutex: &'a Mutex<T>) -> TraceGuard<'a, T> {
     }
 }
 
+/// 阻塞式加锁（Option 版）：永不失败，poison 也照常返回 guard。
+/// 用于把原代码里 `if let Ok(mut slot) = X.lock()` 的写法原样套上探针。
+pub fn lock_opt<'a, T>(index: usize, mutex: &'a Mutex<T>) -> Option<TraceGuard<'a, T>> {
+    Some(lock(index, mutex))
+}
+
+/// 阻塞式读一份 `Copy` 值（探针版 `X.lock().ok().and_then(|slot| *slot)`）。
+pub fn read<T: Copy>(index: usize, mutex: &Mutex<T>) -> Option<T> {
+    Some(*lock(index, mutex))
+}
+
 /// 非阻塞加锁：拿不到就返回 `None`（缓存类状态用它，主线程永不被永久阻塞）。
 pub fn try_lock<'a, T>(index: usize, mutex: &'a Mutex<T>) -> Option<TraceGuard<'a, T>> {
     let tid = thread_id();
