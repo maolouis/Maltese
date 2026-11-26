@@ -85,19 +85,24 @@ startup 恢复矩形 / 换屏 / 旧脚本直接 `SetWindowPos` 都会让两者�
   要用真实 localStorage（默认 EBWebView profile），只隔离 `MALTESE_DATA_DIR`
   跳过 2.9GB 数据迁移。
 
-## 实测 before / after（fix-ui2，work/verify-flash-*.log）
+## 实测 before / after（fix-ui2，`work/verify-flash-*.log`，脚本 `scripts/verify-flash.ps1`）
 
 同一个 profile 副本（`customPosition=(1204,1262)`，窗口实际 `(-619,504)`，故意保留
-stale 状态），5 轮双击 + 80ms 逐帧：
+stale 状态），5 轮双击 + 80ms 逐帧（每轮 20 帧，约 2.5s）：
 
 | | before（16:20 build，`exe-1620.exe`） | after（16:47 build） |
 | --- | --- | --- |
-| 双击后落位 | `OVERLAY_SINGLE_SHOT ok=true rect=(1207,719,479,678) preCompensated=true` | `DOUBLECLICK_GEOM phase=pre source=actual(stale-settled)` → `rect=(-616,-39,479,678)` |
-| 60ms 实测纠正 | `dx=-2 dy=545 corrected=true target=(1209,174)`（窗口被拉走 545px，浮层随即自关） | 仅首次 `dx=-3 dy=-5 corrected=true`（CSS 狗元素相对窗口原点约 4.5px 的固有偏差，一次后归零） |
-| 逐帧矩形 | `136ms:1207,171 -> 525ms:1204,166 -> 650ms:已关`，5 轮 FAIL | R1-R4 每帧都是 `-616,-39,479,678`，`distinctRects=1 driftFrames=0 PASS` |
-| 日志断言 | `set_island_overlay_violations=5 single_shot_mismatches=0 dog_measure_corrections=6` | `set_island_overlay_violations=0 single_shot_mismatches=0 dog_measure_corrections=1` |
+| 双击后落位 | `OVERLAY_SINGLE_SHOT ok=true rect=(1207,719,479,678) preCompensated=true` | `DOUBLECLICK_GEOM phase=pre source=actual(stale-settled) settled=(1204,1262) actual=(-619,504)` → `OVERLAY_SINGLE_SHOT ok=true rect=(-619,-44,479,678)` |
+| 60ms 实测纠正 | `dx=-2 dy=545 corrected=true target=(1209,174)`（窗口被拉走 545px，浮层随即自关） | 仅首次 `dx=-3 dy=-5 corrected=true`（CSS 狗元素相对窗口原点约 4.5px 的固有偏差），之后各轮 `preCompensated=true corrections=0`、`dx=0 dy=0 corrected=false` |
+| 逐帧矩形 | `136ms:1207,171 -> 525ms:1204,166 -> 650ms:已关`，5 轮 FAIL | R1-R5 全部 `open=-616,-39,479,678 distinctRects=1 driftFrames=0 maxDriftPx=0 FRAME_VERDICT=PASS`，浮层撑到 ESC 不再自关 |
+| 日志断言 | `set_island_overlay_violations=5 dog_measure_corrections=6 -> FAIL` | `set_island_overlay_violations=0 single_shot_mismatches=0 large_corrections=0 small_residual_corrections=1 (tolerance=8px) -> PASS`；`RESULT frame_pass=5 frame_fail=0 log_ok=True` |
 
-R5 在 ~500ms 处回到收起态是 hover 面板的鼠标移出自动收起（测试脚本光标停在原地），
-不是中间帧漂移。残留的首次 ~5px 纠正来自 `.island__collapsed--pet-only` 元素相对
-窗口原点约 (-3,-4.5)px 的 CSS 偏差；打开浮层时窗口按公式落位后由实测纠正一次，
-第二次打开起就使用同一尺寸的 overlay 样本，`corrected=false`。
+残留的首次 ~5px 纠正来自 `.island__collapsed--pet-only` 元素相对窗口原点约
+(-3,-4.5)px 的 CSS 偏差；打开浮层时窗口按公式落位后由实测纠正一次，第二次打开起
+就使用同一尺寸的 overlay 样本，`corrected=false`（在 8px 容差内，不影响观感）。
+
+CSS 侧结论（不需要改）：`src/App.css:5572` 的
+`.island--collapsed, .island--expanded { transition: none; }` 已禁用岛的尺寸过渡，
+浮层/展开容器没有 `height: 0` 展开动画；`.island__expanded` 只有
+opacity + `translateY(-6px)`→none 的 280ms 淡入。「向下闪」来自原生窗口在开浮层
+瞬间被移动 2~3 次，与 CSS 无关。
