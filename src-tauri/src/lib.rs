@@ -5,6 +5,7 @@ mod desktop_extras;
 mod island_rect_store;
 mod geometry_invariant;
 mod geometry_authority;
+mod mutex_trace;
 mod desktop_icons;
 mod web_protocol;
 mod dsh_api;
@@ -47,8 +48,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
-        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -133,6 +134,55 @@ static POSITION_ANIMATION_DELTA_X: AtomicI32 = AtomicI32::new(0);
 static ISLAND_MINIMIZED: AtomicBool = AtomicBool::new(false);
 static LAST_SETTLED_ISLAND_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
 static PRE_MINIMIZE_ISLAND_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
+
+// ---------------------------------------------------------------------------
+// 几何缓存锁：**一律 try_lock，拿不到就跳过**（冷启动卡死治本项 2）
+//
+// 下面这些静态量只是「记忆值 / 缓存」：写入的是幂等的最新值，读到的也只是上一次
+// 的落定结果。抢不到锁就说明别的线程正在写同一个缓存，本次跳过语义完全等价
+// （下一次窗口事件 / 下一次落定会再补一次）。这样做的唯一目的：
+// **主线程（窗口事件派发、命令处理）永远不会被缓存锁永久阻塞**，
+// 把「可能永久卡死」降级为「偶尔少记一次位置」。
+// 全部加锁点都走 `mutex_trace`，阻塞时能打出锁名 + 持有者 tid。
+// ---------------------------------------------------------------------------
+fn settled_island_rect() -> Option<WindowRect> {
+    mutex_trace::try_lock(
+        mutex_trace::LAST_SETTLED_ISLAND_RECT,
+        &LAST_SETTLED_ISLAND_RECT,
+    )
+    .and_then(|guard| *guard)
+}
+
+fn store_settled_island_rect(rect: WindowRect) {
+    if let Some(mut guard) = mutex_trace::try_lock(
+        mutex_trace::LAST_SETTLED_ISLAND_RECT,
+        &LAST_SETTLED_ISLAND_RECT,
+    ) {
+        *guard = Some(rect);
+    }
+}
+
+fn take_pre_minimize_island_rect() -> Option<WindowRect> {
+    if let Some(mut guard) = mutex_trace::try_lock(
+        mutex_trace::PRE_MINIMIZE_ISLAND_RECT,
+        &PRE_MINIMIZE_ISLAND_RECT,
+    ) {
+        guard.take()
+    } else {
+        None
+    }
+}
+
+fn store_pre_minimize_island_rect_if_empty(rect: WindowRect) {
+    if let Some(mut guard) = mutex_trace::try_lock(
+        mutex_trace::PRE_MINIMIZE_ISLAND_RECT,
+        &PRE_MINIMIZE_ISLAND_RECT,
+    ) {
+        if guard.is_none() {
+            *guard = Some(rect);
+        }
+    }
+}
 static NATIVE_GLASS_INITIALIZED: OnceLock<()> = OnceLock::new();
 // 主窗口是否已经 show 过。`frontend_ready` 握手会先一步把窗口显示出来，
 // 之后 `show_ready_island` 作为兜底再触发时不能重复抢焦点。
@@ -154,6 +204,13 @@ fn startup_mark(step: &str) {
 }
 
 /// 8s watchdog：前端首帧握手迟迟不来（冷启动卡死）时强制 show 一次，至少看到窗口。
+///
+/// 冷启动卡死治本项 5：旧实现在 watchdog 线程里**同步**调 `window.show()` /
+/// `show_island()`——主线程一旦卡死，这两句会永久阻塞，于是 `watchdog_done`
+/// 永远不出现，把唯一的现场信息也一起丢了。现在改成：
+/// - `show` 通过 `run_on_main_thread` **异步投递**；
+/// - 投递后 3s 主线程还没执行 → 判定「主线程未响应」，打锁探针（哪把锁被谁持有）；
+/// - watchdog 自己永不阻塞在主线程上。
 fn spawn_startup_watchdog(app: AppHandle) {
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -161,13 +218,124 @@ fn spawn_startup_watchdog(app: AppHandle) {
         if FRONTEND_READY_AT.get().is_some() || STARTUP_WATCHDOG_FIRED.swap(true, Ordering::SeqCst) {
             return;
         }
-        eprintln!("STARTUP_WATCHDOG no frontend ready in 8s，强制显示岛屿窗口（不阻塞后续）");
-        if let Ok(window) = main_window(&handle) {
-            let _ = window.show();
+        eprintln!("STARTUP_WATCHDOG no frontend ready in 8s，强制显示岛屿窗口（异步投递，不阻塞自己）");
+        log_lock_probe("watchdog_8s");
+        let done = Arc::new(AtomicBool::new(false));
+        let done_in_main = Arc::clone(&done);
+        let app_for_main = handle.clone();
+        let dispatcher = thread::Builder::new()
+            .name("watchdog-dispatch".into())
+            .spawn(move || {
+                let app_in_main = app_for_main.clone();
+                let dispatched = app_for_main.run_on_main_thread(move || {
+                    eprintln!(
+                        "[startup] step=watchdog_main_entered +{}ms",
+                        startup_start().elapsed().as_millis()
+                    );
+                    if let Ok(window) = main_window(&app_in_main) {
+                        let _ = window.show();
+                    }
+                    if let Err(error) = show_island(&app_in_main) {
+                        eprintln!("STARTUP_WATCHDOG show_island failed: {error}");
+                    }
+                    eprintln!(
+                        "[startup] step=watchdog_done +{}ms",
+                        startup_start().elapsed().as_millis()
+                    );
+                    done_in_main.store(true, Ordering::SeqCst);
+                });
+                if let Err(error) = dispatched {
+                    eprintln!("STARTUP_WATCHDOG dispatch failed: {error}");
+                }
+            });
+        if let Err(error) = dispatcher {
+            eprintln!("failed to spawn watchdog dispatcher: {error}");
+            return;
         }
-        let _ = show_island(&handle);
-        eprintln!("[startup] step=watchdog_done +{}ms", startup_start().elapsed().as_millis());
+        // 超时观察：投递 3s 后主线程仍未执行 → 主线程卡死，锁探针给出嫌疑锁。
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if !done.load(Ordering::SeqCst) {
+            eprintln!(
+                "STARTUP_WATCHDOG main thread unresponsive 3s after dispatch；锁探针（MUTEX_TRACE 持有者见下）："
+            );
+            log_lock_probe("watchdog_timeout");
+        }
     });
+}
+
+/// 只读探测：对每把几何锁 `try_lock`（立刻释放），打印 free / HELD_BY_<tid>。
+/// 卡死时这行日志能直接指出「哪把锁被谁持有」，不用再靠全量 dump 反推。
+fn probe_lock<T>(index: usize, mutex: &Mutex<T>) -> String {
+    match mutex.try_lock() {
+        Ok(guard) => {
+            drop(guard);
+            "free".to_string()
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            format!("HELD_BY_{}", mutex_trace::holder(index))
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => "poisoned".to_string(),
+    }
+}
+
+fn log_lock_probe(tag: &str) {
+    eprintln!(
+        "MUTEX_TRACE lock=PROBE thread={} phase=probe tag={tag} window_state={} last_settled={} pre_minimize={} last_persisted={} pinned_last_set={} pinned_manual={} user_size={} frontend_ready={}",
+        unsafe { windows::Win32::System::Threading::GetCurrentThreadId() },
+        probe_lock(mutex_trace::WINDOW_STATE, window_state()),
+        probe_lock(
+            mutex_trace::LAST_SETTLED_ISLAND_RECT,
+            &LAST_SETTLED_ISLAND_RECT
+        ),
+        probe_lock(
+            mutex_trace::PRE_MINIMIZE_ISLAND_RECT,
+            &PRE_MINIMIZE_ISLAND_RECT
+        ),
+        probe_lock(mutex_trace::LAST_PERSISTED_RECT, &LAST_PERSISTED_RECT),
+        probe_lock(mutex_trace::PINNED_LAST_SET, &PINNED_LAST_SET),
+        probe_lock(
+            mutex_trace::PINNED_MANUAL_POSITION,
+            &PINNED_MANUAL_POSITION
+        ),
+        probe_lock(mutex_trace::USER_ISLAND_SIZE, &USER_ISLAND_SIZE),
+        FRONTEND_READY_AT.get().is_some(),
+    );
+}
+
+/// 启动期 extras 重同步：**等前端首帧就绪之后**再跑（冷启动卡死治本项 4）。
+///
+/// 旧实现在 `setup` 里立刻起一个线程，1s / 3s / 6s 各跑一次
+/// `desktop_extras::sync_extras_now`（内部对 Bongo / 陪伴狗 / 跟随宠做
+/// `set_size/set_position/show`）。这三拍正好撞上主线程启动几何收尾与窗口事件派发，
+/// 是报告点名的相撞窗口。现在：先等 `frontend_ready`（最多 20s），
+/// 再静默 1.5s，然后 +1s / +2s / +3s 三拍重同步（幂等）。
+fn spawn_startup_extras_resync(app: AppHandle) {
+    let spawned = thread::Builder::new()
+        .name("extras-resync-startup".into())
+        .spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while FRONTEND_READY_AT.get().is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(100));
+            }
+            if FRONTEND_READY_AT.get().is_none() {
+                eprintln!("[monitor] extras resync skipped: frontend never reported ready");
+                return;
+            }
+            thread::sleep(Duration::from_millis(1500));
+            for delay in [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(3),
+            ] {
+                thread::sleep(delay);
+                if let Some(config) = desktop_extras::last_config() {
+                    let _ = desktop_extras::sync_extras_now(&app, &config);
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        eprintln!("failed to spawn startup extras resync: {error}");
+    }
 }
 // show 之后窗口仍然不可见时的补显次数与间隔（WebView2 刚握手 / 系统吞掉 show）。
 const ISLAND_VISIBILITY_ATTEMPTS: usize = 6;
@@ -704,14 +872,10 @@ fn set_island_interaction(
         while POSITION_ANIMATING.load(Ordering::SeqCst) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(2));
         }
-        settled_anchor = LAST_SETTLED_ISLAND_RECT
-            .lock()
-            .ok()
-            .and_then(|slot| *slot)
-            .map(|rect| IslandPosition {
-                x: rect.x,
-                y: rect.y,
-            });
+        settled_anchor = settled_island_rect().map(|rect| IslandPosition {
+            x: rect.x,
+            y: rect.y,
+        });
     }
     let mut anchor_source = "none";
     if settled_anchor.is_some() {
@@ -966,14 +1130,12 @@ fn correct_expanded_slot_after(
         .map(|monitor| slot_inside_monitor(slot_before, &monitor))
         .unwrap_or(true);
     if !before_on_screen {
-        if let Ok(settled) = LAST_SETTLED_ISLAND_RECT.lock() {
-            if let Some(settled) = *settled {
-                eprintln!(
-                    "RECALC_GUARD reason=anchor_offscreen from=({},{}) fallback_settled=({},{})",
-                    slot_before.x, slot_before.y, settled.x, settled.y
-                );
-                slot_before = settled;
-            }
+        if let Some(settled) = settled_island_rect() {
+            eprintln!(
+                "RECALC_GUARD reason=anchor_offscreen from=({},{}) fallback_settled=({},{})",
+                slot_before.x, slot_before.y, settled.x, settled.y
+            );
+            slot_before = settled;
         }
     }
     let dx = slot_x - slot_before.x;
@@ -1150,6 +1312,15 @@ static PLANNED_OVERLAY: std::sync::Mutex<Option<PlannedOverlay>> = std::sync::Mu
 /// 用户拖拽边缘调整后的展开尺寸（逻辑像素）。None = 用默认/内容尺寸。
 static USER_ISLAND_SIZE: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
 
+/// 缓存锁 try_lock：拿不到就跳过本次记忆（下次窗口事件/设置同步会再写）。
+fn store_user_island_size(width: f64, height: f64) {
+    if let Some(mut guard) =
+        mutex_trace::try_lock(mutex_trace::USER_ISLAND_SIZE, &USER_ISLAND_SIZE)
+    {
+        *guard = Some((width, height));
+    }
+}
+
 fn island_size_path() -> std::path::PathBuf {
     island_rect_store::snapshot_path().with_file_name("island-size.json")
 }
@@ -1166,9 +1337,7 @@ fn load_user_island_size() {
     let height = value.get("height").and_then(serde_json::Value::as_f64);
     if let (Some(width), Some(height)) = (width, height) {
         if width >= 300.0 && height >= 200.0 && width <= 2400.0 && height <= 1600.0 {
-            if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
-                *slot = Some((width, height));
-            }
+            store_user_island_size(width, height);
             eprintln!("ISLAND_SIZE_LOAD width={width} height={height}");
         }
     }
@@ -1367,10 +1536,7 @@ fn expected_slot_from_state(window: &WebviewWindow) -> Option<WindowRect> {
             height: slot_h as u32,
         });
     }
-    LAST_SETTLED_ISLAND_RECT
-        .lock()
-        .ok()
-        .and_then(|slot| *slot)
+    settled_island_rect()
 }
 
 /// 统一不变量约束：操作后狗槽偏离 expected 超过 2px 就立刻平移纠正并留证。
@@ -1475,9 +1641,7 @@ fn remember_settled_island_rect(window: &WebviewWindow) {
     let Some(rect) = read_sane_island_rect(window) else {
         return;
     };
-    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
-        *slot = Some(rect);
-    }
+    store_settled_island_rect(rect);
     // 顺带写「退出后启动恢复」用的快照（同一矩形会去重）。
     persist_island_snapshot(window.app_handle());
 }
@@ -1488,37 +1652,25 @@ fn note_island_minimized() {
     // 最小化期间动画线程不能再 set_position：那会改写系统的还原位置。
     POSITION_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
     POSITION_ANIMATING.store(false, Ordering::SeqCst);
-    let settled = LAST_SETTLED_ISLAND_RECT
-        .lock()
-        .ok()
-        .and_then(|slot| *slot);
-    if let Some(rect) = settled {
-        if let Ok(mut slot) = PRE_MINIMIZE_ISLAND_RECT.lock() {
-            if slot.is_none() {
-                *slot = Some(rect);
-            }
-        }
+    if let Some(rect) = settled_island_rect() {
+        store_pre_minimize_island_rect_if_empty(rect);
     }
 }
 
 /// 还原：按最小化前的真实矩形逐像素复位，再交回常规几何计算。
 fn restore_island_rect_after_unminimize(window: &WebviewWindow) {
     ISLAND_MINIMIZED.store(false, Ordering::SeqCst);
-    let restore = PRE_MINIMIZE_ISLAND_RECT
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
+    let restore = take_pre_minimize_island_rect();
     let Some(rect) = restore else {
         remember_settled_island_rect(window);
         return;
     };
+    // 注意：set_size / set_position 是窗口 API，必须在任何缓存锁 guard drop 之后调用。
     if read_sane_island_rect(window) != Some(rect) {
         let _ = window.set_size(Size::Physical(PhysicalSize::new(rect.width, rect.height)));
         let _ = window.set_position(Position::Physical(PhysicalPosition::new(rect.x, rect.y)));
     }
-    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
-        *slot = Some(rect);
-    }
+    store_settled_island_rect(rect);
 }
 
 /// 最小化/还原事件统一入口（Resized / Focused / Moved 都汇到这里）：
@@ -1536,6 +1688,155 @@ fn sync_minimize_geometry(window: &WebviewWindow) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 窗口事件 → 脏标记 → 几何线程（冷启动卡死治本项 3）
+//
+// 历史写法在 `on_window_event` 里直接 `sync_minimize_geometry` /
+// `record_dragged_position` / `persist_island_snapshot`：既在主线程的事件派发栈里
+// 取锁，又在这个栈上调用 `set_size/set_position`（tao 会同步派发 WM_*，再进一次
+// 同一个回调）。这正是 dump 里「主线程永久停在 Mutex futex」的形态。
+//
+// 现在：
+// 1. `on_window_event` 只 `fetch_or` 一个 `AtomicU8` 脏位 + 唤醒几何线程；
+// 2. `island-geometry` 线程把脏位串行消费掉，经 `run_on_main_thread` 投递到主线程；
+// 3. 主线程在**当前窗口消息处理完之后**才执行几何（不在 WndProc 重入栈上）；
+// 4. 该闭包里所有锁都是 try_lock（缓存）或极短持有，主线程永不被永久阻塞。
+// ---------------------------------------------------------------------------
+const GEO_DIRTY_MINIMIZE: u8 = 1 << 0;
+const GEO_DIRTY_DRAG: u8 = 1 << 1;
+const GEO_DIRTY_RESIZE: u8 = 1 << 2;
+const GEO_DIRTY_PINNED: u8 = 1 << 3;
+
+static ISLAND_GEO_DIRTY: AtomicU8 = AtomicU8::new(0);
+/// 事件里带过来的最后一次 Moved 坐标（事件回调里更新，几何线程消费）。
+static ISLAND_LAST_MOVED_X: AtomicI32 = AtomicI32::new(i32::MIN);
+static ISLAND_LAST_MOVED_Y: AtomicI32 = AtomicI32::new(i32::MIN);
+static PINNED_LAST_MOVED_X: AtomicI32 = AtomicI32::new(i32::MIN);
+static PINNED_LAST_MOVED_Y: AtomicI32 = AtomicI32::new(i32::MIN);
+/// 几何线程唤醒通道（脏位只是「有待办」的标志，通道负责立即唤醒）。
+static GEO_WAKE: OnceLock<std::sync::mpsc::Sender<()>> = OnceLock::new();
+static GEO_WORKER_STARTED: OnceLock<()> = OnceLock::new();
+
+/// 窗口事件里唯一允许做的事：置脏位 + 唤醒几何线程（无锁、无窗口 API）。
+fn mark_island_geometry_dirty(app: &AppHandle, bits: u8) {
+    ISLAND_GEO_DIRTY.fetch_or(bits, Ordering::SeqCst);
+    ensure_island_geometry_worker(app);
+    if let Some(sender) = GEO_WAKE.get() {
+        let _ = sender.send(());
+    }
+}
+
+fn ensure_island_geometry_worker(app: &AppHandle) {
+    if GEO_WORKER_STARTED.set(()).is_err() {
+        return;
+    }
+    let (sender, receiver) = std::sync::mpsc::channel::<()>();
+    let _ = GEO_WAKE.set(sender);
+    let app_handle = app.clone();
+    let spawned = thread::Builder::new()
+        .name("island-geometry".into())
+        .spawn(move || loop {
+            // 最多等 250ms：即使唤醒丢了，脏位也会在下一次轮询里被消费。
+            let _ = receiver.recv_timeout(Duration::from_millis(250));
+            loop {
+                let dirty = ISLAND_GEO_DIRTY.swap(0, Ordering::SeqCst);
+                if dirty == 0 {
+                    break;
+                }
+                dispatch_island_geometry(&app_handle, dirty);
+            }
+        });
+    if let Err(error) = spawned {
+        eprintln!("failed to spawn island geometry worker: {error}");
+    }
+}
+
+/// 把脏位对应的几何动作投递到主线程执行（不在窗口事件派发栈里重入）。
+fn dispatch_island_geometry(app: &AppHandle, dirty: u8) {
+    let app_handle = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let Some(window) = app_handle.get_webview_window(WINDOW_LABEL) else {
+            return;
+        };
+        if dirty & GEO_DIRTY_MINIMIZE != 0 {
+            sync_minimize_geometry(&window);
+        }
+        if dirty & GEO_DIRTY_RESIZE != 0 {
+            record_user_island_size(&window);
+        }
+        if dirty & GEO_DIRTY_DRAG != 0 {
+            let x = ISLAND_LAST_MOVED_X.swap(i32::MIN, Ordering::SeqCst);
+            let y = ISLAND_LAST_MOVED_Y.swap(i32::MIN, Ordering::SeqCst);
+            // 最小化期间系统也会发 Moved（哨兵坐标），这里再挡一次，
+            // 不让“最小化一次位置就变了”从新的异步路径复现。
+            if x != i32::MIN
+                && y != i32::MIN
+                && !ISLAND_MINIMIZED.load(Ordering::SeqCst)
+                && !window.is_minimized().unwrap_or(false)
+            {
+                record_dragged_position(PhysicalPosition::new(x, y));
+                persist_island_snapshot(&app_handle);
+            }
+        }
+        if dirty & GEO_DIRTY_PINNED != 0 {
+            handle_pinned_window_moved(&app_handle);
+        }
+    });
+    if let Err(error) = dispatched {
+        eprintln!("ISLAND_GEO_DISPATCH failed: {error}");
+    }
+}
+
+/// 用户拖拽边缘改大小：展开态且不在动画/浮层/最小化时，记录逻辑尺寸并持久化。
+fn record_user_island_size(window: &WebviewWindow) {
+    // 主线程路径：状态锁只 try_lock，拿不到就跳过这一次（下一次 Resized 还会来）。
+    let Some(state) = try_read_window_state() else {
+        return;
+    };
+    if !matches!(state.mode, IslandMode::Expanded)
+        || POSITION_ANIMATING.load(Ordering::SeqCst)
+        || ISLAND_MINIMIZED.load(Ordering::SeqCst)
+        || OVERLAY_ACTIVE.load(Ordering::SeqCst)
+        || window.is_minimized().unwrap_or(false)
+    {
+        return;
+    }
+    let (Ok(inner), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
+        return;
+    };
+    let logical_w = inner.width as f64 / scale;
+    let logical_h = inner.height as f64 / scale;
+    if logical_w < 320.0 || logical_h < 220.0 || (logical_w, logical_h) == (0.0, 0.0) {
+        return;
+    }
+    let changed = user_island_size()
+        .map(|(w, h)| (w - logical_w).abs() > 1.0 || (h - logical_h).abs() > 1.0)
+        .unwrap_or(true);
+    if changed {
+        store_user_island_size(logical_w, logical_h);
+        save_user_island_size(logical_w, logical_h);
+    }
+}
+
+/// 「固定在桌面的标签页」被拖动：记住用户坐标（程序位移 / 最小化哨兵值都过滤掉）。
+fn handle_pinned_window_moved(app: &AppHandle) {
+    let x = PINNED_LAST_MOVED_X.swap(i32::MIN, Ordering::SeqCst);
+    let y = PINNED_LAST_MOVED_Y.swap(i32::MIN, Ordering::SeqCst);
+    if x == i32::MIN || y == i32::MIN {
+        return;
+    }
+    let Some(window) = app.get_webview_window("pinned") else {
+        return;
+    };
+    let auto = PINNED_AUTO_POSITIONING.load(Ordering::SeqCst);
+    let minimized = window.is_minimized().unwrap_or(false);
+    let junk = (x == 0 && y == 0) || is_sentinel_window_position(x, y);
+    let programmatic = pinned_last_set() == Some((x, y));
+    if !auto && !minimized && !junk && !programmatic {
+        store_pinned_manual_position((x, y));
+    }
+}
+
 // 保险：几何应用后窗口如果完全跑到工作区之外（多屏切换 / 异常位置），
 // 清掉自定义位置、回到默认锚点并显示，避免“点一下小狗就整个不见了”。
 // ---------------------------------------------------------------------------
@@ -1546,6 +1847,21 @@ static STARTUP_RESTORE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 /// 上次落盘的矩形：同一矩形不重复写盘（几何事件很频繁）。
 static LAST_PERSISTED_RECT: std::sync::Mutex<Option<(i32, i32, u32, u32)>> =
     std::sync::Mutex::new(None);
+
+/// 缓存锁 try_lock：拿不到就当作「不是同一矩形 / 不记录」，最多多写一次盘。
+fn last_persisted_rect_is(rect: (i32, i32, u32, u32)) -> bool {
+    mutex_trace::try_lock(mutex_trace::LAST_PERSISTED_RECT, &LAST_PERSISTED_RECT)
+        .map(|guard| *guard == Some(rect))
+        .unwrap_or(false)
+}
+
+fn store_last_persisted_rect(rect: (i32, i32, u32, u32)) {
+    if let Some(mut guard) =
+        mutex_trace::try_lock(mutex_trace::LAST_PERSISTED_RECT, &LAST_PERSISTED_RECT)
+    {
+        *guard = Some(rect);
+    }
+}
 
 fn now_unix_millis() -> u64 {
     u64::try_from(current_unix_millis()).unwrap_or_default()
@@ -1580,14 +1896,15 @@ fn persist_island_snapshot(app: &AppHandle) {
         return;
     }
     let rect = (position.x, position.y, size.width, size.height);
-    if let Ok(slot) = LAST_PERSISTED_RECT.lock() {
-        if *slot == Some(rect) {
-            return;
-        }
+    if last_persisted_rect_is(rect) {
+        return;
     }
     let monitor = window.current_monitor().ok().flatten();
     let scale = monitor.as_ref().map(|value| value.scale_factor()).unwrap_or(1.0);
-    let state = read_window_state();
+    // 主线程路径：状态锁 try_lock，拿不到就放弃这次落盘（快照只是缓存，下次还会写）。
+    let Some(state) = try_read_window_state() else {
+        return;
+    };
     // 启动快照只保存「收起态狗槽」：展开/浮层态退出时，窗口矩形是面板尺寸（727×480 / 587×540），
     // 直接存下来会让下次启动恢复成展开位置（用户看到“重启不跟随副屏设置”）。
     // 这里统一折算成狗槽 + 收起态尺寸，mode 一律 collapsed；启动恢复永远走收起态。
@@ -1621,9 +1938,7 @@ fn persist_island_snapshot(app: &AppHandle) {
         eprintln!("[startup] snapshot save failed: {error}");
         return;
     }
-    if let Ok(mut slot) = LAST_PERSISTED_RECT.lock() {
-        *slot = Some(rect);
-    }
+    store_last_persisted_rect(rect);
 }
 
 fn nearest_monitor_to_rect(app: &AppHandle, x: i32, y: i32) -> Option<Monitor> {
@@ -1691,14 +2006,12 @@ fn restore_island_rect_on_startup(app: &AppHandle) {
     STARTUP_RESTORED.store(true, Ordering::SeqCst);
     STARTUP_RESTORE_UNTIL_MS.store(now_unix_millis() + 3000, Ordering::SeqCst);
     // D1：恢复后同步「最近落定矩形」，否则首次展开会拿上一个会话的旧位置。
-    if let Ok(mut slot) = LAST_SETTLED_ISLAND_RECT.lock() {
-        *slot = Some(WindowRect {
-            x,
-            y,
-            width: snapshot.width,
-            height: snapshot.height,
-        });
-    }
+    store_settled_island_rect(WindowRect {
+        x,
+        y,
+        width: snapshot.width,
+        height: snapshot.height,
+    });
     eprintln!(
         "STARTUP_RESTORE source=file rect=({x},{y},{},{}) monitor={} scale={scale} mode={} ok={}",
         snapshot.width,
@@ -3565,6 +3878,35 @@ static PINNED_MANUAL_POSITION: std::sync::Mutex<Option<(i32, i32)>> = std::sync:
 static PINNED_AUTO_POSITIONING: AtomicBool = AtomicBool::new(false);
 /// 最近一次由程序写入的坐标：`Moved` 收到同一个坐标说明是程序位移，不算用户拖动。
 static PINNED_LAST_SET: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+/// pinned「程序写入坐标」登记（缓存锁：try_lock，拿不到就跳过）。
+fn pinned_last_set() -> Option<(i32, i32)> {
+    mutex_trace::try_lock(mutex_trace::PINNED_LAST_SET, &PINNED_LAST_SET).and_then(|guard| *guard)
+}
+
+fn store_pinned_last_set(position: (i32, i32)) {
+    if let Some(mut guard) =
+        mutex_trace::try_lock(mutex_trace::PINNED_LAST_SET, &PINNED_LAST_SET)
+    {
+        *guard = Some(position);
+    }
+}
+
+fn store_pinned_manual_position(position: (i32, i32)) {
+    if let Some(mut guard) =
+        mutex_trace::try_lock(mutex_trace::PINNED_MANUAL_POSITION, &PINNED_MANUAL_POSITION)
+    {
+        *guard = Some(position);
+    }
+}
+
+fn pinned_manual_position() -> Option<(i32, i32)> {
+    mutex_trace::try_lock(
+        mutex_trace::PINNED_MANUAL_POSITION,
+        &PINNED_MANUAL_POSITION,
+    )
+    .and_then(|guard| *guard)
+}
+
 /// pinned 默认逻辑尺寸（与 window_factory 的 420×560 一致，用于按目标屏 scale 换算物理尺寸）。
 const PINNED_LOGICAL_WIDTH: f64 = 420.0;
 const PINNED_LOGICAL_HEIGHT: f64 = 560.0;
@@ -3667,7 +4009,7 @@ fn place_pinned_window(app: &AppHandle) -> Result<(), String> {
             physical.0, physical.1,
         )));
     }
-    let manual = PINNED_MANUAL_POSITION.lock().ok().and_then(|slot| *slot);
+    let manual = pinned_manual_position();
     let position = match manual {
         // 拖动过的窗口：换屏时夹进目标屏工作区，尽量保留相对位置。
         Some(position) => clamp_to_work_area(position, physical, work),
@@ -3677,16 +4019,12 @@ fn place_pinned_window(app: &AppHandle) -> Result<(), String> {
     let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
         position.0, position.1,
     )));
-    if let Ok(mut slot) = PINNED_LAST_SET.lock() {
-        *slot = Some(position);
-    }
+    store_pinned_last_set(position);
     PINNED_AUTO_POSITIONING.store(false, Ordering::SeqCst);
     // 任务栏（含自动隐藏浮出）会盖住底部：固定页也夹进 safe rect。
     let _ = clamp_window_above_taskbar(&window);
     if manual.is_some() {
-        if let Ok(mut slot) = PINNED_MANUAL_POSITION.lock() {
-            *slot = Some(position);
-        }
+        store_pinned_manual_position(position);
     }
     eprintln!(
         "[monitor] pinned placed at ({}, {}) on {} (scale {:.2}, manual={})",
@@ -5381,15 +5719,34 @@ fn window_state() -> &'static Mutex<IslandWindowState> {
     WINDOW_STATE.get_or_init(|| Mutex::new(IslandWindowState::default()))
 }
 
+/// 窗口状态锁统一走探针（`MUTEX_TRACE` 打点 + 持有者登记），语义与 `lock()` 相同。
+///
+/// 纪律：`update` 闭包里**只允许改字段**，绝不允许调用任何窗口 API
+/// （`set_*/show/hide/emit/outer_*`）。持锁调窗口 API 会重入事件派发，
+/// 是冷启动卡死报告里点名的 ABBA 形态。
 fn mutate_window_state(
     update: impl FnOnce(&mut IslandWindowState) -> IslandWindowState,
 ) -> IslandWindowState {
-    let mut state = window_state().lock().expect("window state poisoned");
+    let mut state = mutex_trace::lock(mutex_trace::WINDOW_STATE, window_state());
     update(&mut state)
 }
 
 fn read_window_state() -> IslandWindowState {
-    *window_state().lock().expect("window state poisoned")
+    *mutex_trace::lock(mutex_trace::WINDOW_STATE, window_state())
+}
+
+/// 非阻塞读：拿不到锁就返回 `None`。只给「不能阻塞」的路径用
+/// （窗口事件线程、看门狗），调用方必须能接受“这一次没读到”。
+fn try_read_window_state() -> Option<IslandWindowState> {
+    mutex_trace::try_lock(mutex_trace::WINDOW_STATE, window_state()).map(|guard| *guard)
+}
+
+/// 非阻塞改：拿不到锁就跳过这一次（缓存语义，调用方接受丢失）。
+fn try_mutate_window_state(
+    update: impl FnOnce(&mut IslandWindowState) -> IslandWindowState,
+) -> Option<IslandWindowState> {
+    let mut state = mutex_trace::try_lock(mutex_trace::WINDOW_STATE, window_state())?;
+    Some(update(&mut state))
 }
 
 fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
@@ -5435,12 +5792,14 @@ fn apply_glass_material(
 }
 
 fn user_island_size() -> Option<(f64, f64)> {
-    USER_ISLAND_SIZE.lock().ok().and_then(|slot| *slot)
+    mutex_trace::try_lock(mutex_trace::USER_ISLAND_SIZE, &USER_ISLAND_SIZE).and_then(|guard| *guard)
 }
 
 #[tauri::command]
 fn reset_island_size(app: AppHandle) -> Result<(), String> {
-    if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
+    if let Some(mut slot) =
+        mutex_trace::try_lock(mutex_trace::USER_ISLAND_SIZE, &USER_ISLAND_SIZE)
+    {
         *slot = None;
     }
     let _ = std::fs::remove_file(island_size_path());
@@ -5984,14 +6343,16 @@ fn record_dragged_position(position: PhysicalPosition<i32>) {
     }
     // 浮层展开时窗口会主动改变尺寸/位置；这些 Moved 事件不是用户拖拽，
     // 绝不能写进 custom_position，否则关闭浮层后小狗会留下左上偏移。
-    if OVERLAY_SNAPSHOT
-        .lock()
+    // 这里用 try_lock：主线程路径不能被浮层快照锁挡住（拿不到就按“浮层可能开着”跳过）。
+    let overlay_active = OVERLAY_SNAPSHOT
+        .try_lock()
         .map(|slot| slot.is_some())
-        .unwrap_or(false)
-    {
+        .unwrap_or(true);
+    if overlay_active {
         return;
     }
-    mutate_window_state(|state| {
+    // 状态锁同样 try_lock：拖拽记录是缓存语义，这一次抢不到就等下一次 Moved。
+    try_mutate_window_state(|state| {
         if state.is_dragging && !state.is_tucked {
             state.custom_position = Some(IslandPosition {
                 x: position.x,
@@ -6860,75 +7221,47 @@ pub fn run() {
                 }
                 return;
             }
+            // 冷启动卡死治本项 3：**窗口事件回调只置脏标记**。
+            // 这里既不取任何 Mutex，也不调任何窗口 API（`is_minimized` / `set_*` /
+            // `emit` / `outer_*` 全挪走）。原因：本回调是在 Win32 消息派发栈里被同步
+            // 调进来的，一旦在这里调 `set_size/set_position`，tao 会再同步派发一次
+            // WM_*，形成重入；而在重入栈里取锁，就是 dump 里「主线程停在 Mutex
+            // futex」的形态。几何计算交给 `island-geometry` 线程串行执行。
             if window.label() != WINDOW_LABEL {
                 // 「固定在桌面的标签页」：记住用户拖动后的位置（换屏时夹进目标屏）。
                 if window.label() == "pinned" {
                     if let WindowEvent::Moved(position) = event {
-                        let auto = PINNED_AUTO_POSITIONING.load(Ordering::SeqCst);
-                        let minimized = window.is_minimized().unwrap_or(false);
-                        let junk = (position.x == 0 && position.y == 0)
-                            || is_sentinel_window_position(position.x, position.y);
-                        let programmatic = PINNED_LAST_SET
-                            .lock()
-                            .ok()
-                            .and_then(|slot| *slot)
-                            == Some((position.x, position.y));
-                        if !auto && !minimized && !junk && !programmatic {
-                            if let Ok(mut slot) = PINNED_MANUAL_POSITION.lock() {
-                                *slot = Some((position.x, position.y));
-                            }
-                        }
+                        PINNED_LAST_MOVED_X.store(position.x, Ordering::SeqCst);
+                        PINNED_LAST_MOVED_Y.store(position.y, Ordering::SeqCst);
+                        mark_island_geometry_dirty(window.app_handle(), GEO_DIRTY_PINNED);
                     }
                 }
                 return;
             }
 
-            // 最小化 / 还原：同步几何冻结状态（缓存最小化前矩形 / 还原后逐像素复位）。
             // 最小化会让窗口尺寸变 0、位置变 (-32000,-32000)，并连续发 Moved/Resized；
             // 这些事件绝不能进 record_dragged_position，否则还原位置被写脏。
-            if matches!(event, WindowEvent::Resized(_) | WindowEvent::Focused(_)) {
-                if let Some(webview) = window.app_handle().get_webview_window(WINDOW_LABEL) {
-                    sync_minimize_geometry(&webview);
-                    // 用户拖拽边缘改大小：展开态且不在动画/浮层/最小化时，记录逻辑尺寸并持久化。
-                    if matches!(event, WindowEvent::Resized(_))
-                        && matches!(read_window_state().mode, IslandMode::Expanded)
-                        && !POSITION_ANIMATING.load(Ordering::SeqCst)
-                        && !ISLAND_MINIMIZED.load(Ordering::SeqCst)
-                        && !webview.is_minimized().unwrap_or(false)
-                        && !OVERLAY_ACTIVE.load(Ordering::SeqCst)
-                    {
-                        if let (Ok(inner), Ok(scale)) = (webview.inner_size(), webview.scale_factor()) {
-                            let logical_w = inner.width as f64 / scale;
-                            let logical_h = inner.height as f64 / scale;
-                            if logical_w >= 320.0 && logical_h >= 220.0 && (logical_w, logical_h) != (0.0, 0.0) {
-                                let changed = user_island_size().map(|(w, h)| (w - logical_w).abs() > 1.0 || (h - logical_h).abs() > 1.0).unwrap_or(true);
-                                if changed {
-                                    if let Ok(mut slot) = USER_ISLAND_SIZE.lock() {
-                                        *slot = Some((logical_w, logical_h));
-                                    }
-                                    save_user_island_size(logical_w, logical_h);
-                                }
-                            }
-                        }
-                    }
+            // 判定（is_minimized / 哨兵坐标过滤）也一起挪到几何线程里做。
+            match event {
+                WindowEvent::Resized(_) => {
+                    mark_island_geometry_dirty(
+                        window.app_handle(),
+                        GEO_DIRTY_MINIMIZE | GEO_DIRTY_RESIZE,
+                    );
                 }
-                return;
-            }
-
-            if let WindowEvent::Moved(position) = event {
-                if window.is_minimized().unwrap_or(false)
-                    || ISLAND_MINIMIZED.load(Ordering::SeqCst)
-                    || is_sentinel_window_position(position.x, position.y)
-                {
-                    return;
+                WindowEvent::Focused(_) => {
+                    mark_island_geometry_dirty(window.app_handle(), GEO_DIRTY_MINIMIZE);
                 }
-                record_dragged_position(*position);
-                persist_island_snapshot(window.app_handle());
-                return;
+                WindowEvent::Moved(position) => {
+                    ISLAND_LAST_MOVED_X.store(position.x, Ordering::SeqCst);
+                    ISLAND_LAST_MOVED_Y.store(position.y, Ordering::SeqCst);
+                    mark_island_geometry_dirty(window.app_handle(), GEO_DIRTY_DRAG);
+                }
+                _ => {
+                    // Native Acrylic/Region is intentionally not reapplied on DPI
+                    // changes. Liquid glass is rendered inside the island element.
+                }
             }
-
-            // Native Acrylic/Region is intentionally not reapplied on DPI
-            // changes. Liquid glass is rendered inside the island element.
         })
         .setup(move |app| {
             build_tray(app)?;
@@ -6941,19 +7274,10 @@ pub fn run() {
             // 多屏热插拔：30s 轮询显示器指纹集合，变化时按偏好重排主岛/Bongo。
             start_monitor_watch(app.handle().clone());
             // 重启后 Bongo 回主屏：启动瞬间显示器枚举 / 前端恢复主岛位置 / 屏幕偏好
-            // 都还没就绪，extras 可能先按主屏落位。这里在 1s / 3s / 6s 各重同步一次
-            // （幂等，成功后配置不变就不会再动），保证「Bongo 跟随小狗」用的是主岛实际所在屏。
-            {
-                let app_handle = app.handle().clone();
-                thread::spawn(move || {
-                    for delay in [Duration::from_millis(1000), Duration::from_secs(3), Duration::from_secs(6)] {
-                        thread::sleep(delay);
-                        if let Some(config) = desktop_extras::last_config() {
-                            let _ = desktop_extras::sync_extras_now(&app_handle, &config);
-                        }
-                    }
-                });
-            }
+            // 都还没就绪，extras 可能先按主屏落位。历史上这里在 setup 里直接起
+            // 1s / 3s / 6s 三拍重同步，正好撞上主线程启动几何窗口（冷启动卡死握手期）。
+            // 现在**延后到 frontend_ready 之后**再跑（见 spawn_startup_extras_resync）。
+            spawn_startup_extras_resync(app.handle().clone());
             if let Err(error) = clipboard_history::init(app.handle()) {
                 eprintln!("failed to initialize clipboard history: {error}");
             }
@@ -6987,6 +7311,8 @@ pub fn run() {
                 start_cursor_passthrough_loop(window);
             }
             startup_mark("setup:island_ready");
+            // 几何线程按需懒启动；这里先显式拉起一次，避免第一条窗口事件才 spawn。
+            ensure_island_geometry_worker(app.handle());
             spawn_startup_watchdog(app.handle().clone());
             Ok(())
         })
