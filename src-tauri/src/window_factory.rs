@@ -105,9 +105,14 @@ fn bubble() -> WindowSpec {
     overlay("bubble", "index.html?window=bubble", 340.0, 520.0)
 }
 
-fn settings() -> WindowSpec {
+/// 设置窗口的候选 label：第一个坏的（建窗时 WebView2 profile 被占，窗口只剩
+/// manager 里的死壳且无法移除）就换下一个 label 重建，见 `open_settings_window`。
+/// 这些 label 必须同时写进 `capabilities/default.json` 的 windows 列表。
+pub const SETTINGS_LABELS: [&str; 3] = ["settings", "settings-retry-1", "settings-retry-2"];
+
+fn settings(label: &'static str) -> WindowSpec {
     let mut window_spec = base(
-        "settings",
+        label,
         "Maltese · 桌宠设置",
         "index.html?window=settings",
         560.0,
@@ -207,7 +212,11 @@ fn spec_for(label: &str) -> Option<WindowSpec> {
     match label {
         "translation" => Some(translation()),
         "bubble" => Some(bubble()),
-        "settings" => Some(settings()),
+        // 设置窗口的备用 label：首个 label 建窗失败（WebView2 profile 被占，
+        // manager 里留下无法移除的死壳）时换 label 重建，见 open_settings_window。
+        "settings" => Some(settings("settings")),
+        "settings-retry-1" => Some(settings("settings-retry-1")),
+        "settings-retry-2" => Some(settings("settings-retry-2")),
         "companion-1" => Some(companion(1)),
         "companion-2" => Some(companion(2)),
         "companion-3" => Some(companion(3)),
@@ -221,10 +230,12 @@ fn spec_for(label: &str) -> Option<WindowSpec> {
     }
 }
 
-const LAZY_WINDOW_LABELS: [&str; 12] = [
+const LAZY_WINDOW_LABELS: [&str; 14] = [
     "translation",
     "bubble",
     "settings",
+    "settings-retry-1",
+    "settings-retry-2",
     "companion-1",
     "companion-2",
     "companion-3",
@@ -302,8 +313,8 @@ fn build(app: &AppHandle, label: &str) -> Result<WebviewWindow, String> {
         .build()
         .map_err(|error| format!("failed to create window {label}: {error}"))?;
 
-    // 设置窗口点 X 只隐藏不销毁，懒创建时也要挂上同样的关闭拦截。
-    if label == "settings" {
+    // 设置窗口点 X 只隐藏不销毁，懒创建时也要挂上同样的关闭拦截（含备用 label）。
+    if SETTINGS_LABELS.contains(&label) {
         crate::attach_settings_close(&window);
     }
     Ok(window)
@@ -370,10 +381,29 @@ mod tests {
     /// Windows 上网页收不到拖动事件，表情方格墙「拖不动」。
     #[test]
     fn settings_disables_native_drag_drop_handler() {
-        assert!(!spec_for("settings").expect("settings").drag_drop_enabled);
+        for label in SETTINGS_LABELS {
+            assert!(!spec_for(label).expect(label).drag_drop_enabled, "{label}");
+        }
         // 其它窗口没有网页内拖放需求，保持 Tauri 默认（原生文件拖入行为不变）。
         for label in ["translation", "bubble", "plugin", "billiards", "pinned"] {
             assert!(spec_for(label).expect(label).drag_drop_enabled, "{label}");
+        }
+    }
+
+    /// 设置窗口备用 label：建窗失败换 label 重建时，每个 label 都必须有完整配置
+    /// （同一 URL / 尺寸 / 拖放设置），否则重试出来的窗口会缺权限或参数。
+    #[test]
+    fn settings_retry_labels_share_the_same_spec() {
+        let primary = spec_for("settings").expect("settings");
+        for label in ["settings-retry-1", "settings-retry-2"] {
+            let retry = spec_for(label).expect(label);
+            assert_eq!(retry.label, label);
+            assert_eq!(retry.url, primary.url);
+            assert_eq!(retry.title, primary.title);
+            assert_eq!(retry.width, primary.width);
+            assert_eq!(retry.height, primary.height);
+            assert_eq!(retry.drag_drop_enabled, primary.drag_drop_enabled);
+            assert!(retry.center);
         }
     }
 }

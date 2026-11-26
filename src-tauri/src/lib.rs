@@ -2554,43 +2554,94 @@ fn attach_settings_close(window: &WebviewWindow) {
 // async 命令在异步运行时线程上跑，建窗口会排进事件循环，走和启动期
 // `tauri.conf.json` 窗口一样的正常创建路径。官方文档（webview_window.rs 的
 // Known issues，wry#583）同样要求用 async 命令 / 独立线程创建窗口。
+/// 当前实际可用的设置窗口 label。首次打开时如果 "settings" 只剩 manager 死壳
+/// （主线程建 WebView2 失败，例如上一实例的浏览器进程还在退出、user data dir 被占
+/// → ERROR_BUSY / 0x800700AA），就切到备用 label 重建；之后一直用这个 label。
+static SETTINGS_WINDOW_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
+
+/// 等窗口物化（原生 HWND 真的建出来）。拿不到 outer_position/outer_size 说明
+/// tauri-runtime-wry 的主线程建窗失败、只留下了 manager 里的壳，返回 None。
+fn wait_settings_window_materialized(
+    window: &WebviewWindow,
+    source: &str,
+    label: &str,
+    started: Instant,
+) -> Option<(i32, i32, u32, u32)> {
+    for attempt in 1..=40 {
+        match (window.outer_position(), window.outer_size()) {
+            (Ok(position), Ok(size)) => {
+                let rect = (position.x, position.y, size.width, size.height);
+                eprintln!(
+                    "SETTINGS_OPEN materialized attempt={attempt} source={source} label={label} rect={rect:?} elapsed={:?}",
+                    started.elapsed()
+                );
+                return Some(rect);
+            }
+            _ => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
+    None
+}
+
 #[tauri::command]
 async fn open_settings_window(app: AppHandle, source: Option<String>) -> Result<(), String> {
     let started = Instant::now();
     let source = source.unwrap_or_else(|| "unknown".to_string());
     eprintln!("SETTINGS_OPEN requested source={source}");
-    let window = match window_factory::ensure(&app, "settings") {
-        Ok(window) => window,
-        Err(error) => {
-            eprintln!("SETTINGS_OPEN failed stage=ensure source={source} reason={error}");
-            return Err(format!("设置窗口创建失败：{error}"));
-        }
+    // label 候选：已经确定可用的只试它；否则按 settings → retry-1 → retry-2 依次试。
+    // 退避 250ms / 750ms 覆盖「上一个实例的 WebView2 浏览器进程还在退出」这个瞬时窗口
+    // （此时建窗失败只 log::error，manager 留下不可移除的死壳，只能换 label 重建）。
+    let known = SETTINGS_WINDOW_LABEL.lock().ok().and_then(|slot| *slot);
+    let candidates: Vec<&'static str> = match known {
+        Some(label) => vec![label],
+        None => window_factory::SETTINGS_LABELS.to_vec(),
     };
-    // 懒创建是「投递到主线程」的异步创建：ensure() 返回时窗口可能只是 manager 里的
-    // 一个壳，原生 HWND 还没建出来。主线程那次创建失败时 tauri-runtime-wry 只会
-    // `log::error!`，句柄却仍留在 manager 里 —— 之后所有 is_visible()/outer_position()
-    // 都会立刻报错（状态通道被丢弃）。这里先等它物化，把「建不出来」与
-    // 「建出来但没显示」区分开，也不再把 `visible=false` 当成功回给前端。
-    let mut materialized_rect: Option<(i32, i32, u32, u32)> = None;
-    for attempt in 1..=40 {
-        match (window.outer_position(), window.outer_size()) {
-            (Ok(position), Ok(size)) => {
-                materialized_rect = Some((position.x, position.y, size.width, size.height));
+    let mut chosen: Option<(WebviewWindow, &'static str, (i32, i32, u32, u32))> = None;
+    let mut last_reason = String::from("unknown");
+    for (index, label) in candidates.iter().enumerate() {
+        if index > 0 {
+            let backoff_ms = if index == 1 { 250 } else { 750 };
+            eprintln!(
+                "SETTINGS_OPEN retry index={} label={label} backoffMs={backoff_ms} source={source}",
+                index + 1
+            );
+            std::thread::sleep(Duration::from_millis(backoff_ms));
+        }
+        let window = match window_factory::ensure(&app, label) {
+            Ok(window) => window,
+            Err(error) => {
                 eprintln!(
-                    "SETTINGS_OPEN materialized attempt={attempt} source={source} rect={materialized_rect:?}"
+                    "SETTINGS_OPEN failed stage=ensure source={source} label={label} reason={error}"
                 );
+                last_reason = error;
+                continue;
+            }
+        };
+        match wait_settings_window_materialized(&window, &source, label, started) {
+            Some(rect) => {
+                if let Ok(mut slot) = SETTINGS_WINDOW_LABEL.lock() {
+                    *slot = Some(label);
+                }
+                eprintln!("SETTINGS_OPEN window_label={label} source={source}");
+                chosen = Some((window, label, rect));
                 break;
             }
-            _ => std::thread::sleep(std::time::Duration::from_millis(25)),
+            None => {
+                eprintln!(
+                    "SETTINGS_OPEN failed stage=materialize source={source} label={label} reason=window-handle-not-ready (WebView2 建窗失败，换备用 label 重试)"
+                );
+                last_reason = "原生窗口没有建立起来（WebView2 建窗失败）".to_string();
+            }
         }
     }
-    if materialized_rect.is_none() {
+    let Some((window, label, materialized_rect)) = chosen else {
         eprintln!(
-            "SETTINGS_OPEN failed stage=materialize source={source} reason=window-handle-not-ready elapsed={:?}",
-            started.elapsed()
+            "SETTINGS_OPEN failed stage=create source={source} reason=all labels failed: {last_reason}"
         );
-        return Err("设置窗口创建失败：原生窗口没有建立起来（详见日志 SETTINGS_OPEN）".to_string());
-    }
+        return Err(format!(
+            "设置窗口创建失败：{last_reason}（详见日志 SETTINGS_OPEN）"
+        ));
+    };
     let already_visible = window.is_visible().unwrap_or(false);
     // 懒创建出来的窗口是 visible(false)：WebView2 子窗口还没挂好时 show() 可能“成功但不可见”。
     // 这里显式 unminimize + show，并用 is_visible() 复核，最多重试 3 次。
@@ -2606,7 +2657,7 @@ async fn open_settings_window(app: AppHandle, source: Option<String>) -> Result<
             .zip(window.outer_size().ok())
             .map(|(position, size)| (position.x, position.y, size.width, size.height));
         eprintln!(
-            "SETTINGS_WINDOW_SHOW attempt={attempt} visible={visible} rect={rect:?} source={source}"
+            "SETTINGS_WINDOW_SHOW attempt={attempt} visible={visible} rect={rect:?} source={source} label={label}"
         );
         if visible {
             shown = true;
@@ -2615,7 +2666,7 @@ async fn open_settings_window(app: AppHandle, source: Option<String>) -> Result<
     }
     if !shown {
         eprintln!(
-            "SETTINGS_OPEN failed stage=show source={source} reason=visible=false after 3 attempts"
+            "SETTINGS_OPEN failed stage=show source={source} label={label} reason=visible=false after 3 attempts"
         );
         return Err("设置窗口已经创建，但没有显示出来（详见日志 SETTINGS_WINDOW_SHOW）".to_string());
     }
@@ -2625,7 +2676,7 @@ async fn open_settings_window(app: AppHandle, source: Option<String>) -> Result<
     }
     // 排障用：创建 → show → 聚焦 的耗时与结果（重复点击时应只剩聚焦）。
     eprintln!(
-        "SETTINGS_OPEN ok source={source} elapsed={:?} alreadyVisible={already_visible} rect={materialized_rect:?}",
+        "SETTINGS_OPEN ok source={source} label={label} elapsed={:?} alreadyVisible={already_visible} rect={materialized_rect:?}",
         started.elapsed()
     );
     Ok(())

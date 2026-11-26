@@ -52,7 +52,27 @@ settings window ready in 364ms (created: true, already visible: false)
 是会话内 WebView2 环境/用户数据目录状态（例如被其它实例/残留进程占用）导致建窗失败，
 而旧代码把这种失败**静默当成成功**。
 
-## 本次改动（只做可验证的加固，不假装修了无法复现的回归）
+## 确定性复现（fix-ui2，2026-11-26 16:44）
+
+1. 运行中直接 `Stop-Process -Force` 杀掉 Maltese；
+2. **10s 内**重启（`MALTESE_DATA_DIR` 隔离目录、默认 WebView2 profile）；
+3. 主窗口建 WebView2 直接失败：
+
+```
+[ERROR] tauri_runtime_wry: failed to create webview: WebView2 error:
+  WindowsError(Error { code: HRESULT(0x800700AA), message: "请求的资源在使用中。" })
+STARTUP_RESTORE source=file ok=false reason=set_rect: the underlying handle is not available
+STARTUP_WATCHDOG no frontend ready in 8s ...
+```
+
+`0x800700AA = ERROR_BUSY`：WebView2 user data dir（Tauri 固定
+`%LOCALAPPDATA%\com.maolouis.maltese`，tauri-2.11.5 `manager/webview.rs` 534-551）
+被上一个实例尚未退出的浏览器进程占着 → 环境创建失败 → 主窗口/后续窗口的 HWND 都没建出来
+→ manager 留壳 → 所有 getter 报 "underlying handle is not available"
+（即 v2b-boot.log 的 `visible=false rect=None`）。等浏览器进程完全退出（~10s+）再启动就正常。
+这与「更新器/安装程序杀进程后立刻拉起新版本」的场景高度吻合。
+
+## 本次改动
 
 1. **失败可见**：`open_settings_window` 在 `ensure()` 之后先等窗口物化（最多 40×25ms），
    拿不到 `outer_position/outer_size` 就返回中文 Err；`visible=false` 也返回 Err。
@@ -65,6 +85,12 @@ settings window ready in 364ms (created: true, already visible: false)
    `island-header` / `island-layout` / `assistant-panel` / `pet-bubble` / `tray`。
 4. **前端错误边界**：顶部「设置」入口 `try/catch` + `console.error` + 岛内中文错误条
    `.island-settings-error`（6s 自动消失），同时退回岛内「布局编辑」页，不再静默无反应。
+5. **退避重试 + 备用 label**（覆盖 ERROR_BUSY 瞬时窗口）：建窗失败在 manager 里留下的是
+   **无法移除的死壳**，同 label 重试永远失败。所以设置窗口有 3 个候选 label
+   （`settings` / `settings-retry-1` / `settings-retry-2`，`window_factory::SETTINGS_LABELS`，
+   均已写进 `capabilities/default.json`）：物化失败就退避 250ms / 750ms 换下一个 label 重建；
+   成功后把可用 label 记进 `SETTINGS_WINDOW_LABEL`，之后点击直接复用，不再每次等 1s。
+   日志：`SETTINGS_OPEN retry index=N label=... backoffMs=...`、`SETTINGS_OPEN window_label=...`。
 
 ## 仍未确定
 
