@@ -1121,6 +1121,10 @@ struct PetSlotMeasure {
     off_y: f64,
     width: f64,
     height: f64,
+    /// 采样时的窗口逻辑尺寸：不同面板（hover 540 / cloud 400）窗口高度不同，
+    /// 狗在窗口内的偏移随高度变化，只有尺寸一致时这个样本才能用于预补偿。
+    window_w: f64,
+    window_h: f64,
 }
 
 static PET_SLOT_MEASURE: std::sync::Mutex<Option<PetSlotMeasure>> = std::sync::Mutex::new(None);
@@ -1136,6 +1140,9 @@ struct PlannedOverlay {
     width: u32,
     height: u32,
     pre_compensated: bool,
+    /// 规划阶段算出的面板方向：set 阶段直接透传给前端，避免再按「左/上」写死。
+    side: String,
+    vertical: String,
 }
 
 static PLANNED_OVERLAY: std::sync::Mutex<Option<PlannedOverlay>> = std::sync::Mutex::new(None);
@@ -1215,12 +1222,21 @@ fn report_pet_slot_offset(
     height: f64,
 ) -> Result<(), String> {
     let window = main_window(&app)?;
+    // 采样时窗口的逻辑尺寸：预补偿只在「计划窗口尺寸 == 采样窗口尺寸」时可信。
+    let (window_w, window_h) = window
+        .inner_size()
+        .ok()
+        .zip(window.scale_factor().ok())
+        .map(|(size, scale)| (size.width as f64 / scale, size.height as f64 / scale))
+        .unwrap_or((0.0, 0.0));
     let measure = PetSlotMeasure {
         mode: mode.clone(),
         off_x,
         off_y,
         width,
         height,
+        window_w,
+        window_h,
     };
     if let Ok(mut slot) = PET_SLOT_MEASURE.lock() {
         *slot = Some(measure.clone());
@@ -2082,13 +2098,31 @@ fn set_island_overlay(
                 "OVERLAY_SINGLE_SHOT ok={single_shot} kind={kind} rect=({},{},{},{}) preCompensated={} corrections=0",
                 planned.x, planned.y, planned.width, planned.height, planned.pre_compensated
             );
-            let _ = window.emit("maltese-panel-side", "left");
-            let _ = window.emit("maltese-panel-vertical", "above");
-            enforce_slot_invariant(
-                &window,
-                expected_slot_from_state(&window),
-                if kind == "hover" { "doubleclick" } else { "set_island_overlay" },
-            );
+            // 方向必须用规划期的真实结果：以前这里写死 left/above，和 plan 的 side
+            // 不一致时前端会把小狗钉到窗口另一侧（小狗/面板错位）。
+            let _ = window.emit("maltese-panel-side", planned.side.as_str());
+            let _ = window.emit("maltese-panel-vertical", planned.vertical.as_str());
+            // 单次落位的目标就是最终位置，这里**绝不能再 set_position 纠正**：
+            // 此时前端上报的实测偏移还是上一次布局的（首次打开浮层时甚至还没有
+            // overlay 样本），拿它纠正等于把刚放好的窗口再挪一次。v2b 日志里
+            // `SLOT_INVARIANT_VIOLATION op=set_island_overlay dx=-308 dy=-408 corrected=true`
+            // 就是这次多余移动 —— 用户看到的「双击后向下闪一下」。
+            // 兜底交给前端 60ms 后的 report_pet_slot_offset 实测上报（真偏了才纠）。
+            if let Some(actual) = read_sane_island_rect(&window) {
+                let planned_rect = WindowRect {
+                    x: planned.x,
+                    y: planned.y,
+                    width: planned.width,
+                    height: planned.height,
+                };
+                if actual != planned_rect {
+                    eprintln!(
+                        "OVERLAY_SINGLE_SHOT verify mismatch kind={kind} planned=({},{},{},{}) actual=({},{},{},{})",
+                        planned_rect.x, planned_rect.y, planned_rect.width, planned_rect.height,
+                        actual.x, actual.y, actual.width, actual.height
+                    );
+                }
+            }
             geometry_authority::record(
                 "set_island_overlay",
                 None,
@@ -2389,19 +2423,63 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
         None => create_overlay_snapshot(&window, scale)?,
     };
     let (base_w, base_h) = (snapshot.base_w, snapshot.base_h);
-    // 与右键完全同源：锚点一律取「最近一次落定 / custom_position」的狗槽，不用窗口临时坐标。
+    // 锚点：优先「最近一次落定 / custom_position」的狗槽，但**必须先校验它还是不是现在的位置**。
+    // startup 恢复 / 换屏 / 旧脚本移动窗口都可能让窗口实际矩形与 state.custom_position 脱节；
+    // 用 stale 锚点会把浮层窗口整窗挪到旧坐标（v2b 日志：实际窗口 (-259,862)，settled 却是
+    // (2285,1155)，一次开浮层窗口被移动 3 次、跨 1200px），用户看到的就是「闪一下」。
     let settled_anchor = expected_slot_from_state(&window);
-    let anchor = settled_anchor
-        .map(|slot| IslandPosition { x: slot.x, y: slot.y })
-        .unwrap_or(IslandPosition {
+    let actual_anchor = window
+        .outer_position()
+        .ok()
+        .map(|position| IslandPosition { x: position.x, y: position.y });
+    let settled_matches_actual = match (settled_anchor, actual_anchor) {
+        (Some(settled), Some(actual)) => {
+            (settled.x - actual.x).abs() <= 2 && (settled.y - actual.y).abs() <= 2
+        }
+        (None, _) => true,
+        (Some(_), None) => false,
+    };
+    let (anchor, anchor_source) = if settled_matches_actual {
+        match settled_anchor {
+            Some(slot) => (
+                IslandPosition {
+                    x: slot.x,
+                    y: slot.y,
+                },
+                "settled",
+            ),
+            None => (
+                IslandPosition {
+                    x: snapshot.anchor_x,
+                    y: snapshot.anchor_y,
+                },
+                "window",
+            ),
+        }
+    } else {
+        // 窗口真实位置才是狗槽真值：用它当锚点，并把实际位置写回 state，
+        // 之后的 expected_slot_from_state / 实测上报都不会再拿旧坐标拽窗口。
+        let actual = actual_anchor.unwrap_or(IslandPosition {
             x: snapshot.anchor_x,
             y: snapshot.anchor_y,
         });
+        if let Some(settled) = settled_anchor {
+            eprintln!(
+                "DOUBLECLICK_GEOM phase=pre source=actual(stale-settled) settled=({}, {}) actual=({}, {})",
+                settled.x, settled.y, actual.x, actual.y
+            );
+        }
+        mutate_window_state(|state| {
+            state.custom_position = Some(actual);
+            *state
+        });
+        (actual, "actual(stale-settled)")
+    };
     let mut snapshot = snapshot;
     if anchor.x != snapshot.anchor_x || anchor.y != snapshot.anchor_y {
         eprintln!(
-            "DOUBLECLICK_GEOM phase=pre source=settled old_anchor=({}, {}) new_anchor=({}, {})",
-            snapshot.anchor_x, snapshot.anchor_y, anchor.x, anchor.y
+            "DOUBLECLICK_GEOM phase=pre source={} old_anchor=({}, {}) new_anchor=({}, {})",
+            anchor_source, snapshot.anchor_x, snapshot.anchor_y, anchor.x, anchor.y
         );
         // 写回快照：set_island_overlay 直接用修正后的锚点，移动前后狗槽不变。
         snapshot.anchor_x = anchor.x;
@@ -2457,16 +2535,33 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
     let mut planned_x = plan_x;
     let mut planned_y = plan_y;
     let mut pre_compensated = false;
-    let overlay_layout_mode = if overlay == "hover" { "overlay" } else { "expanded" };
+    // 浮层打开期间前端上报的布局态一律是 overlay（见 App.tsx 的 report_pet_slot_offset）。
+    // 以前非 hover 用 "expanded" 样本：那是展开页的偏移（窗口尺寸完全不同），
+    // 拿来预补偿会把浮层窗口放到别处，开窗后又被实测纠正 —— 用户看到「向下闪一下」。
+    let overlay_layout_mode = "overlay";
     if let Some(measure) = same_mode_measure(overlay_layout_mode) {
-        let off_x = (measure.off_x * scale).round() as i32;
-        let off_y = (measure.off_y * scale).round() as i32;
-        let wanted_x = anchor.x - off_x;
-        let wanted_y = anchor.y - off_y;
-        if wanted_x != planned_x || wanted_y != planned_y {
-            planned_x = wanted_x;
-            planned_y = wanted_y;
-            pre_compensated = true;
+        let measured_w = (measure.window_w * scale).round() as i32;
+        let measured_h = (measure.window_h * scale).round() as i32;
+        // 小狗在窗口内的偏移随窗口尺寸变化（hover 面板高 540 / 云朵 400），
+        // 只有「采样时的窗口尺寸 == 本次计划尺寸」这个样本才可用于预补偿。
+        let same_window_size = measure.window_w > 0.0
+            && measure.window_h > 0.0
+            && (measured_w - plan_phys_w).abs() <= 2
+            && (measured_h - plan_phys_h).abs() <= 2;
+        if !same_window_size {
+            eprintln!(
+                "OVERLAY_SINGLE_SHOT phase=plan skipPreCompensate kind={overlay} measured={measured_w}x{measured_h} planned={plan_phys_w}x{plan_phys_h}"
+            );
+        } else {
+            let off_x = (measure.off_x * scale).round() as i32;
+            let off_y = (measure.off_y * scale).round() as i32;
+            let wanted_x = anchor.x - off_x;
+            let wanted_y = anchor.y - off_y;
+            if wanted_x != planned_x || wanted_y != planned_y {
+                planned_x = wanted_x;
+                planned_y = wanted_y;
+                pre_compensated = true;
+            }
         }
     }
     if let Ok(mut slot) = PLANNED_OVERLAY.lock() {
@@ -2477,6 +2572,8 @@ fn plan_island_overlay(app: AppHandle, overlay: String) -> Result<serde_json::Va
             width: plan_phys_w.max(1) as u32,
             height: plan_phys_h.max(1) as u32,
             pre_compensated,
+            side: side.to_string(),
+            vertical: vertical.to_string(),
         });
     }
     eprintln!(
