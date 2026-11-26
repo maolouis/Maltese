@@ -2555,9 +2555,42 @@ fn attach_settings_close(window: &WebviewWindow) {
 // `tauri.conf.json` 窗口一样的正常创建路径。官方文档（webview_window.rs 的
 // Known issues，wry#583）同样要求用 async 命令 / 独立线程创建窗口。
 #[tauri::command]
-async fn open_settings_window(app: AppHandle) -> Result<(), String> {
+async fn open_settings_window(app: AppHandle, source: Option<String>) -> Result<(), String> {
     let started = Instant::now();
-    let window = window_factory::ensure(&app, "settings")?;
+    let source = source.unwrap_or_else(|| "unknown".to_string());
+    eprintln!("SETTINGS_OPEN requested source={source}");
+    let window = match window_factory::ensure(&app, "settings") {
+        Ok(window) => window,
+        Err(error) => {
+            eprintln!("SETTINGS_OPEN failed stage=ensure source={source} reason={error}");
+            return Err(format!("设置窗口创建失败：{error}"));
+        }
+    };
+    // 懒创建是「投递到主线程」的异步创建：ensure() 返回时窗口可能只是 manager 里的
+    // 一个壳，原生 HWND 还没建出来。主线程那次创建失败时 tauri-runtime-wry 只会
+    // `log::error!`，句柄却仍留在 manager 里 —— 之后所有 is_visible()/outer_position()
+    // 都会立刻报错（状态通道被丢弃）。这里先等它物化，把「建不出来」与
+    // 「建出来但没显示」区分开，也不再把 `visible=false` 当成功回给前端。
+    let mut materialized_rect: Option<(i32, i32, u32, u32)> = None;
+    for attempt in 1..=40 {
+        match (window.outer_position(), window.outer_size()) {
+            (Ok(position), Ok(size)) => {
+                materialized_rect = Some((position.x, position.y, size.width, size.height));
+                eprintln!(
+                    "SETTINGS_OPEN materialized attempt={attempt} source={source} rect={materialized_rect:?}"
+                );
+                break;
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+    if materialized_rect.is_none() {
+        eprintln!(
+            "SETTINGS_OPEN failed stage=materialize source={source} reason=window-handle-not-ready elapsed={:?}",
+            started.elapsed()
+        );
+        return Err("设置窗口创建失败：原生窗口没有建立起来（详见日志 SETTINGS_OPEN）".to_string());
+    }
     let already_visible = window.is_visible().unwrap_or(false);
     // 懒创建出来的窗口是 visible(false)：WebView2 子窗口还没挂好时 show() 可能“成功但不可见”。
     // 这里显式 unminimize + show，并用 is_visible() 复核，最多重试 3 次。
@@ -2572,14 +2605,19 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
             .ok()
             .zip(window.outer_size().ok())
             .map(|(position, size)| (position.x, position.y, size.width, size.height));
-        eprintln!("SETTINGS_WINDOW_SHOW attempt={attempt} visible={visible} rect={rect:?}");
+        eprintln!(
+            "SETTINGS_WINDOW_SHOW attempt={attempt} visible={visible} rect={rect:?} source={source}"
+        );
         if visible {
             shown = true;
             break;
         }
     }
     if !shown {
-        eprintln!("SETTINGS_WINDOW_SHOW failed after retries (visible=false)");
+        eprintln!(
+            "SETTINGS_OPEN failed stage=show source={source} reason=visible=false after 3 attempts"
+        );
+        return Err("设置窗口已经创建，但没有显示出来（详见日志 SETTINGS_WINDOW_SHOW）".to_string());
     }
     // 焦点失败不影响「窗口已经显示」，不要因此让前端走 fallback。
     if let Err(error) = window.set_focus() {
@@ -2587,10 +2625,8 @@ async fn open_settings_window(app: AppHandle) -> Result<(), String> {
     }
     // 排障用：创建 → show → 聚焦 的耗时与结果（重复点击时应只剩聚焦）。
     eprintln!(
-        "settings window ready in {:?} (created: {}, already visible: {})",
-        started.elapsed(),
-        !already_visible,
-        already_visible
+        "SETTINGS_OPEN ok source={source} elapsed={:?} alreadyVisible={already_visible} rect={materialized_rect:?}",
+        started.elapsed()
     );
     Ok(())
 }
@@ -6544,7 +6580,7 @@ fn build_tray(app: &App) -> tauri::Result<()> {
             "settings" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = open_settings_window(app).await {
+                    if let Err(error) = open_settings_window(app, Some("tray".to_string())).await {
                         eprintln!("failed to open the settings window from the tray: {error}");
                     }
                 });
@@ -6573,9 +6609,50 @@ fn build_tray(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// 最小 stderr logger：Tauri/wry/tao 的内部错误走 `log` crate，未安装 logger 时
+/// `log::error!` 会被静默丢弃。设置窗口「manager 里有窗口、原生句柄却没建出来」
+/// 正是这种只打 `log::error!` 的失败（tauri-runtime-wry 的 CreateWindow 处理器），
+/// 没有 logger 就只能看到 `visible=false`，看不到真实原因。
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!(
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static STDERR_LOGGER: StderrLogger = StderrLogger;
+
+/// 默认只收 warn 及以上（tauri/wry/tao 的错误都在这个级别）；
+/// 设 `MALTESE_LOG=info|debug` 可放宽，`MALTESE_LOG=off` 关闭。
+fn init_logging() {
+    let level = match std::env::var("MALTESE_LOG").ok().as_deref() {
+        Some("off") | Some("none") => return,
+        Some("debug") => log::LevelFilter::Debug,
+        Some("info") => log::LevelFilter::Info,
+        _ => log::LevelFilter::Warn,
+    };
+    let _ = log::set_logger(&STDERR_LOGGER);
+    log::set_max_level(level);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     STARTUP_START.get_or_init(Instant::now);
+    init_logging();
     startup_mark("run:begin");
     // 最早阶段：确定数据根（创建 + 一次性迁移），后续所有路径都走 paths::data_root()。
     let _ = paths::ensure_data_root();

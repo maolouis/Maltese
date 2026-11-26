@@ -164,7 +164,7 @@ export default function PetBubble() {
           <button
             type="button"
             onClick={() => {
-              void invoke("open_settings_window").catch(() => openPage("layout"));
+              void invoke("open_settings_window", { source: "pet-bubble" }).catch(() => openPage("layout"));
               void invoke("hide_pet_bubble").catch(() => undefined);
             }}
           >

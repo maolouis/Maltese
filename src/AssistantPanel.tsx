@@ -659,7 +659,7 @@ export function AssistantPanel({ onOpenSettingsWindow }: { onOpenSettingsWindow?
             onClick={() => {
               // QA D5：独立设置窗口会抢焦点，先收起浮层再开（App 传入的回调里做），
               // 不再让「展开的岛 + 设置窗口」同时出现。
-              const open = onOpenSettingsWindow ?? (() => invoke("open_settings_window"));
+              const open = onOpenSettingsWindow ?? (() => invoke("open_settings_window", { source: "assistant-panel" }));
               void open().catch(() => setNotice("设置窗口打开失败，请从托盘菜单「配置桌宠」再试一次"));
             }}
           >

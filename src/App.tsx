@@ -1489,6 +1489,13 @@ export function IslandShell({
 }: IslandShellProps) {
   const t = useTranslation();
   const glassFrameRef = useRef<number | null>(null);
+  // 设置窗口打不开时的中文提示：只在顶部「设置」入口失败时出现，几秒后自动消失。
+  const [settingsWindowError, setSettingsWindowError] = useState("");
+  useEffect(() => {
+    if (!settingsWindowError) return;
+    const timer = window.setTimeout(() => setSettingsWindowError(""), 6000);
+    return () => window.clearTimeout(timer);
+  }, [settingsWindowError]);
   // 浮层/展开态下，狗在窗口内的真实偏移（CSS 像素）：CSS 布局说了算，Rust 侧不再用 panelSide 公式假设。
   useEffect(() => {
     if (!isTauri()) return;
@@ -2357,7 +2364,13 @@ export function IslandShell({
                   event.stopPropagation();
                   // 恢复旧版行为：顶部「设置」直接打开浅色的独立设置窗口，
                   // 不再切到岛内深色设置页；只有窗口打不开时才退回岛内页面。
-                  void invoke("open_settings_window").catch(() => onPageChange("layout"));
+                  setSettingsWindowError("");
+                  void invoke("open_settings_window", { source: "island-header" })
+                    .catch((error) => {
+                      console.error("open_settings_window failed", error);
+                      setSettingsWindowError(`设置窗口打不开：${getErrorMessage(error)}`);
+                      onPageChange("layout");
+                    });
                 }}
               >设置</button>
             </nav>
@@ -2422,6 +2435,9 @@ export function IslandShell({
               </button>
             </div>
           </header>
+          {settingsWindowError && (
+            <p className="island-settings-error" role="alert">{settingsWindowError}</p>
+          )}
           <div className="island__content">{children}</div>
         </div>
       </div>
@@ -6323,7 +6339,7 @@ function IslandApp({
       window.setTimeout(resolve, 180);
     });
     try {
-      await invoke("open_settings_window");
+      await invoke("open_settings_window", { source: "island-layout" });
     } catch (error) {
       console.error("Failed to open settings window", error);
       if (restoreExpanded) {

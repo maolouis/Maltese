@@ -30,6 +30,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 imap = "2.4"
 imap-proto = "0.10"
 keyring = { version = "4.2", default-features = false, features = ["v1", "windows-native-keyring-store"] }
+# Tauri/wry/tao 的内部错误走 `log` crate；没有 logger 时这些错误会被静默丢弃。
+# 设置窗口「建了但没有原生句柄」就是这种只有 log::error 的失败，排查时必须看到原文。
+log = "0.4"
 mailparse = "0.17"
 native-tls = "0.2"
 pollster = "0.4"
