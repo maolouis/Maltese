@@ -450,7 +450,7 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
   return {
     emitAction: (action, emitOptions) => {
       try {
-        if (!PET_LINK_ENABLED) {
+        if (!PET_LINK_ENABLED && options.enabled === undefined) {
           console.info("[PET_LINK_DISABLED]", { action });
           return [];
         }
@@ -491,7 +491,7 @@ export function createPetLinkBus(options: PetLinkBusOptions): PetLinkBus {
     },
     emitBongoHit: () => {
       try {
-        if (!PET_LINK_ENABLED) {
+        if (!PET_LINK_ENABLED && options.enabled === undefined) {
           console.info("[PET_LINK_DISABLED]", { action: "bongo-hit" });
           return;
         }
