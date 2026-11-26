@@ -80,7 +80,9 @@ fn read_bootstrap() -> Option<String> {
 }
 
 /// 启动日志：GUI 版没有控制台，同时追加到 `%APPDATA%\com.maolouis.maltese\paths.log`。
-fn startup_log(message: &str) {
+///
+/// 其它模块（如视频 profile 迁移）也复用它写 `VIDEO_PROFILE_ROOT` 这类启动事件。
+pub(crate) fn startup_log(message: &str) {
     eprintln!("{message}");
     let path = legacy_root().join("paths.log");
     if let Some(parent) = path.parent() {

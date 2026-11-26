@@ -6579,6 +6579,10 @@ pub fn run() {
     startup_mark("run:begin");
     // 最早阶段：确定数据根（创建 + 一次性迁移），后续所有路径都走 paths::data_root()。
     let _ = paths::ensure_data_root();
+    // 视频专用浏览器 profile 根：`<data_root()>\video-browsers`（默认 `default`、账号 `accounts/<id>`）。
+    // 启动即完成一次性迁移（复制校验 → 旧目录改名保留），失败回退 `%LOCALAPPDATA%\Maltese` 并记
+    // `VIDEO_PROFILE_MIGRATION_FAILED`，不阻断启动；成功写 `VIDEO_PROFILE_ROOT root=… migrated_from=… ok=true`。
+    let _ = video::browser::profile_root();
     let mut context = tauri::generate_context!();
     if let Some(identifier) = notification_diagnostics::verification_identifier() {
         context.config_mut().identifier = identifier;

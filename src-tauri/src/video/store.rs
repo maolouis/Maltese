@@ -600,7 +600,7 @@ impl StoreHandle {
         if include_browser_profile {
             kept.push("浏览器登录 profile 会在调用方清空".to_string());
         } else {
-            kept.push("浏览器登录 profile（video-profile）".to_string());
+            kept.push("浏览器登录 profile（video-browsers）".to_string());
         }
         ClearReport {
             scope,

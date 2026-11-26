@@ -12,10 +12,19 @@ use std::{
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command},
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+/// 新 profile 根：`<data_root()>/video-browsers`（默认 `default`，账号 `accounts/<id>`）。
+pub const PROFILE_ROOT_NAME: &str = "video-browsers";
+/// 旧位置 `%LOCALAPPDATA%\Maltese`：迁移失败或新位置不可写时作为只读回退。
+pub const LEGACY_APP_DIR_NAME: &str = "Maltese";
+const LEGACY_DEFAULT_NAME: &str = "video-profile";
+const LEGACY_ACCOUNTS_NAME: &str = "video-accounts";
+/// 迁移成功后的旧目录改名后缀（保留 7 天，由用户确认后自行清理，不自动删除）。
+const MIGRATED_SUFFIX_PREFIX: &str = ".migrated-";
 pub const DEFAULT_PORT: u16 = 9333;
 pub const MIN_MAJOR_VERSION: u32 = 120;
 /// 启动后最多等多久让 CDP 端口开始监听（QA U1：以前 launch 成功就算成功）。
@@ -73,11 +82,8 @@ pub fn reuse_decision(
 }
 
 pub fn marker_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Maltese")
-        .join("video-browser.json")
+    // 实例标记跟着 profile 根走：新位置 <data_root()>/video-browsers/video-browser.json。
+    profile_root().join("video-browser.json")
 }
 
 pub fn read_marker() -> Option<BrowserMarker> {
@@ -496,28 +502,347 @@ pub fn occupancy_level(working_set_mb: u64) -> &'static str {
     }
 }
 
-pub fn profile_dir() -> PathBuf {
+/// 旧 profile 位置：`%LOCALAPPDATA%\Maltese`（只读回退 + 迁移来源）。
+pub fn legacy_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("Maltese")
-        .join("video-profile")
+        .join(LEGACY_APP_DIR_NAME)
 }
 
-/// 每个小狗账号拥有独立 profile，避免和主人的登录态混用。
-pub fn account_profile_dir(account_id: &str) -> PathBuf {
+fn sanitize_account_id(account_id: &str) -> String {
     let safe = account_id
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '_')
         .take(64)
         .collect::<String>();
-    let safe = if safe.is_empty() { "default" } else { safe.as_str() };
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Maltese")
-        .join("video-accounts")
-        .join(safe)
+    if safe.is_empty() {
+        "default".to_string()
+    } else {
+        safe
+    }
+}
+
+/// profile 根（进程内缓存）：`<data_root()>/video-browsers`。
+///
+/// 启动首次调用时完成一次性迁移：新位置不存在 + 旧 `%LOCALAPPDATA%\Maltese` 有数据
+/// → 复制（校验文件数 + 总大小）→ 成功后旧目录改名 `<名字>.migrated-<时间戳>`（保留 7 天）。
+/// 新位置不可写或迁移失败 → 回退旧位置（只读回退），绝不阻断启动、绝不丢登录态。
+pub fn profile_root() -> PathBuf {
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+    CACHE.get_or_init(resolve_profile_root).clone()
+}
+
+fn resolve_profile_root() -> PathBuf {
+    let legacy = legacy_root();
+    let new_root = crate::paths::data_root().join(PROFILE_ROOT_NAME);
+    // 单元测试不碰真实用户目录；迁移逻辑由 copy_verified / remap 的纯函数单测覆盖。
+    if cfg!(test) {
+        return new_root;
+    }
+    if !writable_dir(&new_root) {
+        profile_log(&format!(
+            "VIDEO_PROFILE_ROOT root={} ok=false fallback={} reason=new_root_not_writable",
+            new_root.display(),
+            legacy.display()
+        ));
+        return legacy;
+    }
+    match migrate_profiles(&new_root, &legacy) {
+        Ok(migration) => {
+            let from = migration
+                .migrated_from
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            profile_log(&format!(
+                "VIDEO_PROFILE_ROOT root={} migrated_from={} ok=true items={}",
+                new_root.display(),
+                from,
+                migration.migrated_items.join(",")
+            ));
+            for kept in &migration.kept_legacy {
+                profile_log(&format!(
+                    "VIDEO_PROFILE_LEGACY_KEPT path={} note=keep_7_days_manual_cleanup",
+                    kept.display()
+                ));
+            }
+            new_root
+        }
+        Err(reason) => {
+            profile_log(&format!(
+                "VIDEO_PROFILE_MIGRATION_FAILED reason={} root={} fallback={} ok=false",
+                reason,
+                new_root.display(),
+                legacy.display()
+            ));
+            // 回退旧位置：新位置即使存在也不要用（空 profile = 登录态丢失）。
+            legacy
+        }
+    }
+}
+
+/// 账号 profile 根：`<profile_root()>/accounts`。
+pub fn accounts_root() -> PathBuf {
+    profile_root().join("accounts")
+}
+
+/// 默认（未绑定账号）profile：`<data_root()>/video-browsers/default`。
+pub fn profile_dir() -> PathBuf {
+    profile_root().join("default")
+}
+
+/// 每个小狗账号拥有独立 profile，避免和主人的登录态混用。
+pub fn account_profile_dir(account_id: &str) -> PathBuf {
+    accounts_root().join(sanitize_account_id(account_id))
+}
+
+/// 把历史记录（`accounts.json` 的 `profileDir`）里的 path 映射到当前 profile 根。
+///
+/// 旧路径自动重映射：`<legacy>\video-profile` → `<new>\default`、
+/// `<legacy>\video-accounts\<id>` → `<new>\accounts\<id>`；不认识的路径原样返回。
+pub fn resolve_profile(recorded: &str) -> PathBuf {
+    let recorded = recorded.trim();
+    if recorded.is_empty() {
+        return profile_dir();
+    }
+    remap_legacy_profile(Path::new(recorded), &legacy_root(), &profile_root())
+}
+
+/// 纯函数（便于单测）：旧根下的 profile 路径重映射到新根，其它路径原样返回。
+fn remap_legacy_profile(recorded: &Path, legacy_root: &Path, new_root: &Path) -> PathBuf {
+    let Some(relative) = strip_prefix_ci(recorded, legacy_root) else {
+        return recorded.to_path_buf();
+    };
+    let mut components = relative.components();
+    let Some(first) = components.next() else {
+        return recorded.to_path_buf();
+    };
+    let first = first.as_os_str().to_string_lossy().to_ascii_lowercase();
+    let rest: PathBuf = components.collect();
+    let is_default = first == LEGACY_DEFAULT_NAME
+        || first.starts_with(&format!("{LEGACY_DEFAULT_NAME}{MIGRATED_SUFFIX_PREFIX}"));
+    let is_account = first == LEGACY_ACCOUNTS_NAME
+        || first.starts_with(&format!("{LEGACY_ACCOUNTS_NAME}{MIGRATED_SUFFIX_PREFIX}"));
+    if is_default {
+        return if rest.as_os_str().is_empty() {
+            new_root.join("default")
+        } else {
+            new_root.join("default").join(rest)
+        };
+    }
+    if is_account {
+        return if rest.as_os_str().is_empty() {
+            new_root.join("accounts")
+        } else {
+            new_root.join("accounts").join(rest)
+        };
+    }
+    recorded.to_path_buf()
+}
+
+/// 大小写 / 分隔符不敏感的前缀剥离（Windows 语义）。
+fn strip_prefix_ci(path: &Path, base: &Path) -> Option<PathBuf> {
+    let path_components: Vec<_> = path.components().collect();
+    let base_components: Vec<_> = base.components().collect();
+    if base_components.is_empty() || base_components.len() > path_components.len() {
+        return None;
+    }
+    for (path_part, base_part) in path_components.iter().zip(base_components.iter()) {
+        let left = path_part.as_os_str().to_string_lossy();
+        let right = base_part.as_os_str().to_string_lossy();
+        if !left.eq_ignore_ascii_case(&right) {
+            return None;
+        }
+    }
+    Some(path_components[base_components.len()..].iter().collect())
+}
+
+fn profile_log(message: &str) {
+    crate::paths::startup_log(message);
+}
+
+fn dir_has_entries(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+fn writable_dir(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".write-test");
+    match std::fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<(u64, u64)> {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            let (sub_files, sub_bytes) = copy_tree(&from, &to)?;
+            files += sub_files;
+            bytes += sub_bytes;
+        } else {
+            bytes += std::fs::copy(&from, &to)?;
+            files += 1;
+        }
+    }
+    Ok((files, bytes))
+}
+
+fn tree_stats(dir: &Path) -> std::io::Result<(u64, u64)> {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let (sub_files, sub_bytes) = tree_stats(&entry.path())?;
+            files += sub_files;
+            bytes += sub_bytes;
+        } else {
+            files += 1;
+            bytes += entry.metadata()?.len();
+        }
+    }
+    Ok((files, bytes))
+}
+
+/// 复制 + 校验（文件数与总大小必须与源一致）；校验失败删掉半成品并报错。
+fn copy_verified(src: &Path, dst: &Path) -> Result<(u64, u64), String> {
+    let copied = copy_tree(src, dst).map_err(|error| format!("copy:{error}"))?;
+    let actual = tree_stats(dst).map_err(|error| format!("stats:{error}"))?;
+    let expected = tree_stats(src).map_err(|error| format!("source_stats:{error}"))?;
+    if copied != expected || actual != expected {
+        let _ = std::fs::remove_dir_all(dst);
+        return Err(format!(
+            "verify expected={} files/{} bytes actual={} files/{} bytes",
+            expected.0, expected.1, actual.0, actual.1
+        ));
+    }
+    Ok(actual)
+}
+
+#[derive(Debug, Default)]
+struct ProfileMigration {
+    migrated_from: Option<PathBuf>,
+    migrated_items: Vec<String>,
+    kept_legacy: Vec<PathBuf>,
+}
+
+/// 启动迁移：旧位置有数据、新位置还没有 → 复制校验 → 旧目录改名保留。
+///
+/// 任何一步失败都返回 Err（调用方回退旧位置），旧目录始终保持可用。
+fn migrate_profiles(new_root: &Path, legacy: &Path) -> Result<ProfileMigration, String> {
+    let mut report = ProfileMigration::default();
+    let mut copied: Vec<PathBuf> = Vec::new();
+    // 本次复制出来的目标目录（失败时回滚，避免半成品挡住下次迁移）。
+    let mut created_targets: Vec<PathBuf> = Vec::new();
+    let legacy_default = legacy.join(LEGACY_DEFAULT_NAME);
+    let new_default = new_root.join("default");
+    if dir_has_entries(&legacy_default) && !dir_has_entries(&new_default) {
+        match copy_verified(&legacy_default, &new_default) {
+            Ok(_) => {
+                created_targets.push(new_default.clone());
+                copied.push(legacy_default.clone());
+                report.migrated_items.push("video-profile".to_string());
+            }
+            Err(reason) => {
+                for target in &created_targets {
+                    let _ = std::fs::remove_dir_all(target);
+                }
+                return Err(format!("default:{reason}"));
+            }
+        }
+    }
+    let legacy_accounts = legacy.join(LEGACY_ACCOUNTS_NAME);
+    let new_accounts = new_root.join("accounts");
+    let mut account_names: Vec<String> = std::fs::read_dir(&legacy_accounts)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                // 已迁移保留的旧目录（`<id>.migrated-<stamp>`）不是账号，跳过，
+                // 否则每次启动都会把它们当新账号再复制一遍。
+                .filter(|name| !name.contains(MIGRATED_SUFFIX_PREFIX))
+                .collect()
+        })
+        .unwrap_or_default();
+    account_names.sort();
+    let mut copied_accounts = 0usize;
+    for name in &account_names {
+        let from = legacy_accounts.join(name);
+        let to = new_accounts.join(name);
+        if !dir_has_entries(&from) || dir_has_entries(&to) {
+            continue;
+        }
+        match copy_verified(&from, &to) {
+            Ok(_) => {
+                created_targets.push(to);
+                copied.push(from);
+                copied_accounts += 1;
+            }
+            Err(reason) => {
+                for target in &created_targets {
+                    let _ = std::fs::remove_dir_all(target);
+                }
+                return Err(format!("account:{name}:{reason}"));
+            }
+        }
+    }
+    if copied_accounts > 0 {
+        report.migrated_items.push(format!("video-accounts x{copied_accounts}"));
+    }
+    if copied.is_empty() {
+        return Ok(report);
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    report.migrated_from = Some(legacy.to_path_buf());
+    // 复制已校验成功 → 旧目录只改名（绝不删除），失败也只是保留原名继续可用。
+    for source in &copied {
+        let target = source.with_file_name(format!(
+            "{}{MIGRATED_SUFFIX_PREFIX}{stamp}",
+            source
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "profile".to_string())
+        ));
+        match std::fs::rename(source, &target) {
+            Ok(()) => report.kept_legacy.push(target),
+            Err(error) => {
+                profile_log(&format!(
+                    "VIDEO_PROFILE_LEGACY_RENAME_FAILED path={} reason={error} note=keep_original",
+                    source.display()
+                ));
+                report.kept_legacy.push(source.clone());
+            }
+        }
+    }
+    // 账号都搬走后，空壳的旧 video-accounts 目录也改名（有残留就不动）。
+    if !account_names.is_empty() && !dir_has_entries(&legacy_accounts) {
+        let target = legacy_accounts.with_file_name(format!(
+            "{LEGACY_ACCOUNTS_NAME}{MIGRATED_SUFFIX_PREFIX}{stamp}"
+        ));
+        if std::fs::rename(&legacy_accounts, &target).is_ok() {
+            report.kept_legacy.push(target);
+        }
+    }
+    Ok(report)
 }
 
 pub fn candidate_paths() -> Vec<PathBuf> {
@@ -791,18 +1116,112 @@ mod tests {
     }
 
     #[test]
-    fn profile_dir_is_under_local_app_data() {
+    fn profile_dir_is_under_video_browsers_root() {
         let dir = profile_dir();
-        assert!(dir.ends_with("video-profile"));
+        assert!(dir.ends_with("video-browsers/default"), "got {}", dir.display());
     }
 
     #[test]
     fn account_profiles_are_separate_and_sanitized() {
         let first = account_profile_dir("dog-a");
         let second = account_profile_dir("dog/b");
-        assert!(first.ends_with("video-accounts/dog-a"));
-        assert!(second.ends_with("video-accounts/dogb"));
+        assert!(first.ends_with("video-browsers/accounts/dog-a"), "got {}", first.display());
+        assert!(second.ends_with("video-browsers/accounts/dogb"), "got {}", second.display());
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn legacy_profile_paths_are_remapped_to_new_root() {
+        let legacy = PathBuf::from(r"C:\Users\A\AppData\Local\Maltese");
+        let new_root = PathBuf::from(r"E:\Maltese2\data\video-browsers");
+        // 旧默认 profile → default
+        assert_eq!(
+            remap_legacy_profile(
+                Path::new(r"C:\Users\A\AppData\Local\Maltese\video-profile"),
+                &legacy,
+                &new_root
+            ),
+            new_root.join("default")
+        );
+        // 旧账号 profile → accounts/<id>；大小写不敏感
+        assert_eq!(
+            remap_legacy_profile(
+                Path::new(r"c:\users\a\appdata\local\maltese\video-accounts\dog-1794880825-1"),
+                &legacy,
+                &new_root
+            ),
+            new_root.join("accounts").join("dog-1794880825-1")
+        );
+        // 已经改名保留的旧目录同样重映射
+        assert_eq!(
+            remap_legacy_profile(
+                Path::new(r"C:\Users\A\AppData\Local\Maltese\video-profile.migrated-1794880825"),
+                &legacy,
+                &new_root
+            ),
+            new_root.join("default")
+        );
+        // 新位置路径 / 不认识的路径原样返回
+        assert_eq!(
+            remap_legacy_profile(&new_root.join("default"), &legacy, &new_root),
+            new_root.join("default")
+        );
+        assert_eq!(
+            remap_legacy_profile(Path::new(r"F:\custom\profile"), &legacy, &new_root),
+            PathBuf::from(r"F:\custom\profile")
+        );
+    }
+
+    #[test]
+    fn copy_verified_roundtrips_and_stats_match() {
+        let base = std::env::temp_dir().join(format!(
+            "maltese-profile-copy-test-{}-{}",
+            std::process::id(),
+            now_seconds()
+        ));
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join("Default")).unwrap();
+        std::fs::write(src.join("Default").join("Cookies"), b"cookie").unwrap();
+        let stats = copy_verified(&src, &dst).expect("copy");
+        assert_eq!(stats, (1, 6));
+        assert!(dst.join("Default").join("Cookies").is_file());
+        // 源没变、目标是独立副本
+        assert_eq!(tree_stats(&src).unwrap(), (1, 6));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn migrate_profiles_copies_then_renames_legacy() {
+        let base = std::env::temp_dir().join(format!(
+            "maltese-profile-migrate-test-{}-{}",
+            std::process::id(),
+            now_seconds()
+        ));
+        let legacy = base.join("LocalMaltese");
+        let new_root = base.join("video-browsers");
+        std::fs::create_dir_all(legacy.join("video-profile").join("Default")).unwrap();
+        std::fs::write(legacy.join("video-profile").join("Default").join("Cookies"), b"abc").unwrap();
+        std::fs::create_dir_all(legacy.join("video-accounts").join("dog-1")).unwrap();
+        std::fs::write(legacy.join("video-accounts").join("dog-1").join("Cookies"), b"abcd").unwrap();
+        let report = migrate_profiles(&new_root, &legacy).expect("migrate");
+        assert_eq!(report.migrated_items.len(), 2);
+        assert!(new_root.join("default").join("Default").join("Cookies").is_file());
+        assert!(new_root.join("accounts").join("dog-1").join("Cookies").is_file());
+        // 旧目录改名保留（不删除）
+        assert!(!legacy.join("video-profile").exists());
+        assert!(!legacy.join("video-accounts").exists());
+        let renamed: Vec<String> = std::fs::read_dir(&legacy)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(renamed.iter().any(|name| name.starts_with("video-profile.migrated-")), "{renamed:?}");
+        assert!(renamed.iter().any(|name| name.starts_with("video-accounts.migrated-")), "{renamed:?}");
+        // 再跑一次：新位置已有数据 → 不重复复制、不报错
+        let again = migrate_profiles(&new_root, &legacy).expect("second migrate");
+        assert!(again.migrated_items.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -1130,7 +1130,9 @@ impl SessionEngine {
             }
         };
         let account_id = account.as_ref().map(|item| item.id.clone());
-        let profile = account.as_ref().map(|item| std::path::PathBuf::from(&item.profile_dir));
+        let profile = account
+            .as_ref()
+            .map(|item| browser::resolve_profile(&item.profile_dir));
 
         {
             let already_running = {
@@ -1420,7 +1422,7 @@ impl SessionEngine {
             .lock()
             .ok()
             .and_then(|accounts| accounts.active())
-            .map(|account| std::path::PathBuf::from(&account.profile_dir))
+            .map(|account| browser::resolve_profile(&account.profile_dir))
             .unwrap_or_else(browser::profile_dir);
         let port = match browser::pick_port(browser::DEFAULT_PORT) {
             Ok(port) => port,
@@ -3756,10 +3758,8 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
         if include_browser_profile {
             let profile = browser::profile_dir();
             let _ = std::fs::remove_dir_all(profile);
-            let accounts = browser::account_profile_dir("..");
-            if let Some(root) = accounts.parent() {
-                let _ = std::fs::remove_dir_all(root);
-            }
+            let accounts = browser::accounts_root();
+            let _ = std::fs::remove_dir_all(accounts);
         }
         Ok(report)
     }
@@ -3839,7 +3839,7 @@ const COMMENT_SUBMIT_PROBE_JS: &str = r#"
             if account.platform != platform {
                 return Err(VideoError::new("ACCOUNT_PLATFORM_MISMATCH", "小狗账号的平台和登录窗口不一致。"));
             }
-            let profile = std::path::PathBuf::from(account.profile_dir);
+            let profile = browser::resolve_profile(&account.profile_dir);
             let _ = accounts.mark_login_started(account_id);
             profile
         } else {
