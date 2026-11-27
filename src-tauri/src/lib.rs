@@ -1057,8 +1057,14 @@ fn set_island_interaction(
                 .map(|monitor| monitor_fingerprint_of(&monitor))
         );
     }
-    // 不变量强制约束：不论哪条路径把位置算错，展开落定后都把狗槽拉回操作前的位置（±2px）。
-    enforce_slot_invariant(&window, expected_slot_before, "set_island_interaction");
+    // 不变量强制约束：仅在正常收起/展开态落定后校验狗槽位置；
+    // 缩边态（含刚进入或退出缩边、位移动画期间）的目标坐标本就在屏幕边缘外，绝不能拉回。
+    if !state.is_tucked
+        && !previous_state.is_tucked
+        && !POSITION_ANIMATING.load(Ordering::SeqCst)
+    {
+        enforce_slot_invariant(&window, expected_slot_before, "set_island_interaction");
+    }
     let glass = apply_glass_material(&window, state);
     ensure_island_on_screen(&window);
     persist_island_snapshot(&app);
@@ -2204,6 +2210,10 @@ fn ensure_island_on_screen(window: &WebviewWindow) {
     }
     if startup_restore_active() {
         eprintln!("STARTUP_SKIP_RECALC reason=startup_window");
+        return;
+    }
+    // 缩边/趴睡态窗口主动探出屏幕工作区外沿（只露出头顶一小截），不能判定为越界重置。
+    if read_window_state().is_tucked {
         return;
     }
     let Ok(Some(monitor)) = window.current_monitor() else {

@@ -95,3 +95,27 @@ test("双击浮层防闪：Tauri 下改用独立 bubble 窗承载浮层（主窗
   assert.doesNotMatch(app, /label="聊天框高度"/);
   assert.doesNotMatch(settingsWin, /label="聊天框高度"/);
 });
+
+test("点击让小狗睡觉直接缩边：Rust 跳过缩边不变量拉回与越界重置，前端无动画直接缩边并防误唤醒", () => {
+  const app = read("src/App.tsx");
+  const lib = read("src-tauri/src/lib.rs");
+
+  // Rust: set_island_interaction 缩边前后不调用 enforce_slot_invariant 拉回
+  const interactAt = lib.indexOf("fn set_island_interaction(");
+  assert.ok(interactAt > 0);
+  const interactEnd = lib.indexOf("fn ensure_island_on_screen(", interactAt);
+  const interactBody = lib.slice(interactAt, interactEnd);
+  assert.match(interactBody, /!state\.is_tucked[\s\S]{0,120}!previous_state\.is_tucked[\s\S]{0,120}enforce_slot_invariant\(/);
+
+  // Rust: ensure_island_on_screen 在 is_tucked 时早退不清空缩边状态
+  const ensureAt = lib.indexOf("fn ensure_island_on_screen(");
+  assert.ok(ensureAt > 0);
+  const ensureBody = lib.slice(ensureAt, ensureAt + 1200);
+  assert.match(ensureBody, /if read_window_state\(\)\.is_tucked \{\s*return;\s*\}/);
+
+  // 前端: sleeping 直接缩边、禁止普通气泡强醒、切掉非闲置态限制
+  assert.match(app, /directTuckRef\.current = true;[\s\S]{0,160}tuckIsland\("manual"\)/);
+  assert.match(app, /manualSleepGraceUntilRef\.current/);
+  assert.match(app, /if \(isTucked && tuckReasonsRef\.current\.manual && !force\)/);
+  assert.match(app, /const showingTuckedGif = restingAsleep \|\| isTucked;/);
+});

@@ -511,6 +511,7 @@ type IslandShellProps = {
   onResetPosition: () => void;
   onMinimize: () => void;
   onReveal: () => void;
+  onHoverReveal?: () => void;
   onSleepTuck: () => void;
   onSleepReveal: () => void;
   /** 睡觉档位变化（manual=手动睡觉 / idle=待机自动打盹 / null=醒着）；用于 vitals 离线恢复速率与停读电脑状态。 */
@@ -1489,6 +1490,7 @@ export function IslandShell({
   onResetPosition,
   onMinimize,
   onReveal,
+  onHoverReveal,
   onSleepTuck,
   onSleepReveal,
   onSleepModeChange,
@@ -1714,14 +1716,14 @@ export function IslandShell({
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
     intervalMs: rotationIntervalMs,
     enabled:
-      autoRotateExpressions && !(petState === "idle" && (restingAsleep || isTucked)),
+      autoRotateExpressions && !restingAsleep && !isTucked && petState !== "sleeping",
     stepRef: stepPetCarouselRef,
   });
   // 缩边/睡觉帧默认跟随当前形象（曾经固定用 rest.gif，结果小白睡着会变成小鸡毛）。
   const tuckedGifSrc = useTuckGifSource(
     characterFramesForState(petCharacter, "sleeping")[0] ?? sleepingFrame(),
   );
-  const showingTuckedGif = petState === "idle" && (restingAsleep || isTucked);
+  const showingTuckedGif = restingAsleep || isTucked;
   // 「趴下睡」的姿势统一用这张图：闲置自动趴下、缩边、手动点「让小狗睡觉」都走它。
   const showingSleepPose = showingTuckedGif || petState === "sleeping";
   const interactionPartnerState: PetState =
@@ -2022,7 +2024,7 @@ export function IslandShell({
       onMouseEnter={() => {
         if (isTucked) {
           wakePet();
-          onReveal();
+          (onHoverReveal ?? onReveal)();
         }
       }}
     >
@@ -2092,6 +2094,10 @@ export function IslandShell({
                 className="maltese-pet__hit"
                 onPointerDown={(event) => {
                 wakePet();
+                if (isTucked) {
+                  onReveal();
+                  return;
+                }
                 prepareWindowDrag(event);
               }}
               onPointerMove={(event) => {
@@ -5080,6 +5086,7 @@ function IslandApp({
       nextExpandedHeight: number,
       nextCollapsedWidth: number,
       nextIsTucked: boolean,
+      animateOverride?: boolean,
     ) => {
       try {
         const glassState = await invoke<NativeGlassState>(
@@ -5094,7 +5101,7 @@ function IslandApp({
           customPosition: islandPositionRef.current,
           tuckedVisibleHeight: nextSettings.tuckedVisibleHeight,
           isTucked: nextIsTucked,
-          animatePosition: !reducedMotion,
+          animatePosition: animateOverride ?? !reducedMotion,
             glassEnabled: nextSettings.appearanceMode === "liquidGlass",
             glassIntensity: nextSettings.glassIntensity,
             glassTint: nextSettings.islandBackgroundColor,
@@ -5353,9 +5360,14 @@ function IslandApp({
     fullscreen: false,
     manual: false,
   });
+  // 手动点「让小狗睡觉」时立即无动画直接缩边，并留 1.5s 鼠标移入宽限防止刚点完就误唤醒。
+  const directTuckRef = useRef(false);
+  const manualSleepGraceUntilRef = useRef(0);
 
   const setIslandMode = useCallback((nextMode: IslandMode) => {
     tuckReasonsRef.current = { sleep: false, fullscreen: false, manual: false };
+    manualSleepGraceUntilRef.current = 0;
+    directTuckRef.current = false;
     setMode(nextMode);
     setIsTucked(false);
   }, []);
@@ -5368,6 +5380,7 @@ function IslandApp({
     setIsTucked(true);
   }, []);
 
+  const setPetSleepMode = petVitalsController.setSleepMode;
   const revealIsland = useCallback((reason: TuckReason = "manual") => {
     tuckReasonsRef.current[reason] = false;
     if (reason === "manual") {
@@ -5375,9 +5388,18 @@ function IslandApp({
     }
     const reasons = tuckReasonsRef.current;
     if (!reasons.sleep && !reasons.fullscreen && !reasons.manual) {
+      manualSleepGraceUntilRef.current = 0;
       setIsTucked(false);
+      setPetSleepMode(null);
     }
-  }, []);
+  }, [setPetSleepMode]);
+
+  const hoverRevealIsland = useCallback(() => {
+    if (Date.now() < manualSleepGraceUntilRef.current) {
+      return;
+    }
+    revealIsland();
+  }, [revealIsland]);
 
   const tuckForSleep = useCallback(() => tuckIsland("sleep"), [tuckIsland]);
   const revealForSleep = useCallback(() => revealIsland("sleep"), [revealIsland]);
@@ -5600,6 +5622,10 @@ function IslandApp({
     }
     if (!isTauri() || mode !== "collapsed" || (!force && !settings.bubbleOn)) {
       console.debug("[cloud-bubble] skip", { mode, bubbleOn: settings.bubbleOn, force });
+      return;
+    }
+    // 用户手动让小狗睡觉缩边时，普通气泡不吵醒小狗；仅强制提示（如评论结果）例外。
+    if (isTucked && tuckReasonsRef.current.manual && !force) {
       return;
     }
     if (isTucked) {
@@ -7658,12 +7684,17 @@ function IslandApp({
   }, []);
 
   useEffect(() => {
+    const animateOverride = directTuckRef.current ? false : undefined;
+    if (isTucked) {
+      directTuckRef.current = false;
+    }
     void syncNativeInteraction(
       mode,
       settings,
       expandedIslandHeight,
       collapsedIslandWidth,
       isTucked,
+      animateOverride,
     ).finally(() => {
       void showReadyIsland();
     });
@@ -7868,13 +7899,22 @@ function IslandApp({
       petVitalsController.reportEvent(vitalsKind);
     }
     setPetAction(action);
-    const interaction = interactionFromAction(action);
-    if (interaction) {
-      startPetInteraction(interaction, action === "celebrate" ? "celebrate" : undefined);
-    }
     if (action === "sleeping") {
-      // 睡觉不是五秒动作：立刻缩到最近的屏幕边缘，保持趴睡，鼠标靠近才醒。
+      // 点击让小狗睡觉：清掉双狗/分身互动，设为手动睡眠态并立刻无动画直接缩到屏幕边缘。
+      if (petInteractionTimer.current !== null) {
+        window.clearTimeout(petInteractionTimer.current);
+        petInteractionTimer.current = null;
+      }
+      setPetInteraction(null);
+      manualSleepGraceUntilRef.current = Date.now() + 1500;
+      directTuckRef.current = true;
+      petVitalsController.setSleepMode("manual");
       tuckIsland("manual");
+    } else {
+      const interaction = interactionFromAction(action);
+      if (interaction) {
+        startPetInteraction(interaction, action === "celebrate" ? "celebrate" : undefined);
+      }
     }
     if (petActionTimer.current !== null) {
       window.clearTimeout(petActionTimer.current);
@@ -8221,6 +8261,7 @@ function IslandApp({
         onResetPosition={resetIslandPosition}
         onMinimize={minimizeIsland}
         onReveal={revealIsland}
+        onHoverReveal={hoverRevealIsland}
         onSleepTuck={tuckForSleep}
         onSleepReveal={revealForSleep}
         onPageChange={setPage}
