@@ -438,62 +438,134 @@ const XHS_COMMENT_TEMPLATE: &str = r#"(async function () {
   }
   logStep('wait-editor', true, editor.className || editor.tagName, '');
 
-  editor.focus();
-  if (editor.tagName === 'TEXTAREA') {
+  if (typeof editor.focus === 'function') editor.focus();
+  if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
     var proto = Object.getPrototypeOf(editor);
     var descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
     if (descriptor && descriptor.set) descriptor.set.call(editor, text);
     else editor.value = text;
   } else {
+    try {
+      var sel = window.getSelection && window.getSelection();
+      if (sel && document.createRange) {
+        var range = document.createRange();
+        range.selectNodeContents(editor);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } catch (e) {}
     try { document.execCommand('selectAll', false, null); } catch (e) {}
-    try { document.execCommand('insertText', false, text); } catch (e) {}
+    var inserted = false;
+    try { inserted = !!document.execCommand('insertText', false, text); } catch (e) {}
+    var checkText = (editor.innerText || editor.textContent || '').trim();
+    if (!inserted && checkText.length === 0) {
+      editor.textContent = text;
+    }
   }
   try {
     editor.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
     editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
     editor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
+    editor.dispatchEvent(new Event('change', { bubbles: true }));
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
   } catch (e) { editor.dispatchEvent(new Event('input', { bubbles: true })); }
   await sleep(350);
-  var written = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
+  var readEditorText = function () {
+    return (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT'
+      ? editor.value
+      : (editor.innerText || editor.textContent || '')).trim();
+  };
+  var written = readEditorText();
   logStep('write', written.length > 0, editor.className || editor.tagName, written.length > 0 ? '' : 'empty');
 
-  var words = ['发送', '评论', '发布'];
-  var buttons = deepAll('button, [role=button], .submit, [class*="send"], [class*="publish"], .publish');
-  var button = null;
-  for (var b = 0; b < buttons.length; b += 1) {
-    var candidate = buttons[b];
-    if (!visible(candidate)) continue;
+  var words = ['发送', '评论', '发布', '回复'];
+  var submitClassRe = /\bsubmit\b|btn-submit|comment-submit|submit-btn|\bsend\b|btn-send|send-btn|\bpublish\b/i;
+  var excludeClassRe = /cancel|close|reset|clear|emoji|at-btn|mention|image|upload/i;
+  var disabledClassRe = /\bdisabled\b|is-disabled|not-allow|unclickable/i;
+  function matchSubmitCandidate(candidate) {
+    if (!visible(candidate)) return false;
+    if (candidate === editor || candidate.contains(editor)) return false;
     var className = String(candidate.className || '');
-    var label = (candidate.textContent || '').trim();
-    var byClass = /\.submit|send/i.test(className);
-    var byLabel = label.length > 0 && label.length <= 8 && words.some(function (w) { return label.indexOf(w) >= 0; });
-    if (!byClass && !byLabel) continue;
-    if (candidate.disabled) continue;
-    button = candidate;
-    break;
+    if (excludeClassRe.test(className)) return false;
+    var rawLabel = (candidate.textContent || '').trim();
+    var compactLabel = rawLabel.replace(/\s+/g, '');
+    if (/取消|关闭|清空|表情/.test(compactLabel)) return false;
+    var byClass = submitClassRe.test(className);
+    var byLabel = compactLabel.length > 0 && compactLabel.length <= 6 && words.some(function (w) { return compactLabel === w || compactLabel.indexOf(w) >= 0; });
+    if (!byClass && !byLabel) return false;
+    if (candidate.disabled || candidate.getAttribute('aria-disabled') === 'true' || disabledClassRe.test(className)) return false;
+    return true;
+  }
+  function findSubmitButton() {
+    // 1) 优先在编辑器所属的底栏 / 评论输入容器附近查找（兼容 div/span.submit、「发 送」空格文案、纯图标发送钮）。
+    var scope = (editor.closest && editor.closest('.engage-bar-container, .engage-bar, .interact-container, .comment-input, .input-box, .reply-box, .footer, form'))
+      || (editor.parentElement && editor.parentElement.parentElement)
+      || editor.parentElement;
+    if (scope && scope.querySelectorAll) {
+      var localNodes = scope.querySelectorAll('button, [role=button], .submit, [class*="submit"], [class*="send"], [class*="publish"], .btn, div, span');
+      for (var li = 0; li < localNodes.length; li += 1) {
+        if (matchSubmitCandidate(localNodes[li])) return localNodes[li];
+      }
+    }
+    // 2) 全局穿透 shadowRoot 查找。
+    var buttons = deepAll('button, [role=button], .submit, [class*="submit"], [class*="send"], [class*="publish"], .publish, .btn');
+    for (var b = 0; b < buttons.length; b += 1) {
+      if (matchSubmitCandidate(buttons[b])) return buttons[b];
+    }
+    // 3) 同源 iframe 内查找。
+    var frames = deepAll('iframe');
+    for (var fi = 0; fi < frames.length; fi += 1) {
+      try {
+        var fdoc = frames[fi].contentDocument;
+        if (!fdoc) continue;
+        var fbtns = fdoc.querySelectorAll('button, [role=button], .submit, [class*="submit"], [class*="send"], [class*="publish"]');
+        for (var fb = 0; fb < fbtns.length; fb += 1) {
+          if (matchSubmitCandidate(fbtns[fb])) return fbtns[fb];
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  var button = null;
+  for (var sbWait = 0; sbWait < 6; sbWait += 1) {
+    button = findSubmitButton();
+    if (button) break;
+    await sleep(200);
   }
   if (!button) {
-    // 兜底：编辑器上按 Enter / Ctrl+Enter（小红书常见快捷发送）。
+    // 兜底：编辑器上按 Enter / Ctrl+Enter（小红书常见快捷发送），若输入框已被清空说明发送成功！
     try {
-      editor.focus();
+      if (typeof editor.focus === 'function') editor.focus();
       editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey: true, bubbles: true, cancelable: true }));
+      editor.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      await sleep(350);
+      if (readEditorText().length > 0) {
+        editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, ctrlKey: true, bubbles: true, cancelable: true }));
+        await sleep(550);
+      }
     } catch (e) {}
-    await sleep(500);
+    if (written.length > 0 && readEditorText().length === 0) {
+      logStep('submit', true, 'enter-shortcut', '');
+      logStep('verify', true, 'editor-cleared', '');
+      return JSON.stringify({ ok: true, reason: 'sent', message: '评论已通过快捷键提交', detail: { steps: steps } });
+    }
     var candidates = [];
-    var allButtons = deepAll('button, [role=button], [class*="send"], [class*="publish"], .submit');
-    for (var ci = 0; ci < allButtons.length && candidates.length < 6; ci += 1) {
+    var allButtons = deepAll('button, [role=button], .submit, [class*="submit"], [class*="send"], [class*="publish"], .btn');
+    for (var ci = 0; ci < allButtons.length && candidates.length < 8; ci += 1) {
       if (!visible(allButtons[ci])) continue;
-      candidates.push(String(allButtons[ci].className || allButtons[ci].tagName) + ':' + (allButtons[ci].textContent || '').trim().slice(0, 6));
+      candidates.push(String(allButtons[ci].className || allButtons[ci].tagName) + ':' + (allButtons[ci].textContent || '').replace(/\s+/g, '').slice(0, 6));
     }
     logStep('submit', false, candidates.join('|'), 'no-button');
     return JSON.stringify({ ok: false, reason: 'no-button', message: '没找到可用的发送按钮 candidates=' + candidates.join('|'), detail: { steps: steps } });
   }
-  await sleep(400);
-  button.click();
+  await sleep(250);
+  pointerSequence(button);
+  try { button.click(); } catch (e) {}
   logStep('submit', true, button.className || button.tagName, '');
   await sleep(900);
-  var after = (editor.tagName === 'TEXTAREA' ? editor.value : (editor.innerText || editor.textContent || '')).trim();
+  var after = readEditorText();
   logStep('verify', after.length === 0, 'editor-cleared', after.length === 0 ? '' : 'still-editing');
   return JSON.stringify({ ok: true, reason: 'sent', message: '评论已提交', detail: { steps: steps } });
   } catch (err) {

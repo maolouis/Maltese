@@ -727,6 +727,8 @@ export type Translations = {
       title: string;
       star: string;
       starHint: string;
+      replayOnboarding: string;
+      replayOnboardingHint: string;
       latestRelease: string;
       latestReleaseHint: string;
       openFailed: string;
@@ -844,5 +846,119 @@ export type Translations = {
   messagePreview: {
     label: string;
     hint: string;
+  };
+  onboarding: {
+    ariaLabel: string;
+    stepBadge: (current: number, total: number) => string;
+    skip: string;
+    back: string;
+    next: string;
+    steps: {
+      partner: string;
+      appearance: string;
+      gestures: string;
+      features: string;
+      system: string;
+      done: string;
+    };
+    partner: {
+      badge: string;
+      title: string;
+      subtitle: string;
+      chooseLabel: string;
+      selectedTag: string;
+      characters: {
+        xiaobaiName: string;
+        xiaobaiDesc: string;
+        xiaojimaoName: string;
+        xiaojimaoDesc: string;
+        duoName: string;
+        duoDesc: string;
+      };
+    };
+    appearance: {
+      title: string;
+      subtitle: string;
+      styleLabel: string;
+      classicName: string;
+      classicDesc: string;
+      glassName: string;
+      glassDesc: string;
+      scaleLabel: string;
+      scaleCompact: string;
+      scaleStandard: string;
+      scaleLarge: string;
+      cornerLabel: string;
+      cornerCenter: string;
+      cornerBr: string;
+      cornerBl: string;
+      cornerTr: string;
+    };
+    gestures: {
+      title: string;
+      subtitle: string;
+      tryHint: string;
+      defaultBubble: string;
+      clickTitle: string;
+      clickDesc: string;
+      clickBubble: string;
+      doubleTitle: string;
+      doubleDesc: string;
+      doubleBubble: string;
+      rightTitle: string;
+      rightDesc: string;
+      rightBubble: string;
+      dragTitle: string;
+      dragDesc: string;
+      dragBubble: string;
+    };
+    features: {
+      title: string;
+      subtitle: string;
+      todoTitle: string;
+      todoDesc: string;
+      musicTitle: string;
+      musicDesc: string;
+      clipboardTitle: string;
+      clipboardDesc: string;
+      chatTitle: string;
+      chatDesc: string;
+      notifyTitle: string;
+      notifyDesc: string;
+      extrasTitle: string;
+      extrasDesc: string;
+    };
+    system: {
+      title: string;
+      subtitle: string;
+      shortcutLabel: string;
+      shortcutHint: string;
+      shortcutAria: string;
+      shortcutReset: string;
+      shortcutSaved: string;
+      shortcutModifierError: string;
+      startupLabel: string;
+      startupHint: string;
+      startupOn: string;
+      startupOff: string;
+      fullscreenLabel: string;
+      fullscreenHint: string;
+      fullscreenTuck: string;
+      fullscreenHide: string;
+      fullscreenOff: string;
+    };
+    done: {
+      badge: string;
+      title: string;
+      subtitle: string;
+      summaryPartner: string;
+      summaryShortcut: string;
+      summaryStartup: string;
+      startupEnabled: string;
+      startupDisabled: string;
+      reopenHint: string;
+      startCompanion: string;
+      openPanel: string;
+    };
   };
 };

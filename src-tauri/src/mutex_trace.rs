@@ -31,7 +31,8 @@ pub const LAST_PERSISTED_RECT: usize = 3;
 pub const PINNED_LAST_SET: usize = 4;
 pub const PINNED_MANUAL_POSITION: usize = 5;
 pub const USER_ISLAND_SIZE: usize = 6;
-pub const LOCK_COUNT: usize = 7;
+pub const LAST_OUTER_WINDOW_RECT: usize = 7;
+pub const LOCK_COUNT: usize = 8;
 
 const LOCK_NAMES: [&str; LOCK_COUNT] = [
     "WINDOW_STATE",
@@ -41,10 +42,12 @@ const LOCK_NAMES: [&str; LOCK_COUNT] = [
     "PINNED_LAST_SET",
     "PINNED_MANUAL_POSITION",
     "USER_ISLAND_SIZE",
+    "LAST_OUTER_WINDOW_RECT",
 ];
 
 /// 0 = 没人持锁；否则是持锁线程的系统 tid。
 static HOLDERS: [AtomicU32; LOCK_COUNT] = [
+    AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),

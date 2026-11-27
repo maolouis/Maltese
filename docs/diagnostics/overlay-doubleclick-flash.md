@@ -106,3 +106,35 @@ CSS 侧结论（不需要改）：`src/App.css:5572` 的
 浮层/展开容器没有 `height: 0` 展开动画；`.island__expanded` 只有
 opacity + `translateY(-6px)`→none 的 280ms 淡入。「向下闪」来自原生窗口在开浮层
 瞬间被移动 2~3 次，与 CSS 无关。
+
+---
+
+## 2026-11-27 后续跟进：v2.0.5「双击向左上角闪动」根因与闭环
+
+### 为什么 v2.0.5 仍会在正常使用中复现「向左上角闪动」
+
+`scripts/verify-flash.ps1` 当时复用的测试快照恰好带有非空 `customPosition`，掩盖了常规冷启动（未手拖或挂载后同步显示器偏好）下的多真源污染链路：
+
+1. **挂载同步清空了 `custom_position`**：前端 `App.tsx` 挂载时调用 `set_monitor_preferences`，旧实现无条件执行 `state.custom_position = None`。
+2. **`LAST_SETTLED_ISLAND_RECT` 被浮层外框覆盖**：双击打开 `hover`（尤其在右下角 `side=left, vertical=above` 时，窗口左上角相比小狗槽向左上方扩出约 `(-328, -410)` 物理像素），`WindowEvent::Resized` 调 `remember_settled_island_rect` 把**浮层大窗口左上角**写进了 `LAST_SETTLED_ISLAND_RECT`。
+3. **60ms 实测上报二次向左上角拉飞**：`report_pet_slot_offset` 调 `expected_slot_from_state()` 时，因 `OVERLAY_SNAPSHOT` 未优先返回且 `state.custom_position == None`，回退读到了被污染的 `LAST_SETTLED_ISLAND_RECT`（浮层外框左上角），把本已对齐的窗口再次减去 `(328, 410)` 推向屏幕左上角。
+4. **云朵气泡开着时双击小狗（`cloud → hover`）**：`plan_island_overlay` 在 `existing.is_some()` 时仍把当前云朵大窗口的 `outer_position()` 与 `settled_anchor` 比较，误判 `stale-settled` 并把云朵窗口左上角写回 `custom_position` 与 `OVERLAY_SNAPSHOT`。
+5. **跨方向样本误补偿 + `.maltese-pet` 内边距残差**：`PetSlotMeasure` 原先不区分 `(side, vertical)`，且前端量的是带 `(-3, -4.5)px` 偏移的 `.maltese-pet` 而非 `.island__collapsed--pet-only`；叠加重复挂载的一组 `[60, 400, 1200]ms` 定时器与缺少 `SWP_NOCOPYBITS` 的位图拷贝，造成首帧残差与左上角旧位图闪现。
+
+### 本次根治改动
+
+1. **拆分两份缓存职责（`src-tauri/src/lib.rs`, `mutex_trace.rs`）**：
+   - `LAST_OUTER_WINDOW_RECT`：记录任意合法外框（专供最小化/还原恢复外框）；
+   - `LAST_SETTLED_ISLAND_RECT`：严格只存**收起态狗槽矩形 `(dog_x, dog_y, slot_w, slot_h)`**，展开态/浮层态一律经 `dog_slot_now` 折算后再写入。
+2. **`expected_slot_from_state` 浮层快照优先**：`OVERLAY_SNAPSHOT` 存在时直接返回 `(anchor_x, anchor_y, base_w, base_h)`，绝不回退读外框。
+3. **`plan_island_overlay` 与 `set_island_overlay` 共用 `compute_overlay_window_rect`**：消除计划阶段与落位阶段的尺寸/顶边夹取分叉；`existing.is_some()` 时直接沿用 `snapshot.anchor`，不再拿云朵外框左上角覆盖锚点。
+4. **同方向测量匹配 + 槽位容器对齐 + `SWP_NOCOPYBITS`**：
+   - `PetSlotMeasure` 增加 `(side, vertical)`，`same_mode_directed_measure` 只允许同模式同方向同尺寸样本参与预补偿；
+   - `App.tsx` 改为测量 `.island__collapsed--pet-only` 并移除重复的 `report_pet_slot_offset` `useEffect`，消除首次 `~5px` 纠正；
+   - `set_window_rect_atomic`（`SetWindowPos`）补上 `SWP_NOCOPYBITS`，杜绝 Win32 在窗口向左上扩窗瞬间把旧位图贴到新窗口 `(0, 0)` 左上角；
+   - `set_monitor_preferences` 在目标屏未变化或启动恢复窗口已在该屏时不再清空 `custom_position`；`island_rect_store` 统一跟随 `paths::data_root()` 并在旧快照尺寸不匹配当前缩放时原地贴边自愈。
+
+### 真机逐帧回归证据（`work/verify-followup.log`，2026-11-27）
+
+- **场景 A（`custom_position == None` 默认冷启动，`side=right, vertical=above`）**：4 轮双击 × 30 帧（35ms 采样），`base=1204,1310,151,130 -> open=1204,900,479,540`，4 轮全部 `maxDriftPx=0 pass=True`，`OVERLAY_SINGLE_SHOT ok=true corrections=0`，`OVERLAY_DOG_MEASURE dx=0 dy=0 corrected=false`（连首次打开也是 `dx=0 dy=0`）。
+- **场景 B（右边缘 `side=left, vertical=above` + 旧 `261x222` 快照自愈为 `151x130`）**：4 轮双击 × 30 帧，`base=-151,950,151,130 -> open=-479,540,479,540`，4 轮全部 `maxDriftPx=0 pass=True`，`violations=0`，`dogMeasureCorrections=0`。

@@ -35,6 +35,7 @@ import { Pin,
   Shuffle,
   SkipBack,
   SkipForward,
+  Sparkles,
   Star,
   Trash2,
   Volume2,
@@ -63,6 +64,7 @@ import { shouldSkipProactiveForChat } from "./chatGuard";
 import { MINIMIZE_BLUR_SETTLE_MS, shouldCollapseOnBlur } from "./islandMinimizeGuard";
 import { previewPetLinkage } from "./petLinkPreview";
 import { applyFontVariables } from "./fontSettings";
+import { SystemFontSelect } from "./SystemFontSelect";
 import { PET_LINK_ENABLED } from "./petLinkBus";
 // 桌宠自我状态（体力/情绪/亲密/专注）：只影响待机轮播权重 + 设置页卡片。
 import {
@@ -120,7 +122,12 @@ import {
 } from "./updaterController";
 import { PetChat } from "./PetChat";
 import { useVideoDelivery } from "./useVideoDelivery";
-import { isOnboardingDone, markOnboardingDone, OnboardingPanel } from "./OnboardingPanel";
+import {
+  isOnboardingDone,
+  markOnboardingDone,
+  ONBOARDING_OPEN_EVENT,
+  OnboardingPanel,
+} from "./OnboardingPanel";
 import { useFullscreenAvoid, useTodoRotation } from "./useIslandAutomation";
 import { loadWakeShortcut, saveWakeShortcut } from "./wakeShortcut";
 import { loadCollapseShortcut, saveCollapseShortcut } from "./collapseShortcut";
@@ -1496,11 +1503,15 @@ export function IslandShell({
     const timer = window.setTimeout(() => setSettingsWindowError(""), 6000);
     return () => window.clearTimeout(timer);
   }, [settingsWindowError]);
-  // 浮层/展开态下，狗在窗口内的真实偏移（CSS 像素）：CSS 布局说了算，Rust 侧不再用 panelSide 公式假设。
+  // 浮层/展开态下，狗槽容器在窗口内的真实偏移（CSS 像素）：
+  // 测量 `.island__collapsed--pet-only`（与收起态窗口同尺寸、原点对齐 (0,0)），
+  // 消除之前测 `.maltese-pet` 自带的 (-3,-4.5)px 内边距偏差，并同步上报面板方向避免跨边误用。
   useEffect(() => {
     if (!isTauri()) return;
     const report = () => {
-      const element = document.querySelector<HTMLElement>(".maltese-pet");
+      const element =
+        document.querySelector<HTMLElement>(".island__collapsed--pet-only")
+        ?? document.querySelector<HTMLElement>(".maltese-pet");
       if (!element) return;
       const rect = element.getBoundingClientRect();
       const islandClass = document.querySelector(".island")?.className ?? "";
@@ -1509,38 +1520,22 @@ export function IslandShell({
         : islandClass.includes("island--expanded")
           ? "expanded"
           : "collapsed";
+      const side =
+        islandClass.includes("island--overlay-left") || islandClass.includes("island--panel-left")
+          ? "left"
+          : "right";
+      const vertical =
+        islandClass.includes("island--overlay-below") || islandClass.includes("island--panel-below")
+          ? "below"
+          : "above";
       void invoke("report_pet_slot_offset", {
         mode: layoutMode,
         offX: rect.left,
         offY: rect.top,
         width: rect.width,
         height: rect.height,
-      }).catch(() => undefined);
-    };
-    const timers = [60, 400, 1200].map((delay) => window.setTimeout(report, delay));
-    return () => {
-      for (const timer of timers) window.clearTimeout(timer);
-    };
-  }, [mode, overlayOpen, page]);
-  // 浮层/展开态下，狗在窗口内的真实偏移（CSS 像素）：CSS 布局说了算，Rust 侧不再用 panelSide 公式假设。
-  useEffect(() => {
-    if (!isTauri()) return;
-    const report = () => {
-      const element = document.querySelector<HTMLElement>(".maltese-pet");
-      if (!element) return;
-      const rect = element.getBoundingClientRect();
-      const islandClass = document.querySelector(".island")?.className ?? "";
-      const layoutMode = islandClass.includes("island--overlay-open")
-        ? "overlay"
-        : islandClass.includes("island--expanded")
-          ? "expanded"
-          : "collapsed";
-      void invoke("report_pet_slot_offset", {
-        mode: layoutMode,
-        offX: rect.left,
-        offY: rect.top,
-        width: rect.width,
-        height: rect.height,
+        side,
+        vertical,
       }).catch(() => undefined);
     };
     const timers = [60, 400, 1200].map((delay) => window.setTimeout(report, delay));
@@ -2475,6 +2470,7 @@ function LayoutEditor({
   onClearAgentStatus,
   onInstallAgentHooks,
   onOpenSettingsWindow,
+  onReplayOnboarding,
   petVitals,
   chatThinking,
   onPetVitalsAction,
@@ -2509,6 +2505,8 @@ function LayoutEditor({
   onInstallAgentHooks: () => void;
   /** 打开独立设置窗口：先收起浮层再开，避免两个窗口同时抢焦点（QA D5）。 */
   onOpenSettingsWindow: () => Promise<void>;
+  /** 重新打开新手引导向导。 */
+  onReplayOnboarding: () => void;
   /** 自我状态快照（设置页状态卡用；只读）。 */
   petVitals: PetVitalsSnapshot;
   /** 模型正在思考（只读标记）。 */
@@ -2660,6 +2658,18 @@ function LayoutEditor({
             ))}
           </div>
         </div>
+        <SystemFontSelect
+          compact
+          label="界面字体"
+          value={settings.appFont}
+          onChange={(appFont) => onSettingsChange({ ...settings, appFont })}
+        />
+        <SystemFontSelect
+          compact
+          label="桌宠字体"
+          value={settings.petFont}
+          onChange={(petFont) => onSettingsChange({ ...settings, petFont })}
+        />
         {settings.appearanceMode === "liquidGlass" && (
           <SliderControl
             label={t.settings.appearance.glassStrength}
@@ -3547,6 +3557,17 @@ function LayoutEditor({
           <span>{t.settings.project.title}</span>
         </div>
         <UpdatePanel />
+        <button
+          type="button"
+          className="project-link"
+          onClick={onReplayOnboarding}
+        >
+          <Sparkles className="project-link__icon" size={18} strokeWidth={1.8} aria-hidden="true" />
+          <span className="project-link__copy">
+            <strong>{t.settings.project.replayOnboarding}</strong>
+            <span>{t.settings.project.replayOnboardingHint}</span>
+          </span>
+        </button>
         <a
           className="project-link project-link--star"
           href="https://github.com/flyl1u/fly-island"
@@ -4569,7 +4590,12 @@ function IslandApp({
   const t = useTranslation();
   useVideoDelivery();
   const proactiveCharacter = usePetCharacter();
-  const [mode, setMode] = useState<IslandMode>("collapsed");
+  const [onboardingOpen, setOnboardingOpen] = useState(() => isTauri() && !isOnboardingDone());
+  const onboardingOpenRef = useRef(onboardingOpen);
+  onboardingOpenRef.current = onboardingOpen;
+  const [mode, setMode] = useState<IslandMode>(() =>
+    isTauri() && !isOnboardingDone() ? "expanded" : "collapsed",
+  );
   const [isTucked, setIsTucked] = useState(false);
   const qqNotifications = useQQNotifications(mode === "collapsed" && !isTucked);
   const wechatReminders = useWeChatReminders(mode === "collapsed" && !isTucked);
@@ -4579,19 +4605,45 @@ function IslandApp({
   const [reducedMotion, setReducedMotion] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
-  const [page, setPage] = useState<IslandPage>("todo");
-  const [onboardingOpen, setOnboardingOpen] = useState(() => isTauri() && !isOnboardingDone());
-  useEffect(() => {
-    if (onboardingOpen) {
-      setMode("expanded");
-      setPage("onboarding");
-    }
-  }, [onboardingOpen]);
+  const [page, setPage] = useState<IslandPage>(() =>
+    isTauri() && !isOnboardingDone() ? "onboarding" : "todo",
+  );
+  const openOnboardingGuide = useCallback(() => {
+    onboardingOpenRef.current = true;
+    setOnboardingOpen(true);
+    setMode("expanded");
+    setPage("onboarding");
+  }, []);
   const finishOnboarding = useCallback(() => {
     markOnboardingDone();
+    onboardingOpenRef.current = false;
     setOnboardingOpen(false);
     setMode("collapsed");
   }, []);
+  const exploreTodoFromOnboarding = useCallback(() => {
+    markOnboardingDone();
+    onboardingOpenRef.current = false;
+    setOnboardingOpen(false);
+    setMode("expanded");
+    setPage("todo");
+  }, []);
+  useEffect(() => {
+    const handleWindowEvent = () => openOnboardingGuide();
+    window.addEventListener(ONBOARDING_OPEN_EVENT, handleWindowEvent);
+    if (!isTauri()) {
+      return () => window.removeEventListener(ONBOARDING_OPEN_EVENT, handleWindowEvent);
+    }
+    let unlisten: (() => void) | null = null;
+    void listen(ONBOARDING_OPEN_EVENT, () => {
+      openOnboardingGuide();
+    }).then((dispose) => {
+      unlisten = dispose;
+    });
+    return () => {
+      window.removeEventListener(ONBOARDING_OPEN_EVENT, handleWindowEvent);
+      unlisten?.();
+    };
+  }, [openOnboardingGuide]);
   const [mediaState, setMediaState] =
     useState<MediaState>(DEFAULT_MEDIA_STATE);
   // 前台程序类型（用来判断是不是在看视频）。系统媒体会话对浏览器经常只报
@@ -6326,6 +6378,11 @@ function IslandApp({
   }, [openIslandPage, qqMail.closeReader]);
 
   const collapseIsland = useCallback(() => {
+    if (onboardingOpenRef.current) {
+      markOnboardingDone();
+      onboardingOpenRef.current = false;
+      setOnboardingOpen(false);
+    }
     setIslandMode("collapsed");
   }, [setIslandMode]);
 
@@ -7636,12 +7693,16 @@ function IslandApp({
         hidePetOverlay();
         return;
       }
+      if (onboardingOpen) {
+        finishOnboarding();
+        return;
+      }
       collapseIsland();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [collapseIsland, hidePetOverlay]);
+  }, [collapseIsland, finishOnboarding, hidePetOverlay, onboardingOpen]);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -7670,6 +7731,7 @@ function IslandApp({
             .catch(() => false)
             .then((minimized) => {
               if (didCancel) return;
+              if (onboardingOpenRef.current) return;
               const settleMs = MINIMIZE_BLUR_SETTLE_MS;
               if (!shouldCollapseOnBlur({ focused: false, mode: modeRef.current, minimized, settleMs })) {
                 return;
@@ -8137,6 +8199,7 @@ function IslandApp({
             onClearAgentStatus={clearAgentStatus}
             onInstallAgentHooks={installAgentHooks}
             onOpenSettingsWindow={openStandaloneSettings}
+            onReplayOnboarding={openOnboardingGuide}
             petVitals={petVitalsController.vitals}
             chatThinking={chatThinking}
             onPetVitalsAction={(action) => triggerPetAction(action)}
@@ -8176,7 +8239,30 @@ function IslandApp({
         {page === "video" && <VideoPage />}
         {page === "chat" && <PetChat />}
         {page === "agent" && <AgentConsole />}
-        {page === "onboarding" && <OnboardingPanel onFinish={finishOnboarding} />}
+        {page === "onboarding" && (
+          <OnboardingPanel
+            onFinish={finishOnboarding}
+            onExploreTodo={exploreTodoFromOnboarding}
+            locale={locale}
+            onLocaleChange={onLocaleChange}
+            appearanceMode={settings.appearanceMode}
+            onAppearanceModeChange={(appearanceMode) =>
+              setSettings((current) => ({ ...current, appearanceMode }))
+            }
+            collapsedScale={settings.collapsedScale}
+            onCollapsedScaleChange={(collapsedScale) =>
+              setSettings((current) => ({ ...current, collapsedScale }))
+            }
+            lockCorner={settings.lockCorner}
+            onLockCornerChange={(lockCorner) =>
+              setSettings((current) => ({ ...current, lockCorner }))
+            }
+            fullscreenAvoid={settings.fullscreenAvoid}
+            onFullscreenAvoidChange={(fullscreenAvoid) =>
+              setSettings((current) => ({ ...current, fullscreenAvoid }))
+            }
+          />
+        )}
         {page === "todo" && (
           <TodoNotebook
             todos={todos}

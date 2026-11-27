@@ -21,7 +21,7 @@ import { CustomSoundControl } from "./CustomSoundControl";
 import { dropLegacyWechatReadContent } from "./messagePrivacy";
 import { previewPetLinkage } from "./petLinkPreview";
 import { PET_LINK_ENABLED } from "./petLinkBus";
-import { FONT_PRESETS, customFontName } from "./fontSettings";
+import { SystemFontSelect } from "./SystemFontSelect";
 import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
@@ -438,33 +438,15 @@ export default function SettingsWindow() {
             ["appFont", "界面字体"],
             ["petFont", "桌宠字体"],
           ] as Array<["appFont" | "petFont", string]>
-        ).map(([key, label]) => {
-          const value = settings[key] ?? "";
-          const custom = customFontName(value);
-          const preset = custom ? "default" : value || "default";
-          return (
-            <div className="sw-font" key={key}>
-              <span>{label}</span>
-              <select
-                value={preset}
-                aria-label={label}
-                onChange={(event) => update(key, event.currentTarget.value)}
-              >
-                {FONT_PRESETS.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-              <input
-                type="text"
-                placeholder="自定义字体名（留空用上面的预设）"
-                value={custom}
-                aria-label={`${label}自定义`}
-                onChange={(event) => update(key, event.currentTarget.value.trim())}
-              />
-            </div>
-          );
-        })}
-        <p className="sw-hint">字体不存在时自动回退系统字体；聊天、气泡、状态条使用桌宠字体。</p>
+        ).map(([key, label]) => (
+          <SystemFontSelect
+            key={key}
+            label={label}
+            value={settings[key]}
+            onChange={(nextFont) => update(key, nextFont)}
+          />
+        ))}
+        <p className="sw-hint">自动检测本机系统现用与已安装字体；聊天、气泡、状态条使用桌宠字体。</p>
         <Switch label="点击时 Q 弹" checked={settings.clickSquash} onChange={(value) => update("clickSquash", value)} />
       </section>
 
@@ -793,6 +775,22 @@ export default function SettingsWindow() {
       <section className="sw-card">
         <h2>关于与更新</h2>
         <UpdatePanel />
+        <div className="sw-row">
+          <span className="sw-copy">
+            <span className="sw-label">{t.settings.project.replayOnboarding}</span>
+            <span className="sw-hint">{t.settings.project.replayOnboardingHint}</span>
+          </span>
+          <button
+            type="button"
+            className="sw-secondary"
+            onClick={() => {
+              void invoke("show_ready_island").catch(() => undefined);
+              void emit("maltese-open-onboarding").catch(() => undefined);
+            }}
+          >
+            {t.settings.project.replayOnboarding}
+          </button>
+        </div>
       </section>
 
       <footer className="settings-window__foot">

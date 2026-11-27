@@ -336,3 +336,31 @@ body,
 .settings-window .update-panel__fill {
   background: #4a9d72;
 }
+
+.sw-font {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.sw-font > span {
+  font-size: 13px;
+  font-weight: 500;
+  color: #23262e;
+  flex-shrink: 0;
+}
+
+.sw-font > select {
+  max-width: 280px;
+  width: 100%;
+  border: 1px solid #d8dde6;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #23262e;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}

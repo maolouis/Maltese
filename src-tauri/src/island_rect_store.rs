@@ -26,16 +26,27 @@ pub struct IslandRectSnapshot {
     pub updated_at: u64,
 }
 
-/// 快照文件路径：优先固定目录，不可写再退到 APPDATA。
+/// 快照文件路径：统一跟随 `paths::data_root()`（支持 `MALTESE_DATA_DIR` / `data-dir.txt` / 只读回退）。
 pub fn snapshot_path() -> PathBuf {
-    let fixed = PathBuf::from(r"E:\MalteseData");
-    if std::fs::create_dir_all(&fixed).is_ok() {
-        return fixed.join("island-rect.json");
+    crate::paths::data_root().join("island-rect.json")
+}
+
+/// 启动读取快照：优先读 `snapshot_path()`；当未显式指定 `MALTESE_DATA_DIR` 且新路径尚无快照时，
+/// 兼容回退读取旧版固定路径 `E:\MalteseData\island-rect.json`（下次落盘会写入 `data_root()`）。
+pub fn load_startup_snapshot() -> (PathBuf, Option<IslandRectSnapshot>) {
+    let primary = snapshot_path();
+    if let Some(snapshot) = load(&primary) {
+        return (primary, Some(snapshot));
     }
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("com.maolouis.maltese").join("island-rect.json")
+    if std::env::var_os("MALTESE_DATA_DIR").is_none() {
+        let legacy = PathBuf::from(r"E:\MalteseData\island-rect.json");
+        if legacy != primary {
+            if let Some(snapshot) = load(&legacy) {
+                return (legacy, Some(snapshot));
+            }
+        }
+    }
+    (primary, None)
 }
 
 /// 原子写：先写 `path.tmp`，再 rename 覆盖。失败返回 Err（调用方只记日志）。
@@ -54,7 +65,8 @@ pub fn save(path: &Path, snapshot: &IslandRectSnapshot) -> Result<(), String> {
 /// 读快照：文件不存在 / JSON 损坏 / 字段不合理 → None（不 panic、不阻断启动）。
 pub fn load(path: &Path) -> Option<IslandRectSnapshot> {
     let text = std::fs::read_to_string(path).ok()?;
-    let snapshot: IslandRectSnapshot = serde_json::from_str(&text).ok()?;
+    let snapshot: IslandRectSnapshot =
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     if snapshot.width < 32 || snapshot.height < 32 {
         return None;
     }

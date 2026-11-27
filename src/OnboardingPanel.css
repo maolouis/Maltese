@@ -1,0 +1,677 @@
+/* ============ 新手引导向导（贴合 Maltese 浅色云朵面板 + 品牌浅绿/浅橙高对比度视觉） ============ */
+
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px 12px 8px;
+  gap: 8px;
+  color: #1e293b;
+  background: rgba(252, 253, 255, 0.94);
+  border-radius: 16px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.onboarding__topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.onboarding__step-counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #dcfce7, #ffedd5);
+  border: 1px solid rgba(34, 197, 94, 0.32);
+  font-size: 11px;
+  font-weight: 650;
+  color: #166534;
+}
+
+.onboarding__topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.onboarding__lang-toggle {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.onboarding__lang-toggle:hover {
+  background: #fff7ed;
+  border-color: #f59e0b;
+  color: #9a3412;
+}
+
+.onboarding__skip {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  padding: 3px 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.onboarding__skip:hover {
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+.onboarding__stepper {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.onboarding__step-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 2px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.onboarding__step-pill:hover {
+  color: #1e293b;
+  background: #f1f5f9;
+}
+
+.onboarding__step-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  transition: background 180ms ease;
+}
+
+.onboarding__step-pill--done {
+  color: #15803d;
+}
+
+.onboarding__step-pill--done .onboarding__step-bar {
+  background: #4ade80;
+}
+
+.onboarding__step-pill--active {
+  color: #c2410c;
+  font-weight: 700;
+}
+
+.onboarding__step-pill--active .onboarding__step-bar {
+  background: linear-gradient(90deg, #22c55e, #f59e0b);
+}
+
+.onboarding__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.onboarding__hero {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+}
+
+.onboarding__hero--center {
+  align-items: center;
+  text-align: center;
+}
+
+.onboarding__badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ffedd5;
+  border: 1px solid #fed7aa;
+  color: #b45309;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.onboarding__hero--center .onboarding__badge {
+  align-self: center;
+}
+
+.onboarding__hero h2 {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.32;
+  color: #0f172a;
+}
+
+.onboarding__hero p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.48;
+  color: #475569;
+}
+
+.onboarding__section-label {
+  font-size: 11px;
+  font-weight: 650;
+  color: #334155;
+  margin-bottom: -2px;
+}
+
+/* Step 0: 角色卡片 */
+.onboarding__char-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.onboarding__char-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 6px 8px;
+  border-radius: 12px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+  transition: transform 140ms ease, border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.onboarding__char-card:hover {
+  transform: translateY(-1px);
+  background: #fffaf5;
+  border-color: #fdba74;
+}
+
+.onboarding__char-card--active {
+  border-color: #22c55e;
+  background: linear-gradient(165deg, #f0fdf4 0%, #fffbeb 100%);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.14);
+}
+
+.onboarding__char-tag {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.onboarding__char-avatar {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.onboarding__char-card strong {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.onboarding__char-card span {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+/* Step 1: 外观与位置 */
+.onboarding__dual-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.onboarding__style-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.onboarding__style-card:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.onboarding__style-card--active {
+  border-color: #f59e0b;
+  background: linear-gradient(145deg, #fff7ed, #f0fdf4);
+}
+
+.onboarding__style-card strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9a3412;
+}
+
+.onboarding__style-card span {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #475569;
+}
+
+.onboarding__option-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.onboarding__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.onboarding__pill {
+  flex: 1 1 auto;
+  min-width: 64px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.onboarding__pill:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.onboarding__pill--active {
+  border-color: #22c55e;
+  background: #dcfce7;
+  color: #14532d;
+  font-weight: 700;
+}
+
+/* Step 2: 互动手势试玩台 */
+.onboarding__stage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f0fdf4, #fff7ed);
+  border: 1px solid #bbf7d0;
+}
+
+.onboarding__stage-pet {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.onboarding__stage-bubble {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #fed7aa;
+  color: #1e293b;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.onboarding__gesture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.onboarding__gesture-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.onboarding__gesture-card:hover {
+  background: #fffaf5;
+  border-color: #fdba74;
+}
+
+.onboarding__gesture-card--active {
+  border-color: #f59e0b;
+  background: #fff7ed;
+}
+
+.onboarding__gesture-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.onboarding__gesture-head strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.onboarding__gesture-try {
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  white-space: nowrap;
+}
+
+.onboarding__gesture-card > span {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #475569;
+}
+
+/* Step 3: 功能百宝箱 */
+.onboarding__feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.onboarding__feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.onboarding__feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #dcfce7, #ffedd5);
+  color: #c2410c;
+  flex-shrink: 0;
+}
+
+.onboarding__feature-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.onboarding__feature-copy strong {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.onboarding__feature-copy span {
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: #475569;
+}
+
+/* Step 4: 快捷键与系统常驻 */
+.onboarding__card-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.onboarding__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.onboarding__card-head strong {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.onboarding__card-box small.onboarding__hint {
+  font-size: 10.5px;
+  color: #64748b;
+}
+
+.onboarding__shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.onboarding__shortcut-input {
+  flex: 1;
+  border: 1.5px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #9a3412;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+}
+
+.onboarding__shortcut-input:focus {
+  outline: 2px solid rgba(34, 197, 94, 0.45);
+  border-color: #16a34a;
+}
+
+.onboarding__mini-btn {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.onboarding__mini-btn:hover {
+  background: #f1f5f9;
+}
+
+/* Step 5: 完成摘要 */
+.onboarding__done-pet {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  align-self: center;
+}
+
+.onboarding__summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.onboarding__summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 6px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  text-align: center;
+}
+
+.onboarding__summary-item span {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.onboarding__summary-item strong {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #15803d;
+  word-break: break-word;
+}
+
+.onboarding__reopen-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  color: #475569;
+}
+
+/* 底部导航栏 */
+.onboarding__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.onboarding__footer--end {
+  justify-content: center;
+}
+
+.onboarding__primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #4ade80, #fbbf24);
+  color: #1c1917;
+  padding: 6px 15px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.22);
+  transition: filter 140ms ease;
+}
+
+.onboarding__primary:hover {
+  filter: brightness(1.04);
+}
+
+.onboarding__ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #334155;
+  padding: 6px 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.onboarding__ghost:hover {
+  background: #f8fafc;
+}
+
+.onboarding__error {
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.onboarding__ok {
+  color: #16a34a;
+  font-size: 11px;
+  font-weight: 600;
+}
