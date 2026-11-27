@@ -26,7 +26,6 @@ import { readPetVitals, type PetVitalsSnapshot } from "./petVitals";
 import { CHAT_BUSY_KEY } from "./chatGuard";
 import PetVitalsCard from "./PetVitalsCard";
 import ScreenPlacementCard from "./ScreenPlacementCard";
-import { GeometrySelfCheck } from "./GeometrySelfCheck";
 import "./SettingsWindow.css";
 
 const CHARACTER_ITEMS: ReadonlyArray<readonly [PetCharacterId, string]> = PET_CHARACTERS.map(
@@ -425,7 +424,6 @@ export default function SettingsWindow() {
         <h2>显示</h2>
         <Slider label="小狗不透明度" value={settings.petOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("petOpacity", value)} />
         <Slider label="收起大小" value={settings.collapsedScale} min={0.5} max={3.0} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
-        <Slider label="聊天框高度" value={settings.chatPanelHeight} min={360} max={900} step={10} suffix="px" onChange={(value) => update("chatPanelHeight", value)} />
         <Segments
           label="动画切换频率"
           value={settings.animFrequency}
@@ -520,11 +518,6 @@ export default function SettingsWindow() {
             update("bongoScreen", bongoScreen);
           }}
         />
-      </section>
-
-      <section className="sw-card">
-        <h2>诊断</h2>
-        <GeometrySelfCheck />
       </section>
 
       <section className="sw-card">

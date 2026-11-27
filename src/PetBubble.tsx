@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { applyFontVariables } from "./fontSettings";
+import { PAGE_LABELS } from "./assistantSupport";
 import "./PetBubble.css";
 
 type BubblePayload = {
@@ -8,6 +10,11 @@ type BubblePayload = {
   title?: string | null;
   body?: string | null;
   ttlMs?: number | null;
+  image?: string | null;
+  bubbleKind?: "pet" | "system" | null;
+  todoTitle?: string | null;
+  currentPage?: string | null;
+  side?: "left" | "right" | null;
 };
 
 type MediaSummary = {
@@ -100,20 +107,25 @@ export default function PetBubble() {
   }, []);
 
   useEffect(() => {
-    const applyColor = () => {
+    const applyStyleVars = () => {
       try {
         const color = window.localStorage.getItem("maltese-bubble-color");
         if (color) {
           document.documentElement.style.setProperty("--pet-bubble-text", color);
         }
+        const rawSettings = window.localStorage.getItem("focusd-island-settings");
+        if (rawSettings) {
+          const parsed = JSON.parse(rawSettings) as { appFont?: string; petFont?: string };
+          applyFontVariables(parsed.appFont, parsed.petFont);
+        }
       } catch {
         // 忽略读取失败
       }
     };
-    applyColor();
+    applyStyleVars();
     const onStorage = (event: StorageEvent) => {
-      if (!event.key || event.key === "maltese-bubble-color") {
-        applyColor();
+      if (!event.key || event.key === "maltese-bubble-color" || event.key === "focusd-island-settings") {
+        applyStyleVars();
       }
     };
     window.addEventListener("storage", onStorage);
@@ -151,7 +163,10 @@ export default function PetBubble() {
   };
   const openPage = (page: string) => {
     void emit("maltese-open-page", { page });
+    void invoke("hide_pet_bubble").catch(() => undefined);
   };
+  const sideClass = payload?.side === "left" ? " pet-cloud--side-left" : "";
+  const activePageLabel = (payload?.currentPage && PAGE_LABELS[payload.currentPage]) || "当前标签";
 
   return (
     <div
@@ -160,7 +175,7 @@ export default function PetBubble() {
       onMouseLeave={() => reportHover(false)}
     >
       {payload?.mode === "menu" ? (
-        <div className="pet-cloud pet-bubble-menu" role="menu">
+        <div className={`pet-cloud pet-bubble-menu${sideClass}`} role="menu">
           <button
             type="button"
             onClick={() => {
@@ -192,48 +207,81 @@ export default function PetBubble() {
           </button>
         </div>
       ) : payload?.mode === "cloud" ? (
-        <div className="pet-cloud pet-bubble-cloud" role="status" ref={cloudRef}>
+        <div
+          className={`pet-cloud pet-bubble-cloud${payload.bubbleKind === "pet" ? " pet-bubble-cloud--pet" : " pet-bubble-cloud--system"}${sideClass}`}
+          data-bubble-kind={payload.bubbleKind ?? "system"}
+          role="status"
+          ref={cloudRef}
+        >
           {payload.title && <strong className="pet-bubble-cloud__title">{payload.title}</strong>}
+          {payload.image && <img className="pet-bubble-cloud__image" src={payload.image} alt="" draggable={false} />}
           {payload.body && <p className="pet-bubble-cloud__body">{payload.body}</p>}
           <span className="pet-cloud__tail pet-cloud__tail--1" aria-hidden="true" />
           <span className="pet-cloud__tail pet-cloud__tail--2" aria-hidden="true" />
         </div>
       ) : (
-        <div className="pet-cloud pet-bubble-panel">
-          <div className="pet-bubble-panel__actions" aria-label="和小狗互动">
-            {([
-              ["pet", "🐾 摸头"],
-              ["chin", "😌 挠下巴"],
-              ["pickup", "🤗 抱抱"],
-              ["spin", "🌀 转圈"],
-              ["play", "🎾 陪玩"],
-              ["hide", "🙈 躲猫猫"],
-              ["chase", "🏃 追球"],
-              ["eating", "🍖 喂食"],
-              ["sleeping", "😴 睡觉"],
-            ] as const).map(([action, label]) => (
-              <button key={action} type="button" onClick={() => petAction(action)}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="pet-bubble-panel__status">
-            {todoLeft !== null && <span>📋 待办还剩 {todoLeft} 个</span>}
-            {nowPlaying && <span>🎵 正在播放：{nowPlaying}</span>}
-          </div>
-          <div className="pet-bubble-panel__links">
-            <button type="button" onClick={() => openPage("todo")}>待办</button>
-            <button type="button" onClick={() => openPage("music")}>音乐</button>
-            <button type="button" onClick={() => openPage("assistant")}>快捷</button>
+        <div className={`pet-cloud pet-bubble-panel${sideClass}`}>
+          <div className="pet-bubble-panel__scroll">
+            <div className="pet-bubble-panel__actions" aria-label="和小狗互动">
+              {([
+                ["pet", "🐾 摸头"],
+                ["chin", "😌 挠下巴"],
+                ["pickup", "🤗 抱抱"],
+                ["spin", "🌀 转圈"],
+                ["play", "🎾 陪玩"],
+                ["hide", "🙈 躲猫猫"],
+                ["chase", "🏃 追球"],
+                ["eating", "🍖 喂食"],
+                ["sleeping", "😴 睡觉"],
+                ["angry", "😤 生气"],
+                ["cry", "😭 委屈"],
+                ["love", "💗 比心"],
+                ["ride", "🚴 兜风"],
+                ["bath", "🛁 泡澡"],
+                ["costume", "🎭 装扮"],
+              ] as const).map(([action, label]) => (
+                <button key={action} type="button" onClick={() => petAction(action)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="pet-bubble-panel__status">
+              <span className="pet-bubble-panel__active-todo">
+                📌 正在做：{payload?.todoTitle ?? "还没有开始待办"}
+              </span>
+              {todoLeft !== null && <span>📋 待办还剩 {todoLeft} 个</span>}
+              {nowPlaying && <span>🎵 正在播放：{nowPlaying}</span>}
+            </div>
+            <div className="pet-bubble-panel__links" aria-label="快捷操作">
+              <button type="button" onClick={() => openPage("todo")}>待办</button>
+              <button type="button" onClick={() => openPage("music")}>音乐</button>
+              <button type="button" onClick={() => openPage("clipboard")}>剪贴板</button>
+              <button type="button" onClick={() => openPage("chat")}>聊天</button>
+              <button type="button" onClick={() => openPage("video")}>看视频</button>
+              <button type="button" onClick={() => openPage("qq")}>消息</button>
+              <button type="button" onClick={() => openPage("assistant")}>快捷</button>
+            </div>
             <button
               type="button"
+              className="pet-bubble-panel__pin"
+              title="把这个标签页固定在桌面上，随时能看"
               onClick={() => {
-                void emit("maltese-pet-minimize");
+                void emit("maltese-pin-current-page");
+                void invoke("hide_pet_bubble").catch(() => undefined);
               }}
             >
-              收起
+              📌 固定「{activePageLabel}」到桌面
+            </button>
+            <button
+              type="button"
+              className="pet-bubble-panel__sleep"
+              onClick={() => petAction("sleeping")}
+            >
+              让小狗睡觉
             </button>
           </div>
+          <span className="pet-cloud__tail pet-cloud__tail--1" aria-hidden="true" />
+          <span className="pet-cloud__tail pet-cloud__tail--2" aria-hidden="true" />
         </div>
       )}
     </div>

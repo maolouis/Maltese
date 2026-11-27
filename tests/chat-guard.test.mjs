@@ -133,6 +133,8 @@ test("错误文案统一：加载失败 / 连不上 / 已停止 都有中文可�
   const stopped = describeChatError("已停止");
   assert.equal(stopped.code, "CHAT_STOPPED");
   assert.ok(stopped.message.startsWith("已停止生成"));
+  const stoppedErr = describeChatError(new Error("已停止生成。"));
+  assert.equal(stoppedErr.code, "CHAT_STOPPED");
 });
 
 test("排队不中止、开始输出后空窗才生效（三态）", () => {

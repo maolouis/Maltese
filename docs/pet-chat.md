@@ -470,3 +470,10 @@ eply 直接作为聊天确认（由 Rust ideo_update_taste 生成，含实际�
   不再让模型自由改写；执行后派发 ideo-taste-changed 刷新面板口味卡片。
 - 老用户迁移：VIDEO_TASTE_MIGRATION_KEY = maltese-skills-migrated-20261119-video-taste，
   首次加载自动把 ideo_taste 补进启用列表，之后仍可手动关闭。
+
+
+## 环回代理绕过、输入聚焦与思考流保活（2026-11-27）
+
+- **环回/内网直连 `.no_proxy()`**：实机开启系统代理（如 Clash `127.0.0.1:7897`）时，Windows WinInet 的 `127.*` 例外规则不会被 `reqwest` 自动识别，导致 `http://127.0.0.1:8080/v1/*` 经代理转发并返回 `502 Bad Gateway`（`Strata` 收不到任何请求）。`src-tauri/src/local_chat.rs` 现统一通过 `build_http_client()` 对 `localhost` / `127.*` / `::1` / 私有网段自动 `.no_proxy()`；`src-tauri/src/video/cdp.rs` 的本机 CDP 客户端同样默认 `.no_proxy()`。
+- **输入框焦点与中文 IME 防误触**：从气泡/右键切到聊天页时解除浮层拦截、主动 `setFocus()` 并聚焦 `textarea`；`onKeyDown` 跳过 `isComposing || keyCode === 229`，避免中文输入法回车上屏时误发送或读到空串；`send()` 读取 `draft || textareaRef.current?.value`，并兼容纯图片发送。
+- **system turn 与 reasoning 保活**：`build_messages` 将前端传入的 `"system"` 上下文条目并入根 `system` prompt 而非丢弃；`stream_once` 收到 `reasoning` 增量时同样刷新 `first_token_at`，防止思考过程超过 12s 被首字超时误杀。

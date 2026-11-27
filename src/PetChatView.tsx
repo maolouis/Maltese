@@ -63,6 +63,7 @@ type PetChatViewProps = {
   addImages: (files: File[]) => Promise<void>;
   draft: string;
   setDraft: Dispatch<SetStateAction<string>>;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
   send: (overrideText?: string) => Promise<void>;
   stickerPreview: string | null;
 };
@@ -105,6 +106,7 @@ export function PetChatView({
   addImages,
   draft,
   setDraft,
+  textareaRef,
   send,
   stickerPreview,
 }: PetChatViewProps) {
@@ -408,6 +410,7 @@ export function PetChatView({
           />
         </label>
         <textarea
+          ref={textareaRef}
           value={draft}
           rows={2}
           maxLength={4000}
@@ -427,6 +430,10 @@ export function PetChatView({
             }
           }}
           onKeyDown={(event) => {
+            // 中文输入法合成候选词期间按 Enter 是上屏，绝不能提前触发发送。
+            if (event.nativeEvent.isComposing || event.keyCode === 229) {
+              return;
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();

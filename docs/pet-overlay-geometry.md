@@ -4,7 +4,8 @@
 
 ## 不变量
 
-1. **打开浮层不移动小狗。** 收缩态里小狗槽贴在窗口左下角（CSS `.island--collapsed .island__collapsed--pet-only`：`position: absolute; left: 0; bottom: 0`），所以窗口左上角就等于小狗的屏幕位置。打开浮层只允许改窗口宽高；向右展开时原点完全不变，向左展开时窗口左上角左移 `phys_w - base_w_phys`，同时 CSS 把面板钉在 `right: calc(var(--pet-slot-w) + 8px)`，两者正好抵消。
+1. **独立 `bubble` 窗零扩窗架构（2026-11-27 根治左上角重影闪动）**：Tauri 桌面环境下，悬停面板 / 云朵气泡 / 菜单由 `show_pet_bubble` 渲染在独立预热的透明置顶窗口 `"bubble"`（`PetBubble.tsx`）中，并在 `frontend_ready` 后 +1s 空闲后台预热，主窗口自身完全不再扩窗或挪位（`SetWindowPos` 零调用），从而彻底消除 DirectComposition SwapChain 重绘 1–3 帧延迟造成的「左上角重影闪动」。`place_bubble_near_main` 优先停在小狗右侧，右侧越界时翻到左侧并返回 `side = "left"` 让云朵小尾巴翻转指向小狗，在 `show()` 之前通过 `set_window_rect_atomic` 一次性落位。
+2. **非 Tauri 回退（旧单窗方案基准如下）**：收缩态里小狗槽贴在窗口左下角……
 2. **两侧必须用同一份输入。** 前端先调 `plan_island_overlay`（只算方向、不改窗口矩形），拿到方向后 `flushSync` 把小狗按正确方向钉住，再调 `set_island_overlay` 一次性设矩形。只要两次计算里的基准矩形或锚点有一丝不同，小狗就会朝反方向闪一下。**实现上由 `plan_island_overlay` 先把锚点快照 `OVERLAY_SNAPSHOT` 钉下来，`set_island_overlay` 直接复用**（2026-11-17 回归修复后）；两侧不再各自读一次窗口矩形。
 3. **关闭时不做无谓的“归位”。** 收起时先按快照原样恢复矩形；只有浮层期间尺寸设置真的变了才重算几何，否则 `apply_stage_geometry` 会按 `custom_position` / 居中算法把窗口挪回去，看起来就是关闭瞬间小狗跳一下。没有快照、但窗口尺寸明显不等于收起态时（上一次浮层请求丢了）按收起态几何收回。
 4. **浮层期间由浮层独占窗口几何。** 快照存在（含 `plan` 已钉、`set` 还没落地的空档）时 `apply_stage_geometry` 一律直接返回；`show_island` 对已经可见的窗口不再重算几何；`roam_island_step` 在 `OVERLAY_ACTIVE` 期间不跑。

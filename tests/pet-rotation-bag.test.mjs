@@ -16,6 +16,7 @@ import {
   MIN_STATE_SHARE,
 } from "../src/petRotationBag.ts";
 import { buildIdlePlaylistStateful } from "../src/petVitals.ts";
+import { animFrequencyToIntervalMs } from "../src/usePetGifRotation.ts";
 
 function seeded(seed) {
   let state = seed >>> 0;
@@ -124,4 +125,18 @@ test("有状态播放列表：64 槽、跨重建不重复同一帧（同状态�
   for (let i = 1; i < first.frames.length; i += 1) {
     assert.notEqual(first.frames[i], first.frames[i - 1], `第 ${i} 与前一帧相同`);
   }
+});
+
+test("动画切换频率映射：高 5s / 中 10s / 低 20s，源码不再因 clickedFrame 锁死自动切换", async () => {
+  assert.equal(animFrequencyToIntervalMs("high"), 5_000);
+  assert.equal(animFrequencyToIntervalMs("medium"), 10_000);
+  assert.equal(animFrequencyToIntervalMs("low"), 20_000);
+  assert.equal(animFrequencyToIntervalMs(undefined), 10_000);
+
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const app = readFileSync(fileURLToPath(new URL("../src/App.tsx", import.meta.url)), "utf8");
+  assert.match(app, /animFrequency=\{settings\.animFrequency\}/);
+  assert.match(app, /stepPetCarouselRef\.current\(/);
+  assert.match(app, /\[petState, showingSleepPose, petCarouselSrc\]/);
 });

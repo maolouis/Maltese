@@ -81,7 +81,6 @@ import { loadBagStore, saveBagStore } from "./petRotationBag.ts";
 import PetVitalsCard from "./PetVitalsCard";
 // 多屏放置：小狗 / Bongo 落在哪块显示器（指纹 = 名字 + 分辨率）。
 import ScreenPlacementCard from "./ScreenPlacementCard";
-import { GeometrySelfCheck } from "./GeometrySelfCheck";
 import {
   resolveBongoPreference,
   resolveMonitorPreference,
@@ -108,7 +107,7 @@ import {
   usePetGifRotationConfig,
   usePetGifRotationStates,
 } from "./petGifRotation";
-import { usePetGifRotation } from "./usePetGifRotation";
+import { animFrequencyToIntervalMs, usePetGifRotation } from "./usePetGifRotation";
 import { PetGifRotationSettings } from "./PetGifRotationSettings";
 import { PET_CHARACTERS, PET_CHARACTER_LABELS, characterFramesForState, savePetCharacter, usePetCharacter } from "./petCharacters";
 import { TuckGifControl } from "./TuckGifControl";
@@ -496,6 +495,7 @@ type IslandShellProps = {
   clickSquash: boolean;
   mouseInteractions: boolean;
   autoRotateExpressions: boolean;
+  animFrequency: AnimFrequency;
   collapsedScale: number;
   sleepAfterSeconds: number;
   overlay: PetOverlay | null;
@@ -1474,6 +1474,7 @@ export function IslandShell({
   clickSquash,
   mouseInteractions,
   autoRotateExpressions,
+  animFrequency,
   collapsedScale,
   sleepAfterSeconds,
   overlay,
@@ -1708,10 +1709,13 @@ export function IslandShell({
     // vitalsBucket 是为了「数值小幅变化不重建播放列表」：只在跨分桶时重算。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gifRotationConfig, gifRotationStates, petCharacter, petState, petVitalsEnabled, vitalsBucket]);
+  const stepPetCarouselRef = useRef<(() => string | null) | null>(null);
+  const rotationIntervalMs = animFrequencyToIntervalMs(animFrequency);
   const petCarouselSrc = usePetGifRotation(carouselFrames, {
-    intervalMs: 10_000,
+    intervalMs: rotationIntervalMs,
     enabled:
       autoRotateExpressions && !(petState === "idle" && (restingAsleep || isTucked)),
+    stepRef: stepPetCarouselRef,
   });
   // 缩边/睡觉帧默认跟随当前形象（曾经固定用 rest.gif，结果小白睡着会变成小鸡毛）。
   const tuckedGifSrc = useTuckGifSource(
@@ -1737,13 +1741,18 @@ export function IslandShell({
     && petInteraction.primary !== "duo"
     ? characterFramesForState(petInteraction.primary, "happy")[0] ?? resolvePetGif("happy")
     : null;
-  // 单击切表情：先固定一张，等自动轮播/状态变化时再交还给轮播。
+  // 单击切表情：优先让轮播器亲自推进到下一帧并重置计时；无法推进时再临时固定一帧并在下个周期释放。
   const [clickedFrame, setClickedFrame] = useState<string | null>(null);
   const basePetGifSrc = showingSleepPose ? tuckedGifSrc : petCarouselSrc;
   const displayedPetGifSrc = clickedFrame ?? basePetGifSrc;
   // 只让「真正看得见的狗」接收鼠标事件，抠位里的空白处不再误触。
   const petHitBox = usePetHitBox(displayedPetGifSrc);
   const playNextExpression = () => {
+    if (!showingSleepPose && stepPetCarouselRef.current) {
+      stepPetCarouselRef.current();
+      setClickedFrame(null);
+      return;
+    }
     if (carouselFrames.length === 0) return;
     const current = carouselFrames.indexOf(displayedPetGifSrc);
     const next = carouselFrames[(current + 1) % carouselFrames.length];
@@ -1751,7 +1760,12 @@ export function IslandShell({
   };
   useEffect(() => {
     setClickedFrame(null);
-  }, [petState, showingSleepPose]);
+  }, [petState, showingSleepPose, petCarouselSrc]);
+  useEffect(() => {
+    if (!clickedFrame) return;
+    const timer = window.setTimeout(() => setClickedFrame(null), rotationIntervalMs);
+    return () => window.clearTimeout(timer);
+  }, [clickedFrame, rotationIntervalMs]);
   // 睡眠缩边与全屏避让共用 isTucked，必须记住“这次是谁缩的边”。
   // 否则全屏避让缩边后会被睡眠逻辑立刻展开，反之亦然，表现为边缘频闪。
   const sleepTuckedRef = useRef(false);
@@ -2086,8 +2100,9 @@ export function IslandShell({
               onPointerUp={cancelWindowDrag}
               onPointerCancel={cancelWindowDrag}
               onMouseEnter={() => {
-                // 鼠标一靠近就醒（LineDogPet 的 wake 行为）
+                // 鼠标一靠近就醒（LineDogPet 的 wake 行为），若已有气泡悬停隐藏倒计时则取消
                 wakePet();
+                onOverlayEnter();
               }}
               onMouseLeave={onPetHoverEnd}
               onClick={(event) => {
@@ -2142,14 +2157,6 @@ export function IslandShell({
                   event.preventDefault();
                   event.stopPropagation();
                   if (!mouseInteractions) return;
-                  // 浮层（双击打开的气泡/悬停面板）已经开着时，右键**只切页签**：
-                  // 不调用任何几何命令。否则会「清掉 React 浮层但不关原生浮层」，
-                  // 导致 apply_stage_geometry 被 OVERLAY_SNAPSHOT 短路、窗口停在浮层尺寸，
-                  // 展开后的界面在小窗口里把小狗画到左上角（用户反馈的 P0）。
-                  if (overlayOpen) {
-                    onPageChange("chat");
-                    return;
-                  }
                   onOpenPage("chat");
                 }}
                 style={{
@@ -2720,15 +2727,6 @@ function LayoutEditor({
           onChange={(expandedScale) => onSettingsChange({ ...settings, expandedScale })}
         />
         <SliderControl
-          label="聊天框高度"
-          value={settings.chatPanelHeight}
-          min={360}
-          max={900}
-          step={10}
-          suffix="px"
-          onChange={(chatPanelHeight) => onSettingsChange({ ...settings, chatPanelHeight })}
-        />
-        <SliderControl
           label={t.settings.layout.marginY}
           value={settings.marginY}
           min={0}
@@ -3104,9 +3102,6 @@ function LayoutEditor({
           bongoScreen={settings.bongoScreen}
           onChange={({ islandScreen, bongoScreen }) => onSettingsChange({ ...settings, islandScreen, bongoScreen })}
         />
-        <div style={{ marginTop: 12 }}>
-          <GeometrySelfCheck />
-        </div>
         <ToggleControl
           label="偷偷观察你（写代码 / 写文档 / 开会 / 看视频时陪你说一句）"
           checked={settings.observeApps}
@@ -5402,10 +5397,11 @@ function IslandApp({
   );
 
   // ---------- 小狗侧边浮层（hover 互动面板 + 云朵消息框 + 右键菜单） ----------
-  // 浮层渲染在主窗口内部，主窗口临时变宽，不再依赖额外的气泡窗口。
+  // Tauri 桌面环境下使用独立预热的透明置顶 `bubble` 窗口承载浮层，主窗口尺寸/位置保持零变化，
+  // 从根本上消除 DirectComposition 扩窗时的「向左上角闪动 / 重影」。仅非 Tauri 预览回退到页内浮层。
   const [petOverlay, setPetOverlay] = useState<PetOverlay | null>(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
-  // 原生算好的浮层方向（plan_island_overlay）；有值时优先于事件回传。
+  // 原生算好的浮层方向（仅非 Tauri 回退路径使用）。
   const [overlayPlacement, setOverlayPlacement] = useState<
     { side: "left" | "right"; vertical: "above" | "below" } | null
   >(null);
@@ -5417,72 +5413,73 @@ function IslandApp({
   const pageOpenMaskRef = useRef<number | null>(null);
   const updateState = useSyncExternalStore(subscribeToUpdate, getUpdateState);
   const shownUpdateVersionRef = useRef("");
+  const bubbleMetaRef = useRef({
+    bubbleDurationMs: settings.bubbleDurationMs,
+    activeTodoTitle,
+    page,
+  });
+  bubbleMetaRef.current = {
+    bubbleDurationMs: settings.bubbleDurationMs,
+    activeTodoTitle,
+    page,
+  };
 
   const applyPetOverlay = useCallback((next: PetOverlay | null) => {
     const current = petOverlayRef.current;
-    // 同一个浮层换内容（例如连续消息气泡）只更新 DOM，不要反复放大/缩小原生窗口。
-    // 原来每次消息都调用 set_island_overlay，窗口连续 resize 会看起来在闪。
+    overlayGenerationRef.current = Math.max(Date.now(), overlayGenerationRef.current + 1);
+    const generation = overlayGenerationRef.current;
+
+    if (isTauri()) {
+      petOverlayRef.current = next;
+      setPetOverlay(null);
+      setOverlayOpen(false);
+      setOverlayPlacement(null);
+      if (next) {
+        const meta = bubbleMetaRef.current;
+        void invoke("show_pet_bubble", {
+          mode: next.mode,
+          title: next.title ?? null,
+          body: next.body ?? null,
+          ttlMs: next.mode === "cloud" ? meta.bubbleDurationMs : null,
+          image: next.image ?? null,
+          bubbleKind: next.bubbleKind ?? null,
+          todoTitle: next.todoTitle ?? meta.activeTodoTitle ?? null,
+          currentPage: meta.page,
+        }).catch(() => undefined);
+      } else {
+        void invoke("hide_pet_bubble").catch(() => undefined);
+      }
+      return;
+    }
+
+    // 非 Tauri 浏览器预览兜底：沿用页内浮层。
     if (next && current && current.mode === next.mode) {
       petOverlayRef.current = next;
       setPetOverlay(next);
       setOverlayOpen(true);
       return;
     }
-    overlayGenerationRef.current = Math.max(Date.now(), overlayGenerationRef.current + 1);
-    const generation = overlayGenerationRef.current;
     petOverlayRef.current = next;
     if (next) {
-      // 严格三步，避免中间帧：①让原生只算方向 → ②把小狗按该方向钉到窗口角上
-      // （下一帧 React 提交，此时窗口还是原尺寸，画面不动）→ ③原生一次性改几何。
       void (async () => {
         let plan: { side: "left" | "right"; vertical: "above" | "below" } | null = null;
-        try {
-          plan = await invoke<{ side: "left" | "right"; vertical: "above" | "below" }>(
-            "plan_island_overlay",
-            { overlay: next.mode },
-          );
-        } catch {
-          // 拿不到方向就退回事件回传，宁可晚一帧也不要摆错方向
-        }
         if (overlayGenerationRef.current !== generation) {
           return;
         }
-        // 必须同步提交：方向类和面板要在原生改几何之前就落到 DOM 上，
-        // 否则窗口先变大、小狗还没钉住，中间那帧就是闪一下的来源。
         flushSync(() => {
           setOverlayPlacement(plan);
           setOverlayOpen(true);
         });
-        invoke("set_island_overlay", { overlay: next.mode, generation })
-          .catch(() => undefined)
-          .finally(() => {
-            if (overlayGenerationRef.current === generation) {
-              setPetOverlay(next);
-            }
-          });
+        setPetOverlay(next);
       })();
       return;
     }
-    // 先移除面板，缩回窗口并回到原位后再取消底部锚定，小狗全程不移动。
     setPetOverlay(null);
-    window.requestAnimationFrame(() => {
-      if (overlayGenerationRef.current !== generation) {
-        return;
-      }
-      void invoke("set_island_overlay", { overlay: null, generation })
-        .catch(() => undefined)
-        .finally(() => {
-          if (overlayGenerationRef.current === generation) {
-            setOverlayOpen(false);
-            setOverlayPlacement(null);
-          }
-        });
-    });
+    setOverlayOpen(false);
+    setOverlayPlacement(null);
   }, []);
 
-  // 从气泡直接切到展开页时，不再先发一次原生 close 再展开。
-  // 两次窗口尺寸变化会在右键/点气泡入口时产生频闪；这里只清 UI，
-  // 由 set_island_interaction 的展开几何接管窗口。
+  // 从气泡/快捷入口切到展开页时，收起独立气泡窗，让主窗口平滑展开。
   const clearPetOverlayForPage = useCallback(() => {
     if (overlayHideTimerRef.current !== null) {
       window.clearTimeout(overlayHideTimerRef.current);
@@ -5493,6 +5490,9 @@ function IslandApp({
     setPetOverlay(null);
     setOverlayOpen(false);
     setOverlayPlacement(null);
+    if (isTauri()) {
+      void invoke("hide_pet_bubble").catch(() => undefined);
+    }
   }, []);
 
   const hidePetOverlay = useCallback(() => {
@@ -6317,11 +6317,6 @@ function IslandApp({
   }, []);
 
   const openIslandPage = useCallback((nextPage: IslandPage) => {
-    // 浮层开着时只切页签，不触发几何（避免 OVERLAY_SNAPSHOT 与展开几何打架）。
-    if (petOverlayRef.current) {
-      setPage(nextPage);
-      return;
-    }
     clearPetOverlayForPage();
     if (mode !== "expanded") {
       // 窗口从收起尺寸放大时，WebView 会短暂保留旧画面，狗看起来在左上角
@@ -6338,6 +6333,12 @@ function IslandApp({
     setPage(nextPage);
     setMode("expanded");
     setIsTucked(false);
+    if (isTauri() && nextPage === "chat") {
+      // 右键/快捷按钮进入聊天时把系统焦点拉回主窗口，保证直接打字就能进输入框。
+      window.setTimeout(() => {
+        void getCurrentWindow().setFocus().catch(() => undefined);
+      }, 60);
+    }
   }, [clearPetOverlayForPage, mode]);
 
   // 快捷面板只有一个系统级热键：打开整个快捷方式面板，而不是逐个启动应用。
@@ -7922,6 +7923,64 @@ function IslandApp({
       unlisten?.();
     };
   }, [triggerPetAction]);
+  // 独立 bubble 窗口回传的事件：悬停保活、点击页签跳转、收起/隐藏、自动关窗清理状态。
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+    let cancelled = false;
+    const cleanups: Array<() => void> = [];
+    const register = <T,>(eventName: string, handler: (payload: T) => void) => {
+      void listen<T>(eventName, (event) => {
+        if (!cancelled) handler(event.payload);
+      }).then((cleanup) => {
+        if (cancelled) cleanup();
+        else cleanups.push(cleanup);
+      });
+    };
+    const allowedPages: IslandPage[] = [
+      "todo",
+      "music",
+      "clipboard",
+      "layout",
+      "qq",
+      "assistant",
+      "video",
+      "chat",
+      "agent",
+      "onboarding",
+    ];
+    register<{ hovered?: boolean }>("maltese-bubble-hover", (payload) => {
+      if (payload?.hovered) {
+        markOverlayEnter();
+      } else {
+        markOverlayLeave();
+      }
+    });
+    register<{ page?: string }>("maltese-open-page", (payload) => {
+      const next = payload?.page as IslandPage | undefined;
+      if (next && allowedPages.includes(next)) {
+        openIslandPage(next);
+      }
+    });
+    register("maltese-pet-minimize", () => {
+      hidePetOverlay();
+    });
+    register("maltese-pet-hide", () => {
+      hidePetOverlay();
+      void minimizeIsland();
+    });
+    register("maltese-bubble-closed", () => {
+      petOverlayRef.current = null;
+      setPetOverlay(null);
+      setOverlayOpen(false);
+      setOverlayPlacement(null);
+    });
+    return () => {
+      cancelled = true;
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, [hidePetOverlay, markOverlayEnter, markOverlayLeave, minimizeIsland, openIslandPage]);
   // 视频自动评论气泡（N11/N12）：预演与真实发布共用同一气泡组件显示文本。
   useEffect(() => {
     if (!isTauri()) return;
@@ -8155,6 +8214,7 @@ function IslandApp({
         onOpenPage={openIslandPage}
         clickSquash={settings.clickSquash}
         autoRotateExpressions={settings.autoRotateExpressions}
+        animFrequency={settings.animFrequency}
         mouseInteractions={settings.mouseInteractions}
         onWindowDragStart={startIslandDrag}
         onCollapse={collapseIsland}

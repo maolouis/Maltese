@@ -16,7 +16,10 @@ body,
   justify-content: center;
   width: 100%;
   height: 100%;
+  padding: 12px 24px 10px;
+  box-sizing: border-box;
   background: transparent;
+  font-family: var(--pet-font, var(--font-ui, sans-serif));
 }
 
 /* ---------- 云朵基形 ---------- */
@@ -73,6 +76,38 @@ body,
   bottom: 6px;
   width: 11px;
   height: 11px;
+}
+
+/* 气泡在小狗左侧时，尾巴翻到右侧指向小狗 */
+.pet-cloud--side-left .pet-cloud__tail--1 {
+  left: auto;
+  right: -12px;
+}
+
+.pet-cloud--side-left .pet-cloud__tail--2 {
+  left: auto;
+  right: -24px;
+}
+
+.pet-bubble-panel {
+  max-height: 100%;
+  box-sizing: border-box;
+}
+
+.pet-bubble-panel__pin {
+  width: 100%;
+  border: 1px dashed rgba(43, 47, 58, 0.22);
+  border-radius: 9px;
+  background: rgba(127, 195, 144, 0.14);
+  color: var(--pet-bubble-text, #2b2f3a);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.pet-bubble-panel__pin:hover {
+  background: rgba(127, 195, 144, 0.28);
 }
 
 @keyframes pet-bubble-pop {

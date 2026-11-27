@@ -97,20 +97,26 @@ test("事件：冷却内不重复生效，且冷却与日上限都拦住刷数�
   assert.ok(state.today.gained.mood <= VITALS_DAILY_GAIN_CAP.mood);
 });
 
-test("事件：喂食每天最多 3 次（dailyLimit），睡觉 4 小时冷却", () => {
+test("事件：喂食每天最多 6 次（dailyLimit），睡觉 1 小时冷却，陪玩也温和回体力", () => {
   const start = 1_700_000_000_000;
   let state = createVitals(start);
   let applied = 0;
-  for (let i = 0; i < 5; i += 1) {
-    const result = applyVitalsEvent(state, "eat", start + i * 31 * MIN);
+  for (let i = 0; i < 8; i += 1) {
+    const result = applyVitalsEvent(state, "eat", start + i * 11 * MIN);
     state = result.state;
     if (result.applied) applied += 1;
   }
-  assert.equal(applied, 3, "每天 3 次是上限");
-  assert.equal(VITALS_EVENTS.eat.dailyLimit, 3);
+  assert.equal(applied, 6, "每天 6 次是上限");
+  assert.equal(VITALS_EVENTS.eat.dailyLimit, 6);
   const sleep = applyVitalsEvent(createVitals(start), "sleep", start);
   assert.equal(sleep.applied, true);
-  assert.equal(applyVitalsEvent(sleep.state, "sleep", start + 3 * HOUR).applied, false);
+  assert.equal(applyVitalsEvent(sleep.state, "sleep", start + 30 * MIN).applied, false);
+  assert.equal(applyVitalsEvent(sleep.state, "sleep", start + 65 * MIN).applied, true);
+  // 陪玩不倒扣体力：从 60 出发只会变高
+  const beforePlay = { ...createVitals(start), energy: 60 };
+  const played = applyVitalsEvent(beforePlay, "play", start);
+  assert.equal(played.applied, true);
+  assert.ok(played.state.energy > 60, `陪玩不应扣体力，实际 ${played.state.energy}`);
 });
 
 test("重复递减：第 7 次同事件只有一半增益", () => {
@@ -262,7 +268,7 @@ test("持久化：读写往返、坏数据回默认值", () => {
   const loaded = loadVitals(storage, Date.now());
   assert.ok(Math.abs(loaded.energy - state.energy) < 0.01);
   assert.ok(storage.getItem(VITALS_STORAGE_KEY));
-  assert.deepEqual(loadVitals(memoryStorage({ [VITALS_STORAGE_KEY]: "not-json" }), 1_700_000_000_000).energy, 70);
+  assert.deepEqual(loadVitals(memoryStorage({ [VITALS_STORAGE_KEY]: "not-json" }), 1_700_000_000_000).energy, 85);
   // 越界值被夹回下限
   const broken = loadVitals(memoryStorage({ [VITALS_STORAGE_KEY]: JSON.stringify({ energy: 1, mood: 500, bond: 50, updatedAt: 1 }) }), 1_700_000_000_000);
   assert.equal(broken.energy, VITALS_FLOOR.energy);
@@ -271,8 +277,8 @@ test("持久化：读写往返、坏数据回默认值", () => {
 
 test("readPetVitals：无数据返回默认值，从不抛错", () => {
   const snapshot = readPetVitals(memoryStorage());
-  assert.deepEqual(snapshot, { energy: 70, mood: 70, bond: 50, focus: 0, updatedAt: 0 });
-  assert.deepEqual(readPetVitals(null), { energy: 70, mood: 70, bond: 50, focus: 0, updatedAt: 0 });
+  assert.deepEqual(snapshot, { energy: 85, mood: 70, bond: 50, focus: 0, updatedAt: 0 });
+  assert.deepEqual(readPetVitals(null), { energy: 85, mood: 70, bond: 50, focus: 0, updatedAt: 0 });
   assert.doesNotThrow(() => readPetVitals(memoryStorage({ [VITALS_STORAGE_KEY]: "{" })));
 });
 
@@ -448,19 +454,30 @@ function vitalsAt(now, patch = {}) {
   return { ...createVitals(now), ...patch };
 }
 
-test("离线恢复：待机 8/h、手动睡眠 25/h，2h 分别是 +16 / +50", () => {
+test("离线恢复与在线睡觉回血：待机 15/h、手动睡眠 35/h，更容易拿到高体力", () => {
   const now = 1_700_000_000_000;
-  const state = vitalsAt(now, { energy: 15 });
+  const state = vitalsAt(now, { energy: 30 });
   const idle = settleOfflineRecovery(state, now - 2 * 3_600_000, now, "idle");
-  assert.equal(Math.round(idle.state.energy), 15 + 16);
-  assert.equal(Math.round(idle.recovery.gained), 16);
+  assert.equal(Math.round(idle.state.energy), 30 + 30);
+  assert.equal(Math.round(idle.recovery.gained), 30);
   const manual = settleOfflineRecovery(state, now - 2 * 3_600_000, now, "manual");
-  assert.equal(Math.round(manual.state.energy), 15 + 50);
+  assert.equal(Math.round(manual.state.energy), 100);
   // 手动睡眠一定比待机恢复快
-  assert.ok(manual.state.energy > idle.state.energy);
-  assert.equal(offlineRecoveryPerHour("manual"), 25);
-  assert.equal(offlineRecoveryPerHour("idle"), 8);
-  assert.equal(offlineRecoveryPerHour(null), 8);
+  assert.ok(manual.state.energy >= idle.state.energy);
+  assert.equal(offlineRecoveryPerHour("manual"), 35);
+  assert.equal(offlineRecoveryPerHour("idle"), 15);
+  assert.equal(offlineRecoveryPerHour(null), 15);
+  // 在线手动睡觉：tickVitals 期间持续恢复而不是扣体力
+  const sleeping = { ...vitalsAt(now, { energy: 50 }), sleepMode: "manual" };
+  const after1h = tickVitals(sleeping, now + 3_600_000);
+  assert.ok(Math.abs(after1h.energy - 85) < 0.2, `在线睡觉 1h 应回到 ~85，实际 ${after1h.energy}`);
+  assert.match(summarizePetVitals(after1h), /很有精神/);
+  // 日常几次互动就能轻松到高体力
+  let interactive = vitalsAt(now, { energy: 55 });
+  interactive = applyVitalsEvent(interactive, "eat", now).state;
+  interactive = applyVitalsEvent(interactive, "pet", now + 20_000).state;
+  interactive = applyVitalsEvent(interactive, "chat", now + 40_000).state;
+  assert.ok(interactive.energy >= 80, `喂食+摸头+聊天应轻松 ≥80，实际 ${interactive.energy}`);
 });
 
 test("离线恢复：12h 封顶、超过 12h 只按 12h 结算，体力封顶 100", () => {
@@ -522,6 +539,7 @@ test("刷视频：mood +2 / bond +0.5，同 URL 去重，每日 6 条封顶", ()
   const first = applyVitalsEvent(base, "video", now).state;
   assert.equal(Math.round((first.mood - base.mood) * 10) / 10, 2);
   assert.equal(Math.round((first.bond - base.bond) * 10) / 10, 0.5);
+  assert.equal(Math.round((first.energy - base.energy) * 10) / 10, 2);
   // 同 URL 去重
   assert.equal(videoWatchDecision(base, ["https://b23.tv/v1"], "https://b23.tv/v1", now).reason, "duplicate");
   // 空 URL / 没有数据不报错

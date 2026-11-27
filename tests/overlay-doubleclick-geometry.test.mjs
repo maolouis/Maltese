@@ -77,3 +77,21 @@ test("收起大小上界统一放宽至 3.0×（前端滑条、归一化、随�
   assert.match(lib, /const MAX_COLLAPSED_SCALE:\s*f64\s*=\s*3\.0;/);
   assert.match(extras, /collapsed_scale\.clamp\(0\.5,\s*3\.0\)/);
 });
+
+test("双击浮层防闪：Tauri 下改用独立 bubble 窗承载浮层（主窗口零扩窗），并移除几何自检/聊天框高度设置", () => {
+  const app = read("src/App.tsx");
+  const settingsWin = read("src/SettingsWindow.tsx");
+  const lib = read("src-tauri/src/lib.rs");
+
+  assert.match(app, /invoke\("show_pet_bubble"/);
+  assert.match(app, /invoke\("hide_pet_bubble"/);
+  assert.doesNotMatch(app, /invoke[^(]*\(\s*["']plan_island_overlay["']/);
+  assert.doesNotMatch(app, /invoke[^(]*\(\s*["']set_island_overlay["']/);
+  assert.match(lib, /set_window_rect_atomic\(bubble,\s*x,\s*y,/);
+  assert.match(lib, /window_factory::ensure\(&warmup_app,\s*BUBBLE_WINDOW_LABEL\)/);
+
+  assert.doesNotMatch(app, /GeometrySelfCheck/);
+  assert.doesNotMatch(settingsWin, /GeometrySelfCheck/);
+  assert.doesNotMatch(app, /label="聊天框高度"/);
+  assert.doesNotMatch(settingsWin, /label="聊天框高度"/);
+});

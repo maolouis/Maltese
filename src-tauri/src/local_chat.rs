@@ -49,6 +49,60 @@ const EMPTY_REPLY_FALLBACK: &str =
 const STRATA_LAUNCHER: &str = r"F:\Strata\bin\strata.cmd";
 const STRATA_BASE_URL: &str = "http://127.0.0.1:8080";
 
+/// 环回或局域网私有地址必须绕过系统 HTTP 代理（如 Clash 127.0.0.1:7897），
+/// 因为 Windows WinInet 的 `127.*` 例外规则不会被 `reqwest` 识别，经代理转发
+/// 本机 8080 端口会直接返回 `502 Bad Gateway`。
+fn is_loopback_or_private_host(host: &str) -> bool {
+    let trimmed = host.trim().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed == "localhost" || trimmed.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local()
+            }
+        };
+    }
+    false
+}
+
+fn should_bypass_proxy(url_str: &str) -> bool {
+    let trimmed = url_str.trim();
+    if let Ok(url) = Url::parse(trimmed) {
+        if let Some(host) = url.host_str() {
+            return is_loopback_or_private_host(host);
+        }
+    }
+    let with_scheme = format!("http://{trimmed}");
+    if let Ok(url) = Url::parse(&with_scheme) {
+        if let Some(host) = url.host_str() {
+            return is_loopback_or_private_host(host);
+        }
+    }
+    false
+}
+
+fn build_http_client(
+    url_hint: &str,
+    connect_timeout: Duration,
+    timeout: Duration,
+) -> Result<Client, reqwest::Error> {
+    let mut builder = Client::builder()
+        .connect_timeout(connect_timeout)
+        .timeout(timeout);
+    if should_bypass_proxy(url_hint) {
+        builder = builder.no_proxy();
+    }
+    builder.build()
+}
+
 /// 正在被用户「停止生成」取消的 requestId。
 static STREAM_CANCELS: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     OnceLock::new();
@@ -127,21 +181,33 @@ fn build_messages(
         system.push_str("\n\n【关于主人的记忆】");
         system.push_str(memory.trim());
     }
-    let mut messages = vec![json!({ "role": "system", "content": system })];
+    let mut extra_systems: Vec<String> = Vec::new();
+    let mut turns: Vec<LocalChatTurn> = Vec::new();
     if let Some(history) = history {
-        let mut turns = history
-            .into_iter()
-            .filter(|turn| matches!(turn.role.as_str(), "user" | "assistant"))
-            .filter(|turn| !turn.content.trim().is_empty())
-            .collect::<Vec<_>>();
+        for turn in history {
+            let trimmed = turn.content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if turn.role == "system" {
+                extra_systems.push(trimmed.to_string());
+            } else if matches!(turn.role.as_str(), "user" | "assistant") {
+                turns.push(turn);
+            }
+        }
         let keep_from = turns.len().saturating_sub(MAX_HISTORY_TURNS);
         turns.drain(..keep_from);
-        for turn in turns {
-            messages.push(json!({
-                "role": turn.role,
-                "content": turn.content.trim(),
-            }));
-        }
+    }
+    if !extra_systems.is_empty() {
+        system.push_str("\n\n");
+        system.push_str(&extra_systems.join("\n"));
+    }
+    let mut messages = vec![json!({ "role": "system", "content": system })];
+    for turn in turns {
+        messages.push(json!({
+            "role": turn.role,
+            "content": turn.content.trim(),
+        }));
     }
     messages.push(json!({
         "role": "user",
@@ -241,10 +307,7 @@ pub async fn local_chat(
     let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
 
     let request_started = std::time::Instant::now();
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(CHAT_TIMEOUT)
-        .build()
+    let client = build_http_client(endpoint.as_str(), CONNECT_TIMEOUT, CHAT_TIMEOUT)
         .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
     let mut request = client
         .post(endpoint.clone())
@@ -415,10 +478,7 @@ pub async fn local_chat_stream(
     let settings = settings.unwrap_or_default();
     let messages = build_messages(&message, history, &character, images, sticker.unwrap_or(false), memory_context.as_deref());
     let request_started = std::time::Instant::now();
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(CHAT_TIMEOUT)
-        .build()
+    let client = build_http_client(endpoint.as_str(), CONNECT_TIMEOUT, CHAT_TIMEOUT)
         .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
 
     let (text, first_usage, first_model) = stream_once(
@@ -630,6 +690,9 @@ async fn stream_once(
             };
             // 思考内容单独发一类事件，前端折叠展示；正文照旧按 delta 累积。
             if let Some(reasoning) = extract_reasoning_delta(&value) {
+                if first_token_at.is_none() {
+                    first_token_at = Some(std::time::Instant::now());
+                }
                 emit_stream_event(app, request_id, "reasoning", &reasoning);
             }
             if let Some((prompt, completion, cached)) = crate::usage::usage_from_value(&value) {
@@ -779,11 +842,12 @@ pub async fn local_model_status(base_url: String) -> Result<LocalModelStatus, St
     if !(host == "127.0.0.1" || host == "localhost") {
         return Ok(LocalModelStatus { loaded: true, processing: false });
     }
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = build_http_client(
+        &base_url,
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+    )
+    .map_err(|error| error.to_string())?;
     let models = match client
         .get(format!("{}://{host}:{port}/v1/models", endpoint.scheme()))
         .send()
@@ -874,11 +938,12 @@ pub async fn ensure_local_model(
         return Err("已停止".to_string());
     }
     let health = format!("{}://{host}:{port}/v1/models", endpoint.scheme());
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(4))
-        .build()
-        .map_err(|error| error.to_string())?;
+    let client = build_http_client(
+        &health,
+        Duration::from_secs(2),
+        Duration::from_secs(4),
+    )
+    .map_err(|error| error.to_string())?;
     let models_body = client
         .get(&health)
         .send()
@@ -898,11 +963,12 @@ pub async fn ensure_local_model(
         // 端口在跑，但模型是 lazy/unloaded（Strata 的 `lazy_load` 预设）：
         // 发一次 HTTP POST /load 让它真正把权重读进显存，然后轮询到 loaded:true。
         let control = format!("{}://{host}:{port}/load", endpoint.scheme());
-        let load_client = Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(240))
-            .build()
-            .map_err(|error| error.to_string())?;
+        let load_client = build_http_client(
+            &control,
+            Duration::from_secs(3),
+            Duration::from_secs(240),
+        )
+        .map_err(|error| error.to_string())?;
         let _ = load_client
             .post(&control)
             .header("content-type", "application/json")
@@ -984,11 +1050,12 @@ pub async fn strata_launch() -> Result<(), String> {
         .spawn()
         .map_err(|error| format!("启动 Strata 失败：{error}"))?;
 
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(4))
-        .build()
-        .map_err(|error| format!("无法准备 Strata 设置同步：{error}"))?;
+    let client = build_http_client(
+        STRATA_BASE_URL,
+        Duration::from_secs(2),
+        Duration::from_secs(4),
+    )
+    .map_err(|error| format!("无法准备 Strata 设置同步：{error}"))?;
     let health_url = Url::parse(&format!("{STRATA_BASE_URL}/health"))
         .map_err(|error| format!("Strata 地址无效：{error}"))?;
     let settings_url = Url::parse(&format!("{STRATA_BASE_URL}/settings"))
@@ -1038,11 +1105,12 @@ pub async fn local_chat_models(
     api_key: Option<String>,
 ) -> Result<Vec<String>, String> {
     let endpoint = models_endpoint(&base_url)?;
-    let client = Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
+    let client = build_http_client(
+        endpoint.as_str(),
+        CONNECT_TIMEOUT,
+        Duration::from_secs(20),
+    )
+    .map_err(|error| format!("无法创建本地模型连接：{error}"))?;
     let mut request = client.get(endpoint.clone());
     if let Some(key) = api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
@@ -1253,6 +1321,49 @@ mod tests {
             })),
             Some("你好".to_string())
         );
+    }
+
+    #[test]
+    fn loopback_and_private_hosts_bypass_proxy() {
+        assert!(should_bypass_proxy("http://127.0.0.1:8080/v1"));
+        assert!(should_bypass_proxy("http://localhost:11434/v1"));
+        assert!(should_bypass_proxy("http://[::1]:8080/v1"));
+        assert!(should_bypass_proxy("http://192.168.1.10:8080/v1"));
+        assert!(!should_bypass_proxy("https://api.openai.com/v1"));
+    }
+
+    #[test]
+    fn build_messages_merges_system_turns_into_root_system() {
+        let messages = build_messages(
+            "今天累不累",
+            Some(vec![
+                LocalChatTurn {
+                    role: "system".to_string(),
+                    content: "体力 88，心情不错".to_string(),
+                },
+                LocalChatTurn {
+                    role: "user".to_string(),
+                    content: "早安".to_string(),
+                },
+                LocalChatTurn {
+                    role: "assistant".to_string(),
+                    content: "早安主人".to_string(),
+                },
+            ]),
+            "xiaobai",
+            None,
+            false,
+            None,
+        );
+        assert_eq!(messages[0]["role"], "system");
+        assert!(messages[0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("体力 88，心情不错"));
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[3]["role"], "user");
     }
 }
 

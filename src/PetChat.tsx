@@ -106,6 +106,15 @@ export function PetChat() {
   const [enabledSkills] = useState(loadEnabledSkills);
   const [customSkills] = useState(loadCustomSkills);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // 聊天框打开（以及关掉设置/技能抽屉后）自动聚焦输入框，避免右键打开窗口后打字落空。
+  useEffect(() => {
+    if (showModelSettings || showSkills) return;
+    const frame = window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showModelSettings, showSkills]);
   // 打开聊天就后台预热本地模型：Strata 端口在跑但模型可能还是 unloaded，
   // 第一个请求会长时间没有 SSE 事件（用户看到「完全没回复」）。
   useEffect(() => {
@@ -523,14 +532,21 @@ export function PetChat() {
       chatConfig.topP,
     ],
   );  const send = useCallback(async (overrideText?: string) => {
-    const text = (overrideText ?? draft).trim();
+    const rawInput =
+      overrideText !== undefined
+        ? overrideText
+        : (draft || textareaRef.current?.value || "");
+    const text = rawInput.trim();
     const sendImages = attachments.map((item) => item.send);
     const thumbnails = attachments.map((item) => item.thumb);
     if (!text && sendImages.length === 0) return;
+    // 只发图片没填文字时，给模型一条非空提示，避免后端因 message.is_empty() 拦截。
+    const modelPrompt = text || "请看看这张图片并回应我";
     if (busy) {
       // 连发：当前回答还没结束，先把这条排进本地队列，等前面的完成再自动发送。
       setSendQueue((current) => [...current, text]);
       setDraft("");
+      if (textareaRef.current) textareaRef.current.value = "";
       setAttachments([]);
       return;
     }
@@ -564,6 +580,7 @@ export function PetChat() {
     const next = [...messages, userMessage];
     persist(next);
     setDraft("");
+    if (textareaRef.current) textareaRef.current.value = "";
     setAttachments([]);
     setError(null);
     setBusy(true);
@@ -685,7 +702,7 @@ export function PetChat() {
         }
       }
       if (chatConfig.backend === "local") {
-        replyText = await streamLocalReply(text, messages, sendImages);
+        replyText = await streamLocalReply(modelPrompt, messages, sendImages);
       } else {
         // DSH 也走流式：Rust 边读 dsh 输出边推 dsh-chat-stream，
         // 不用等整个进程结束才看到字。
@@ -931,6 +948,7 @@ export function PetChat() {
       addImages={addImages}
       draft={draft}
       setDraft={setDraft}
+      textareaRef={textareaRef}
       send={send}
       stickerPreview={stickerPreview}
     />

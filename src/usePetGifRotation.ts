@@ -2,11 +2,27 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { nextIndexAfterFramesChange, pushRecent, RECENT_LIMIT, RECENT_RETRY } from "./petRotationBag.ts";
 
+export type AnimFrequency = "high" | "medium" | "low";
+
+/** 把设置页的「动画切换频率」映射成轮播间隔毫秒数。 */
+export function animFrequencyToIntervalMs(freq?: AnimFrequency): number {
+  switch (freq) {
+    case "high":
+      return 5_000;
+    case "low":
+      return 20_000;
+    default:
+      return 10_000;
+  }
+}
+
 type RotationOptions = {
   /** 每张 GIF 停留的毫秒数。 */
   intervalMs?: number;
   /** 为 false 时暂停轮播（例如主狗正在睡觉）。 */
   enabled?: boolean;
+  /** 可选：提供给调用方「手动点一下切下一张并重置自动切换计时器」的函数句柄。 */
+  stepRef?: { current: (() => string | null) | null };
 };
 
 const preloaded = new Set<string>();
@@ -39,7 +55,7 @@ function preload(frames: readonly string[], start = 0) {
  */
 export function usePetGifRotation(
   frames: readonly string[],
-  { intervalMs = 12_000, enabled = true }: RotationOptions = {},
+  { intervalMs = 12_000, enabled = true, stepRef }: RotationOptions = {},
 ) {
   const [source, setSource] = useState(() => frames[0] ?? "");
   const indexRef = useRef(0);
@@ -52,21 +68,17 @@ export function usePetGifRotation(
   useEffect(() => {
     if (frames.length === 0) {
       setSource("");
+      if (stepRef) stepRef.current = null;
       return;
     }
     preload(frames);
 
-    if (!enabled || frames.length <= 1) {
-      setSource(frames[0] ?? "");
-      return;
-    }
-
-    // 重建列表时保留进度（能找到刚播的那张就继续），而不是每次都从第 1 张开始。
-    indexRef.current = nextIndexAfterFramesChange(frames, sourceRef.current, indexRef.current);
-    setSource(frames[indexRef.current] ?? frames[0] ?? "");
-    recentRef.current = pushRecent(recentRef.current, frames[indexRef.current] ?? frames[0] ?? "");
-
-    const timer = window.setInterval(() => {
+    const advance = () => {
+      if (frames.length <= 1) {
+        const only = frames[0] ?? "";
+        setSource(only);
+        return only || null;
+      }
       let nextIndex = indexRef.current;
       let candidate = "";
       for (let attempt = 0; attempt <= RECENT_RETRY; attempt += 1) {
@@ -85,10 +97,39 @@ export function usePetGifRotation(
       recentRef.current = pushRecent(recentRef.current, nextFrame);
       setSource(nextFrame);
       preload(frames, indexRef.current + 1);
-    }, Math.max(2_000, intervalMs));
+      return nextFrame || null;
+    };
 
-    return () => window.clearInterval(timer);
-  }, [enabled, intervalMs, key]);
+    if (!enabled || frames.length <= 1) {
+      setSource(frames[0] ?? "");
+      if (stepRef) stepRef.current = advance;
+      return () => {
+        if (stepRef) stepRef.current = null;
+      };
+    }
+
+    // 重建列表时保留进度（能找到刚播的那张就继续），而不是每次都从第 1 张开始。
+    indexRef.current = nextIndexAfterFramesChange(frames, sourceRef.current, indexRef.current);
+    setSource(frames[indexRef.current] ?? frames[0] ?? "");
+    recentRef.current = pushRecent(recentRef.current, frames[indexRef.current] ?? frames[0] ?? "");
+
+    const period = Math.max(2_000, intervalMs);
+    let timer = window.setInterval(advance, period);
+    if (stepRef) {
+      stepRef.current = () => {
+        const nextFrame = advance();
+        // 单击切完一张后从头计时，避免刚点完不到 1 秒又被定时跳走。
+        window.clearInterval(timer);
+        timer = window.setInterval(advance, period);
+        return nextFrame;
+      };
+    }
+
+    return () => {
+      window.clearInterval(timer);
+      if (stepRef) stepRef.current = null;
+    };
+  }, [enabled, intervalMs, key, stepRef]);
 
   return source;
 }

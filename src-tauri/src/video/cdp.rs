@@ -59,6 +59,7 @@ pub fn browser_major(browser: &str) -> Option<u32> {
 
 fn http_client() -> Result<reqwest::Client, FailureReason> {
     reqwest::Client::builder()
+        .no_proxy()
         .timeout(PROBE_TIMEOUT)
         .build()
         .map_err(|_| FailureReason::NoResponse)

@@ -954,6 +954,9 @@ fn set_island_interaction(
             *slot = None;
         }
     }
+    if matches!(mode, IslandMode::Expanded) || is_tucked.unwrap_or(false) {
+        hide_pet_bubble_silent(&app);
+    }
     if matches!(mode, IslandMode::Expanded) {
         // 一旦进入展开态（例如首次运行引导或用户主动打开面板），启动收起态保护期已完成使命；
         // 清掉 STARTUP_RESTORED，确保 3s 内收起回 collapsed 时一定会缩回小狗槽尺寸。
@@ -3278,9 +3281,10 @@ const BUBBLE_WINDOW_LABEL: &str = "bubble";
 // 气泡窗口的内容缓存：窗口冷启动/事件早于监听器注册时，前端可以主动补取。
 static BUBBLE_PAYLOAD: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
-// 在小狗侧边显示气泡（mode: "hover" 互动面板 / "cloud" 云朵消息框）。
-// async：气泡窗口是懒创建的，Windows 下建窗口必须在非主线程发起
-// （原因见 `open_settings_window` 的注释）。
+// 在小狗侧边显示气泡（mode: "hover" 互动面板 / "cloud" 云朵消息框 / "menu" 右键菜单）。
+// 独立 `bubble` 透明窗口承载浮层后，主窗口完全不需要缩放或移动，从根源上消除
+// Windows WebView2 DirectComposition 扩窗引起的「左上角重影闪动」。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn show_pet_bubble(
     app: AppHandle,
@@ -3288,6 +3292,10 @@ async fn show_pet_bubble(
     title: Option<String>,
     body: Option<String>,
     ttl_ms: Option<u64>,
+    image: Option<String>,
+    bubble_kind: Option<String>,
+    todo_title: Option<String>,
+    current_page: Option<String>,
 ) -> Result<(), String> {
     let main = main_window(&app)?;
     let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
@@ -3300,22 +3308,30 @@ async fn show_pet_bubble(
         let _ = main.show();
     }
 
-    // 不同形态用不同窗口尺寸：互动面板是竖排按钮，云朵/菜单保持小窗。
+    // 不同形态用不同窗口尺寸：互动面板是竖排按钮 + 快捷入口，云朵/菜单保持轻量小窗。
     let desired = match mode.as_str() {
-        "hover" => LogicalSize::new(320.0, 500.0),
+        "hover" => LogicalSize::new(300.0, 500.0),
         "menu" => LogicalSize::new(240.0, 232.0),
-        _ => LogicalSize::new(300.0, 224.0),
+        _ => LogicalSize::new(300.0, 180.0),
     };
 
-    place_bubble_near_main(&app, &bubble, &main, desired)?;
-    let payload = json!({ "mode": mode, "title": title, "body": body, "ttlMs": ttl_ms });
+    let side = place_bubble_near_main(&app, &bubble, &main, desired)?;
+    let payload = json!({
+        "mode": mode,
+        "title": title,
+        "body": body,
+        "ttlMs": ttl_ms,
+        "image": image,
+        "bubbleKind": bubble_kind,
+        "todoTitle": todo_title,
+        "currentPage": current_page,
+        "side": side,
+    });
     if let Ok(mut cached) = BUBBLE_PAYLOAD.lock() {
         *cached = Some(payload.clone());
     }
+    let _ = bubble.emit("pet-bubble-content", payload);
     bubble.show().map_err(|error| error.to_string())?;
-    bubble
-        .emit("pet-bubble-content", payload)
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -3327,65 +3343,76 @@ async fn resize_pet_bubble(app: AppHandle, width: f64, height: f64) -> Result<()
     let bubble = window_factory::ensure(&app, BUBBLE_WINDOW_LABEL)?;
     let width = width.clamp(220.0, 420.0);
     let height = height.clamp(120.0, 640.0);
-    place_bubble_near_main(&app, &bubble, &main, LogicalSize::new(width, height))
+    let _ = place_bubble_near_main(&app, &bubble, &main, LogicalSize::new(width, height))?;
+    Ok(())
 }
 
 /// 设置气泡尺寸并贴到小狗旁边：优先右侧，放不下翻左侧；上下空间不够就翻面。
+/// 返回气泡落在小狗的 `"left"` 或 `"right"` 侧（供前端翻转云朵小尾巴方向）。
 fn place_bubble_near_main(
     app: &AppHandle,
     bubble: &tauri::WebviewWindow,
     main: &tauri::WebviewWindow,
     desired: LogicalSize<f64>,
-) -> Result<(), String> {
+) -> Result<&'static str, String> {
     let _ = app;
-    let _ = bubble.set_size(Size::Logical(desired));
-
-    let main_pos = main
-        .outer_position()
-        .map_err(|error| error.to_string())?;
-    let main_size = main.outer_size().map_err(|error| error.to_string())?;
+    let main_rect = dog_slot_now(main).or_else(|| read_sane_island_rect(main));
+    let (main_x, main_y, main_w, main_h) = match main_rect {
+        Some(rect) => (rect.x, rect.y, rect.width as i32, rect.height as i32),
+        None => {
+            let pos = main.outer_position().map_err(|error| error.to_string())?;
+            let size = main.outer_size().map_err(|error| error.to_string())?;
+            (pos.x, pos.y, size.width as i32, size.height as i32)
+        }
+    };
     let monitor = main
         .current_monitor()
         .map_err(|error| error.to_string())?
+        .or_else(|| main.primary_monitor().ok().flatten())
         .ok_or_else(|| "没有可用的显示器".to_string())?;
-    let work_area = monitor.work_area();
-    let mon_pos = work_area.position;
-    let mon_size = work_area.size;
+    let safe = safe_rect_for_monitor(&monitor);
     let scale = monitor.scale_factor();
     let bubble_width = (desired.width * scale).round() as i32;
     let bubble_height = (desired.height * scale).round() as i32;
 
     // 优先放在小狗右侧，放不下则翻到左侧；上下也自动翻：
     // 上方不够就贴到小狗下方，下方不够就贴到小狗上方。
-    let gap = 8i32;
-    let mut x = main_pos.x + main_size.width as i32 + gap;
-    if x + bubble_width > mon_pos.x + mon_size.width as i32 {
-        x = main_pos.x - bubble_width - gap;
-    }
-    x = x.clamp(mon_pos.x, mon_pos.x + mon_size.width as i32 - bubble_width);
+    let gap = (8.0 * scale).round() as i32;
+    let right_x = main_x + main_w + gap;
+    let placed_left = right_x + bubble_width > safe.right && main_x - bubble_width - gap >= safe.left;
+    let raw_x = if placed_left || right_x + bubble_width > safe.right {
+        main_x - bubble_width - gap
+    } else {
+        right_x
+    };
+    let max_x = (safe.right - bubble_width).max(safe.left);
+    let x = raw_x.clamp(safe.left, max_x);
+    let side = if x + bubble_width / 2 < main_x + main_w / 2 {
+        "left"
+    } else {
+        "right"
+    };
+
     let vertical = expanded_panel_vertical(
-        main_pos.y,
-        main_size.height as i32,
+        main_y,
+        main_h,
         bubble_height,
-        mon_pos.y,
-        mon_pos.y + mon_size.height as i32,
+        safe.top,
+        safe.bottom,
     );
     let desired_y = if vertical == "above" {
-        main_pos.y + main_size.height as i32 - bubble_height
+        main_y + main_h - bubble_height
     } else {
-        main_pos.y
+        main_y
     };
-    let y = desired_y.clamp(
-        mon_pos.y,
-        mon_pos.y + mon_size.height as i32 - bubble_height,
-    );
+    let max_y = (safe.bottom - bubble_height).max(safe.top);
+    let y = desired_y.clamp(safe.top, max_y);
 
-    bubble
-        .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-        .map_err(|error| error.to_string())?;
+    // 在 show() 前原子更新位置和尺寸，避免气泡自身出现跳变帧。
+    set_window_rect_atomic(bubble, x, y, desired.width, desired.height, scale)?;
     // 任务栏（含自动隐藏浮出）可能盖住底部：统一夹进 safe rect。
     let _ = clamp_window_above_taskbar(bubble);
-    Ok(())
+    Ok(side)
 }
 
 // ---------------------------------------------------------------------------
@@ -3762,6 +3789,7 @@ fn hide_pet_bubble(app: AppHandle) -> Result<(), String> {
     if let Some(bubble) = app.get_webview_window(BUBBLE_WINDOW_LABEL) {
         let _ = bubble.hide();
     }
+    let _ = app.emit("maltese-bubble-closed", ());
     Ok(())
 }
 
@@ -3769,6 +3797,7 @@ fn hide_pet_bubble_silent(app: &AppHandle) {
     if let Some(bubble) = app.get_webview_window(BUBBLE_WINDOW_LABEL) {
         let _ = bubble.hide();
     }
+    let _ = app.emit("maltese-bubble-closed", ());
 }
 
 fn detect_foreground_fullscreen(own_hwnd: Option<isize>) -> bool {
@@ -3843,10 +3872,15 @@ fn frontend_ready(app: AppHandle) -> Result<(), String> {
         eprintln!("frontend reported first paint ready");
         startup_mark("frontend_ready");
         // 首帧后心跳：卡死时看停在第几拍，区分「首帧前」还是「首帧后」卡死。
-        tauri::async_runtime::spawn_blocking(|| {
+        let warmup_app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
             for (delay_seconds, label) in [(1u64, "+1s"), (2u64, "+3s"), (7u64, "+10s")] {
                 std::thread::sleep(std::time::Duration::from_secs(delay_seconds));
                 eprintln!("[startup] heartbeat frontend_ready{label} tick");
+                if label == "+1s" {
+                    // 空闲预热独立气泡窗口，保持隐藏，消除首次双击冷启动延迟，也不抢首帧资源。
+                    let _ = window_factory::ensure(&warmup_app, BUBBLE_WINDOW_LABEL);
+                }
             }
         });
     }

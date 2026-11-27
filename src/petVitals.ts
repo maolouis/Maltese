@@ -56,8 +56,8 @@ export type PetSleepMode = "manual" | "idle";
  * 应用没运行 / 用户离开电脑期间按时间回升，回归时一次性结算；上限 12h，避免久别回来直接满。
  */
 export const VITALS_OFFLINE_RECOVERY = {
-  manualPerHour: 25,
-  idlePerHour: 8,
+  manualPerHour: 35,
+  idlePerHour: 15,
   maxHours: 12,
 } as const;
 /** 最后一次「在线」时间戳（秒级精度足够），用于回归时算离开时长。 */
@@ -66,17 +66,17 @@ export const VITALS_LAST_SEEN_KEY = "maltese-pet-vitals-last-seen";
 export const VITALS_STORAGE_KEY = "maltese-pet-vitals";
 /** 半衰期（毫秒）。 */
 export const VITALS_HALF_LIFE_MS = {
-  energy: 6 * 3_600_000,
+  energy: 18 * 3_600_000,
   mood: 2 * 3_600_000,
   bond: 72 * 3_600_000,
   /** 专注：45 分钟。 */
   focus: 45 * 60_000,
 } as const;
 /** 下限：保证长期不互动也不会「摆烂惩罚」用户。 */
-export const VITALS_FLOOR = { energy: 15, mood: 20, bond: 30, focus: 0 } as const;
+export const VITALS_FLOOR = { energy: 30, mood: 20, bond: 30, focus: 0 } as const;
 export const VITALS_CEIL = 100;
 /** 初始值（focus 由使用方按「是否正在待办中」给 0–50）。 */
-export const VITALS_INITIAL = { energy: 70, mood: 70, bond: 50 } as const;
+export const VITALS_INITIAL = { energy: 85, mood: 70, bond: 50 } as const;
 /** 结算间隔：60s。 */
 export const VITALS_TICK_MS = 60_000;
 /** 专注度每 5 分钟 +1（只在「待办进行中」时涨）。 */
@@ -90,18 +90,18 @@ export const VITALS_EVENTS: Record<
   VitalsEventKind,
   { delta: VitalsDelta; cooldownMs: number; dailyLimit?: number; key: keyof PetVitals["today"]["gained"] }
 > = {
-  pet: { delta: { energy: 2, mood: 4, bond: 1.5, focus: 0 }, cooldownMs: 20_000, key: "mood" },
-  eat: { delta: { energy: 10, mood: 3, bond: 1, focus: 0 }, cooldownMs: 30 * 60_000, dailyLimit: 3, key: "energy" },
-  play: { delta: { energy: -3, mood: 6, bond: 2, focus: 0 }, cooldownMs: 60_000, key: "mood" },
-  care: { delta: { energy: 1, mood: 3, bond: 1, focus: 0 }, cooldownMs: 30_000, key: "bond" },
-  sleep: { delta: { energy: 10, mood: 2, bond: 0.5, focus: 0 }, cooldownMs: 4 * 3_600_000, dailyLimit: 2, key: "energy" },
-  todoDone: { delta: { energy: 2, mood: 5, bond: 1, focus: 5 }, cooldownMs: 0, key: "mood" },
-  todoStart: { delta: { energy: 0, mood: 1, bond: 0.5, focus: 15 }, cooldownMs: 0, key: "focus" },
+  pet: { delta: { energy: 5, mood: 4, bond: 1.5, focus: 0 }, cooldownMs: 12_000, key: "mood" },
+  eat: { delta: { energy: 20, mood: 3, bond: 1, focus: 0 }, cooldownMs: 10 * 60_000, dailyLimit: 6, key: "energy" },
+  play: { delta: { energy: 3, mood: 6, bond: 2, focus: 0 }, cooldownMs: 45_000, key: "mood" },
+  care: { delta: { energy: 5, mood: 3, bond: 1, focus: 0 }, cooldownMs: 15_000, key: "bond" },
+  sleep: { delta: { energy: 25, mood: 2, bond: 0.5, focus: 0 }, cooldownMs: 3_600_000, dailyLimit: 6, key: "energy" },
+  todoDone: { delta: { energy: 6, mood: 5, bond: 1, focus: 5 }, cooldownMs: 0, key: "mood" },
+  todoStart: { delta: { energy: 2, mood: 1, bond: 0.5, focus: 15 }, cooldownMs: 0, key: "focus" },
   todoStop: { delta: { energy: 0, mood: 0, bond: 0, focus: 0 }, cooldownMs: 0, key: "focus" },
-  chat: { delta: { energy: 1, mood: 3, bond: 2, focus: 0 }, cooldownMs: 30_000, key: "bond" },
-  bongo: { delta: { energy: 0, mood: 0.5, bond: 0.5, focus: 0 }, cooldownMs: 30_000, key: "mood" },
-  // 一起看视频：情绪 +2、亲密 +0.5；同一 canonicalUrl 只记一次、每天最多 6 条（mood +12）。
-  video: { delta: { energy: 0, mood: 2, bond: 0.5, focus: 0 }, cooldownMs: 0, dailyLimit: 6, key: "mood" },
+  chat: { delta: { energy: 4, mood: 3, bond: 2, focus: 0 }, cooldownMs: 30_000, key: "bond" },
+  bongo: { delta: { energy: 1, mood: 0.5, bond: 0.5, focus: 0 }, cooldownMs: 30_000, key: "mood" },
+  // 一起看视频：情绪 +2、亲密 +0.5、体力 +2；同一 canonicalUrl 只记一次、每天最多 6 条（mood +12）。
+  video: { delta: { energy: 2, mood: 2, bond: 0.5, focus: 0 }, cooldownMs: 0, dailyLimit: 6, key: "mood" },
 };
 
 /** 视频事件：同 URL 去重存储键 + 每天去重窗口上限（够覆盖一天刷的量）。 */
@@ -177,8 +177,8 @@ export function newVideoUrls(
   return out;
 }
 
-/** 当日增益上限（防止刷数值）。 */
-export const VITALS_DAILY_GAIN_CAP = { energy: 60, mood: 60, bond: 30, focus: 120 } as const;
+/** 当日增益上限（防止刷数值；体力放宽至 100 让日常互动更容易回满）。 */
+export const VITALS_DAILY_GAIN_CAP = { energy: 100, mood: 60, bond: 30, focus: 120 } as const;
 
 /** 离线期间体力恢复速率（每小时）。 */
 export function offlineRecoveryPerHour(mode: PetSleepMode | null | undefined): number {
@@ -336,19 +336,29 @@ export function tickVitals(
   now: number,
   context?: { focusActive?: boolean },
 ): PetVitals {
-  // 专注增益要按「上一次结算到现在」的时长算，所以先取 elapsed 再衰减。
+  // 专注/睡眠增益要按「上一次结算到现在」的时长算，所以先取 elapsed 再衰减。
   const elapsed = Math.max(0, now - state.updatedAt);
   const decayed = resetDailyIfNeeded(decayVitals(state, now), now);
-  if (!context?.focusActive) return decayed;
+  // 睡觉中（手动睡觉 / 待机打盹）不再扣体力，而是按睡眠速率持续回血，保证与连续分段 tick 组合幂等。
+  const sleepEnergy =
+    state.sleepMode && elapsed > 0
+      ? clamp(
+          state.energy + (elapsed / 3_600_000) * offlineRecoveryPerHour(state.sleepMode),
+          VITALS_FLOOR.energy,
+          VITALS_CEIL,
+        )
+      : decayed.energy;
+  const withSleep = sleepEnergy === decayed.energy ? decayed : { ...decayed, energy: sleepEnergy };
+  if (!context?.focusActive) return withSleep;
   // 待办进行中不计衰减（人在专注做事），只按每 5 分钟 +1 累积；结束后再按 45 分钟半衰期回落。
   const gain = (elapsed / (5 * 60_000)) * VITALS_FOCUS_GAIN_PER_5MIN;
-  if (!Number.isFinite(gain) || gain <= 0) return decayed;
+  if (!Number.isFinite(gain) || gain <= 0) return withSleep;
   return {
-    ...decayed,
+    ...withSleep,
     focus: clamp(state.focus + gain, VITALS_FLOOR.focus, VITALS_CEIL),
     today: {
-      ...decayed.today,
-      gained: { ...decayed.today.gained, focus: decayed.today.gained.focus + gain },
+      ...withSleep.today,
+      gained: { ...withSleep.today.gained, focus: withSleep.today.gained.focus + gain },
     },
   };
 }
@@ -524,7 +534,7 @@ export function weightsForVitals(
     scale("sleeping", 1.4);
     scale("resting", 1.4);
     scale("play", 0.6);
-  } else if (energy > 80) {
+  } else if (energy >= 70) {
     scale("play", 1.6);
     scale("happy", 1.3);
     scale("chase", 1.3);
@@ -914,7 +924,7 @@ export function summarizePetVitals(vitals: PetVitalsSnapshot | PetVitals): strin
   const mood = Math.round(vitals.mood);
   const bond = Math.round(vitals.bond);
   const focus = Math.round(vitals.focus);
-  const energyNote = energy < 40 ? "有点累" : energy >= 80 ? "很有精神" : "还行";
+  const energyNote = energy < 35 ? "有点累" : energy >= 65 ? "很有精神" : "还行";
   const moodNote = mood < 35 ? "有点低落" : mood > 75 ? "心情不错" : "还算平稳";
   const bondNote = bond > 80 ? "很黏人" : bond < 35 ? "还有点生疏" : "熟悉了";
   const focusNote = focus > 60 ? "正专注" : focus > 30 ? "有点专注" : "比较放松";

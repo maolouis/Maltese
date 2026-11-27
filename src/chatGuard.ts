@@ -116,7 +116,7 @@ export type ChatErrorInfo = { code: string; message: string; raw: string };
 const ERROR_MAP: Array<{ test: RegExp; code: string; message: string }> = [
   { test: /没有准备好|加载失败|模型没有|unloaded/i, code: "CHAT_MODEL_NOT_READY", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
   { test: /排队|模型忙|一直忙|单槽位/i, code: "CHAT_QUEUED", message: "前面还有请求在跑，这次排队太久没轮到（已停止）。可以稍后再发，或调浅思考。" },
-  { test: /^已停止/, code: "CHAT_STOPPED", message: "已停止生成。想继续可以点「重试」或再说一句。" },
+  { test: /(?:^|:\s*)已停止/, code: "CHAT_STOPPED", message: "已停止生成。想继续可以点「重试」或再说一句。" },
   { test: /连接不到|ECONNREFUSED|Connection refused|os error 10061/i, code: "CHAT_BACKEND_DOWN", message: "模型没能加载：请检查 Strata 是否在运行、显存是否够，或聊天设置里的地址是否正确。" },
   { test: /没有新内容|输出后|超时|timeout|timed out/i, code: "CHAT_TIMEOUT", message: "已经输出了一部分但中途 45 秒没有新内容，已停止。可以点「重试」。\n（还没轮到属于排队，会显示「排队中…」而不是这个错误。）" },
   { test: /5\d\d|服务返回错误|请求本地模型失败|读取本地模型流失败|stream|连接被重置|reset/i, code: "CHAT_BACKEND_ERROR", message: "模型服务这次返回错误（原因已记录到控制台），稍后重试或重启模型。" },
