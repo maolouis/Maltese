@@ -947,7 +947,7 @@ function normalizeSettings(
     collapsedScale: clamp(
       Number(collapsedScale),
       0.5,
-      1.8,
+      3.0,
     ),
     expandedScale: clamp(
       Number(expandedScale),
@@ -2705,7 +2705,7 @@ function LayoutEditor({
           label={t.settings.layout.collapsedScale}
           value={settings.collapsedScale}
           min={0.5}
-          max={1.8}
+          max={3.0}
           step={0.01}
           suffix="x"
           onChange={(collapsedScale) => onSettingsChange({ ...settings, collapsedScale })}
@@ -6237,6 +6237,7 @@ function IslandApp({
     void invoke("sync_desktop_extras", {
       config: {
         petCount: settings.petCount,
+        collapsedScale: settings.collapsedScale,
         bongoEnabled: settings.bongoEnabled,
         bongoSize: settings.bongoSize,
         bongoOpacity: settings.bongoOpacity,
@@ -6254,6 +6255,7 @@ function IslandApp({
     settings.bongoOpacity,
     settings.bongoPosition,
     settings.bongoSize,
+    settings.collapsedScale,
     settings.cursorPetSize,
     settings.followMouse,
     settings.petCount,

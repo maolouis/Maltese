@@ -62,3 +62,18 @@ test("前端闸口：report_pet_slot_offset 只注册单次 effect，测量狗�
   assert.match(app, /document\.querySelector<HTMLElement>\("\.island__collapsed--pet-only"\)/);
   assert.match(app, /side,\s*\n\s*vertical,/);
 });
+
+test("收起大小上界统一放宽至 3.0×（前端滑条、归一化、随从宠与 Rust 原生几何一致）", () => {
+  const app = read("src/App.tsx");
+  const settingsWin = read("src/SettingsWindow.tsx");
+  const companion = read("src/CompanionPet.tsx");
+  const lib = read("src-tauri/src/lib.rs");
+  const extras = read("src-tauri/src/desktop_extras.rs");
+
+  assert.match(app, /collapsedScale:\s*clamp\(\s*Number\(collapsedScale\),\s*0\.5,\s*3\.0,\s*\)/);
+  assert.match(app, /label=\{t\.settings\.layout\.collapsedScale\}[\s\S]{0,160}max=\{3\.0\}/);
+  assert.match(settingsWin, /label="收起大小"[^>]*max=\{3\.0\}/);
+  assert.match(companion, /Math\.min\(3\.0,\s*Math\.max\(0\.5,\s*scale\)\)/);
+  assert.match(lib, /const MAX_COLLAPSED_SCALE:\s*f64\s*=\s*3\.0;/);
+  assert.match(extras, /collapsed_scale\.clamp\(0\.5,\s*3\.0\)/);
+});

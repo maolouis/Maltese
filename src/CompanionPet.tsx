@@ -40,7 +40,7 @@ function readLook(): PetLook {
     const scale = Number(parsed.collapsedScale);
     const opacity = Number(parsed.petOpacity);
     return {
-      scale: Number.isFinite(scale) ? Math.min(1.8, Math.max(0.5, scale)) : 0.89,
+      scale: Number.isFinite(scale) ? Math.min(3.0, Math.max(0.5, scale)) : 0.89,
       opacity: Number.isFinite(opacity) ? Math.min(100, Math.max(30, opacity)) / 100 : 1,
     };
   } catch {

@@ -424,7 +424,7 @@ export default function SettingsWindow() {
       <section className="sw-card">
         <h2>显示</h2>
         <Slider label="小狗不透明度" value={settings.petOpacity} min={30} max={100} step={1} suffix="%" onChange={(value) => update("petOpacity", value)} />
-        <Slider label="收起大小" value={settings.collapsedScale} min={0.5} max={1.8} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
+        <Slider label="收起大小" value={settings.collapsedScale} min={0.5} max={3.0} step={0.01} suffix="×" onChange={(value) => update("collapsedScale", value)} />
         <Slider label="聊天框高度" value={settings.chatPanelHeight} min={360} max={900} step={10} suffix="px" onChange={(value) => update("chatPanelHeight", value)} />
         <Segments
           label="动画切换频率"

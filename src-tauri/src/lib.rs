@@ -79,6 +79,7 @@ use windows::Win32::UI::Shell::{ShellExecuteW, SHAppBarMessage, ABM_GETTASKBARPO
 const WINDOW_LABEL: &str = "main";
 const DEFAULT_MARGIN_Y: f64 = 0.0;
 const DEFAULT_COLLAPSED_SCALE: f64 = 0.89;
+const MAX_COLLAPSED_SCALE: f64 = 3.0;
 const DEFAULT_EXPANDED_SCALE: f64 = 0.91;
 const MIN_COLLAPSED_ISLAND_WIDTH: f64 = 160.0;
 const COLLAPSED_ISLAND_WIDTH: f64 = 180.0;
@@ -865,7 +866,7 @@ fn get_system_idle_seconds() -> u64 {
 fn set_island_layout(app: AppHandle, layout: IslandLayout) -> Result<(), String> {
     let window = main_window(&app)?;
     let state = mutate_window_state(|state| {
-        state.collapsed_scale = layout.collapsed_scale.clamp(0.5, 1.8);
+        state.collapsed_scale = layout.collapsed_scale.clamp(0.5, MAX_COLLAPSED_SCALE);
         state.expanded_scale = layout.expanded_scale.clamp(0.75, 1.4);
         state.margin_y = layout.margin_y.clamp(0.0, 160.0);
         state.tucked_visible_height = layout
@@ -961,7 +962,7 @@ fn set_island_interaction(
     let state = mutate_window_state(|state| {
         state.mode = mode;
         state.is_tucked = is_tucked.unwrap_or(false);
-        state.collapsed_scale = collapsed_scale.clamp(0.5, 1.8);
+        state.collapsed_scale = collapsed_scale.clamp(0.5, MAX_COLLAPSED_SCALE);
         state.expanded_scale = expanded_scale.clamp(0.75, 1.4);
         if let Some(margin_y) = margin_y {
             state.margin_y = margin_y.clamp(0.0, 160.0);

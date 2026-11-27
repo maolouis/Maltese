@@ -32,10 +32,16 @@ static BONGO_HIDDEN: AtomicBool = AtomicBool::new(false);
 // 最近一次同步用的配置，用于「显示回来」时按原样恢复，而不是回到默认值。
 static LAST_CONFIG: Mutex<Option<DesktopExtrasConfig>> = Mutex::new(None);
 
+fn default_collapsed_scale() -> f64 {
+    0.89
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopExtrasConfig {
     pub pet_count: u32,
+    #[serde(default = "default_collapsed_scale")]
+    pub collapsed_scale: f64,
     pub bongo_enabled: bool,
     pub bongo_size: u32,
     pub bongo_opacity: u32,
@@ -103,7 +109,7 @@ pub fn restore_companion_pets(app: &AppHandle) {
     let Some(config) = config else {
         return;
     };
-    let _ = sync_companions(app, config.pet_count);
+    let _ = sync_companions(app, config.pet_count, config.collapsed_scale);
     let _ = sync_cursor(app, &config);
 }
 
@@ -125,7 +131,7 @@ pub fn restore_extra_pets(app: &AppHandle) {
     let Some(config) = config else {
         return;
     };
-    let _ = sync_companions(app, config.pet_count);
+    let _ = sync_companions(app, config.pet_count, config.collapsed_scale);
     let _ = sync_bongo(app, &config);
     let _ = sync_cursor(app, &config);
 }
@@ -162,16 +168,19 @@ pub fn last_config() -> Option<DesktopExtrasConfig> {
 
 /// 立刻按配置重排一次（切屏后不需要等前端重新下发设置）。
 pub fn sync_extras_now(app: &AppHandle, config: &DesktopExtrasConfig) -> Result<(), String> {
-    sync_companions(app, config.pet_count)?;
+    sync_companions(app, config.pet_count, config.collapsed_scale)?;
     sync_bongo(app, config)?;
     let _ = sync_cursor(app, config);
     Ok(())
 }
 
-fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
+fn sync_companions(app: &AppHandle, count: u32, collapsed_scale: f64) -> Result<(), String> {
     let wanted = count.saturating_sub(1).min(COMPANION_MAX);
     let target = crate::extras_target_monitor_key(app);
     let (left, top, width, height, scale) = work_area(app, target.as_deref());
+    let pet_scale = collapsed_scale.clamp(0.5, 3.0);
+    let logical_w = (136.0 * pet_scale).round().max(200.0);
+    let logical_h = (124.0 * pet_scale).round().max(180.0);
     for index in 1..=COMPANION_MAX {
         let label = format!("{COMPANION_PREFIX}{index}");
         let window = if index <= wanted && !pets_hidden() {
@@ -184,12 +193,12 @@ fn sync_companions(app: &AppHandle, count: u32) -> Result<(), String> {
             continue;
         };
         if index <= wanted && !pets_hidden() {
-            let physical_w = (200.0 * scale).round() as i32;
-            let physical_h = (180.0 * scale).round() as i32;
+            let physical_w = (logical_w * scale).round() as i32;
+            let physical_h = (logical_h * scale).round() as i32;
             let x = (left + (80.0 * scale) as i32 + (index as i32 - 1) * physical_w)
                 .min(left + width - physical_w);
             let y = (top + height - physical_h).max(top);
-            let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(200.0, 180.0)));
+            let _ = window.set_size(tauri::Size::Logical(LogicalSize::new(logical_w, logical_h)));
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
             let _ = window.show();
         } else {
@@ -321,7 +330,7 @@ pub async fn sync_desktop_extras(
     // 一只额外 WebView 都不会建；开启 Bongo / 跟随鼠标 / 多只狗时才创建。
     tauri::async_runtime::spawn_blocking(move || {
         // 三项互不阻断：多宠物失败时，Bongo 和鼠标跟随仍然要生效。
-        let _ = sync_companions(&app, config.pet_count);
+        let _ = sync_companions(&app, config.pet_count, config.collapsed_scale);
         let _ = sync_bongo(&app, &config);
         let _ = sync_cursor(&app, &config);
 
