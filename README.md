@@ -26,7 +26,7 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 > 第一次用：先看 **安装与升级** 和 **运行发布版**；哪里不对：直接跳到 **常见问题与排障**。
 > 每条都写了「什么时候该看它」，不用从头读。
 
-- **安装与升级** → [docs/releases/v2.0.4.md](docs/releases/v2.0.4.md)：想装、想升级、要分安装包 / 便携版 / 插件，或要核对 SHA-256 时看；下载后被 SmartScreen 拦住也看这里。
+- **安装与升级** → [docs/releases/v2.0.7.md](docs/releases/v2.0.7.md)：想装、想升级、要分安装包 / 便携版 / 插件，或要核对 SHA-256 时看；下载后被 SmartScreen 拦住也看这里。
 - **聊天 / 记忆 / 自我状态** → [docs/pet-chat.md](docs/pet-chat.md)、[docs/pet-vitals-usage.md](docs/pet-vitals-usage.md)：聊天没反应、想换本地模型、想关掉表情轮播或「体力 / 情绪 / 亲密 / 专注」时看。
 - **视频插件（小狗刷视频）** → [docs/video-plugin-usage.md](docs/video-plugin-usage.md)：第一次用刷视频、要登录、想看小结、评论没发出去时看。
 - **小红书采集与图文草稿** → [docs/video-plugin-xiaohongshu.md](docs/video-plugin-xiaohongshu.md)：想只读采集小红书、让小狗写图文草稿、确认「能不能自动发布」时看；可行性结论在 [docs/research-xiaohongshu.md](docs/research-xiaohongshu.md)。
@@ -41,10 +41,10 @@ Maltese 是一个基于 **Tauri 2 + React 19 + Rust** 的 Windows 桌面宠物�
 
 > 完整清单、影响与文档入口见 [docs/TODO.md](docs/TODO.md)。
 
-- **窗口几何单一真值收敛（进行中）**：双击小狗向左上角闪动、首开 5px 残差、切页签抖动与窗口边缘拖拽缩放均已修复落地；底层多状态向单一 `DogSlot` 状态机的终态收敛持续推进中。
-- **小红书评论自动提交（已修复待线上复验）**：已修复发送按钮类名正则、「发 送」空格文案及快捷键清空判定，待安静窗口线上实测确认。
-- **B 站自动评论受账号限制**：站点返回「账号未转正（-107）」，面板会给出原因，本机不会绕过风控。
-- **混合 DPI 多屏实机验证**：跨缩放比恢复物理尺寸已补齐，待 100% + 150% 物理双屏环境实测。
+- **窗口几何单一真值收敛（进行中）**：各项闪动、抖动、偏移残差均已修复落地；多状态向单一 `DogSlot` 状态机的终态收敛持续推进中。
+- **小红书评论自动提交**：已修复相关问题，待安静窗口线上实测确认。
+- **B 站自动评论受账号限制**：站点返回「账号未转正（-107）」，面板会给出原因，本机不绕过风控。
+- **混合 DPI 多屏实机验证**：跨缩放比恢复物理尺寸已补齐，待实机双屏环境验证。
 - **实例联动暂时下线**：`PET_LINK_ENABLED=false`（设置里隐藏入口），架构稳定后再重新开放。
 
 ## 功能一览
@@ -267,7 +267,7 @@ $env:MALTESE_DSH_CLI = "D:\path\to\dsh.cmd"
 - **前端分离**：桌宠素材已移出 PE（`assets/pets` → 安装目录 `resources/assets/pets`）；
   另提供 `src-tauri/tauri.external-web.conf.json` overlay，可把 JS/CSS/字体也外置到
   `resources/web`，由 `web_protocol.rs` 通过 `http://maltese.localhost/...` 提供；
-- **单模块预算**：`App.tsx` 只允许持平或缩小（当前 9161 行），其余模块 ≤900 行，由
+- **单模块预算**：`App.tsx` 只允许持平或缩小（当前 8412 行，基线 9161 行），其余模块 ≤900 行，由
   `node scripts/verify-architecture.mjs` 守护；设置控件已拆到 `src/uiControls.tsx`；
 - **功能不减少**：`node scripts/verify-parity.mjs` 用 17 项能力锚点核对重构前后功能面；
 - 分层、拆分路线、脚本清单见 [docs/architecture.md](docs/architecture.md)，
@@ -285,7 +285,7 @@ $env:MALTESE_DSH_CLI = "D:\path\to\dsh.cmd"
 ```text
 src/                     React 前端（App.tsx 为岛/桌宠主界面）
 src-tauri/src/           Rust 后端（窗口、通知、DSH、视频自动化）
-public/assets/pets/      线条小狗 GIF 素材（chars/ 下按小白、小鸡毛、双狗分目录）
+assets/pets/             线条小狗 GIF 素材（chars/ 下按小白、小鸡毛、双狗分目录）
 docs/                    功能说明、兼容性与发布文档
 docs/chat-history/       从旧会话日志还原的对话记录
 scripts/                 构建、发布与 Agent 钩子脚本（含素材清单生成与聊天记录还原）
